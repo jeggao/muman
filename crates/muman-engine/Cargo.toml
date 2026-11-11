@@ -22,20 +22,19 @@ muman-config.workspace = true
 muman-core.workspace = true
 muman-media.workspace = true
 muman-net.workspace = true
-anstream = "1"
-anyhow = "1"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-filetime = "0.2"
-lofty = "0.25"
-rusqlite = { version = "0.41.1", features = ["bundled"] }
-same-file = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
-sha2 = "0.11"
-tempfile = "3"
-trash = "5"
-unicode-normalization = "0.1"
-unicode-width = "0.2"
+anstream.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+filetime.workspace = true
+lofty.workspace = true
+rusqlite.workspace = true
+same-file.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+trash.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 muman-config = { workspace = true, features = ["testing"] }

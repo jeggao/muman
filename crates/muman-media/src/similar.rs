@@ -111,6 +111,7 @@ use icu_properties::{CodePointMapData, CodePointSetData};
 use icu_segmenter::options::WordBreakInvariantOptions;
 use icu_segmenter::{WordSegmenter, WordSegmenterBorrowed};
 use regex::Regex;
+use strsim::generic_levenshtein;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -421,23 +422,6 @@ fn units(s: &str) -> Vec<String> {
     out
 }
 
-/// The Levenshtein distance between two runs of units.
-fn edits(a: &[String], b: &[String]) -> usize {
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, x) in a.iter().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, y) in b.iter().enumerate() {
-            let above = row[j + 1];
-            row[j + 1] = (above + 1)
-                .min(row[j] + 1)
-                .min(diagonal + usize::from(x != y));
-            diagonal = above;
-        }
-    }
-    row[b.len()]
-}
-
 /// One less the share of `a` and `b`'s units an edit leaves alone.
 fn edit_distance(a: &str, b: &str) -> f64 {
     let (a, b) = (units(a), units(b));
@@ -445,7 +429,7 @@ fn edit_distance(a: &str, b: &str) -> f64 {
     if longest == 0 {
         return 0.0;
     }
-    ratio(edits(&a, &b), longest)
+    ratio(generic_levenshtein(&a, &b), longest)
 }
 
 fn ratio(part: usize, whole: usize) -> f64 {
@@ -715,8 +699,9 @@ pub fn compare(a: &Name, b: &Name) -> Option<Compared> {
     let (dec_a, dec_b) = (units(&decorations(a)), units(&decorations(b)));
     let weight = ratio(core_a.len().max(core_b.len()), 1)
         + DECORATION * ratio(dec_a.len().max(dec_b.len()), 1);
-    let by_edits =
-        (ratio(edits(&core_a, &core_b), 1) + DECORATION * ratio(edits(&dec_a, &dec_b), 1)) / weight;
+    let by_edits = (ratio(generic_levenshtein(&core_a, &core_b), 1)
+        + DECORATION * ratio(generic_levenshtein(&dec_a, &dec_b), 1))
+        / weight;
     let by_words = 1.0
         - f64::midpoint(
             monge_elkan(&a.words, &b.words),

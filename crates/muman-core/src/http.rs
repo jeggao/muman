@@ -19,7 +19,9 @@
 //! still waiting for it, waits again once it comes. A service still
 //! refusing after that is [`Refusing`], so a run puts its other lookups
 //! off to the next run rather than record each as failed. `Retry-After`
-//! is read in seconds or as the HTTP date RFC 9110 has servers send.
+//! is read in seconds or as an HTTP date, in any of the three forms RFC
+//! 9110 has a client read: the one it has servers send and the two
+//! older ones.
 //!
 //! A request that reaches no server, its name not resolving, its
 //! connection refused or not open within [`CONNECT`], or a proxy failing
@@ -37,10 +39,11 @@
 //! server's error page runs to megabytes.
 //!
 //! What a server answers is read as a hostile server may write it. A
-//! `Retry-After` date is read only up to the year 9999, the last RFC 9110's
-//! four digits write, and in checked arithmetic, so a date no clock holds
-//! is no date rather than a panic that ends the run and comes again on
-//! every run after. A request asked over https follows its redirects over
+//! `Retry-After` date is read by `httpdate`, from 1970 to the year 9999,
+//! the last RFC 9110's four digits write, and must name a day there is,
+//! its weekday that day's; any other date, one no clock holds among
+//! them, is no date rather than a panic that ends the run and comes again
+//! on every run after. A request asked over https follows its redirects over
 //! https alone, so a lookup sent encrypted is never sent on in the clear;
 //! one asked over http, as at a server a song list names that way, follows
 //! them as they come.
@@ -52,7 +55,7 @@
 //! whole fingerprint, and an error is printed and recorded in the state.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -174,69 +177,8 @@ fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
     if let Ok(secs) = value.parse::<u64>() {
         return Some(Duration::from_secs(secs));
     }
-    Some(http_date(value)?.duration_since(now).unwrap_or_default())
-}
-
-/// The last year an HTTP date is read in: RFC 9110 writes the year in
-/// four digits.
-const LAST_YEAR: i64 = 9999;
-
-/// An HTTP date in the one form RFC 9110 has servers send,
-/// `Sun, 06 Nov 1994 08:49:37 GMT`.
-#[deny(clippy::arithmetic_side_effects)]
-fn http_date(s: &str) -> Option<SystemTime> {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let (_, rest) = s.split_once(", ")?;
-    let [day, month, year, time, "GMT"] = rest.split(' ').collect::<Vec<_>>()[..] else {
-        return None;
-    };
-    let month = i64::try_from(MONTHS.iter().position(|m| *m == month)?).ok()?;
-    let (day, year): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
-    let hms: Vec<u64> = time
-        .split(':')
-        .map(|p| p.parse().ok())
-        .collect::<Option<_>>()?;
-    let [h, m, sec] = hms[..] else {
-        return None;
-    };
-    if !(1..=31).contains(&day) || !(0..=LAST_YEAR).contains(&year) || h > 23 || m > 59 || sec > 60
-    {
-        return None;
-    }
-    // Days since 1970-01-01, by the proleptic Gregorian calendar's
-    // 400-year eras of 146,097 days, the year taken to begin in March.
-    let y = if month < 2 {
-        year.checked_sub(1)?
-    } else {
-        year
-    };
-    let era = y.div_euclid(400);
-    let year_of_era = y.rem_euclid(400);
-    let march_month = month.checked_add(10)?.rem_euclid(12);
-    let day_of_year = march_month
-        .checked_mul(153)?
-        .checked_add(2)?
-        .checked_div(5)?
-        .checked_add(day)?
-        .checked_sub(1)?;
-    let day_of_era = year_of_era
-        .checked_mul(365)?
-        .checked_add(year_of_era.checked_div(4)?)?
-        .checked_sub(year_of_era.checked_div(100)?)?
-        .checked_add(day_of_year)?;
-    let days = era
-        .checked_mul(146_097)?
-        .checked_add(day_of_era)?
-        .checked_sub(719_468)?;
-    let secs = u64::try_from(days)
-        .ok()?
-        .checked_mul(86_400)?
-        .checked_add(h.checked_mul(3600)?)?
-        .checked_add(m.checked_mul(60)?)?
-        .checked_add(sec)?;
-    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
+    let date = httpdate::parse_http_date(value).ok()?;
+    Some(date.duration_since(now).unwrap_or_default())
 }
 
 /// The agent is built per call so each request's timeout is exact.
@@ -641,6 +583,7 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::UNIX_EPOCH;
 
     #[test]
     fn a_query_is_percent_encoded_but_for_unreserved_characters() {
@@ -908,8 +851,8 @@ mod tests {
             "a date gone by asks for no wait"
         );
         assert_eq!(
-            http_date("Tue, 29 Feb 2028 00:00:00 GMT"),
-            Some(UNIX_EPOCH + Duration::from_secs(1_835_395_200))
+            retry_after("Tue, 29 Feb 2028 00:00:00 GMT", UNIX_EPOCH),
+            Some(Duration::from_secs(1_835_395_200))
         );
         for bad in [
             "soon",
@@ -923,9 +866,21 @@ mod tests {
             assert_eq!(retry_after(bad, now), None, "{bad}");
         }
         assert_eq!(
-            http_date("Fri, 31 Dec 9999 23:59:59 GMT"),
-            Some(UNIX_EPOCH + Duration::from_secs(253_402_300_799))
+            retry_after("Fri, 31 Dec 9999 23:59:59 GMT", UNIX_EPOCH),
+            Some(Duration::from_secs(253_402_300_799))
         );
+    }
+
+    #[test]
+    fn retry_after_reads_the_two_older_date_forms_too() {
+        let now = UNIX_EPOCH + Duration::from_secs(784_111_717);
+        for older in ["Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] {
+            assert_eq!(
+                retry_after(older, now),
+                Some(Duration::from_secs(60)),
+                "{older}"
+            );
+        }
     }
 
     #[test]

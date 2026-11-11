@@ -5,6 +5,8 @@
 // The rules on changing files and printing are muman's; these checks
 // write only their own files and print their own findings.
 #![expect(clippy::disallowed_methods, clippy::print_stdout, clippy::print_stderr)]
+// Not in tests, as each test target sees every dev-dependency.
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 mod comments;
 mod commits;

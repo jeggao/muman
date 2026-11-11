@@ -12,6 +12,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use anyhow::{Context, Result, bail};
+use crc::{Algorithm, Crc};
 
 /// Where a page's CRC sits, and its segment count.
 const CRC_AT: usize = 22;
@@ -21,31 +22,20 @@ const PAGE_HEADER: usize = 27;
 const GAIN_AT: usize = 16;
 const BEGINS_STREAM: u8 = 0x02;
 
-const CRC_TABLE: [u32; 256] = {
-    let mut table = [0; 256];
-    let mut i = 0;
-    while i < 256 {
-        let mut r = (i as u32) << 24;
-        let mut bit = 0;
-        while bit < 8 {
-            r = if r & 0x8000_0000 == 0 {
-                r << 1
-            } else {
-                (r << 1) ^ 0x04C1_1DB7
-            };
-            bit += 1;
-        }
-        table[i] = r;
-        i += 1;
-    }
-    table
+/// The Ogg CRC-32, as the module gives it; the CRC catalogue has no entry
+/// with its parameters.
+const OGG_CRC_32: Algorithm<u32> = Algorithm {
+    width: 32,
+    poly: 0x04C1_1DB7,
+    init: 0,
+    refin: false,
+    refout: false,
+    xorout: 0,
+    check: 0x89A1_897F,
+    residue: 0,
 };
 
-fn crc(bytes: &[u8]) -> u32 {
-    bytes.iter().fold(0, |crc, &b| {
-        (crc << 8) ^ CRC_TABLE[(((crc >> 24) as u8) ^ b) as usize]
-    })
-}
+static PAGE_CRC: Crc<u32> = Crc::<u32>::new(&OGG_CRC_32);
 
 /// The first page of `bytes`, if it holds an Opus identification header
 /// alone: the page's length and where the header's packet begins.
@@ -88,7 +78,7 @@ pub fn set_output_gain(file: &mut File, gain: i16) -> Result<()> {
     let mut page = head[..length].to_vec();
     page[packet + GAIN_AT..packet + GAIN_AT + 2].copy_from_slice(&gain.to_le_bytes());
     page[CRC_AT..CRC_AT + 4].fill(0);
-    let sum = crc(&page);
+    let sum = PAGE_CRC.checksum(&page);
     page[CRC_AT..CRC_AT + 4].copy_from_slice(&sum.to_le_bytes());
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&page).context("writing the Opus header")?;
@@ -113,7 +103,7 @@ pub fn discrete(bytes: &[u8]) -> Vec<u8> {
     page.push(u8::try_from(head.len()).unwrap());
     page.extend(&head);
     page[CRC_AT..CRC_AT + 4].fill(0);
-    let sum = crc(&page);
+    let sum = PAGE_CRC.checksum(&page);
     page[CRC_AT..CRC_AT + 4].copy_from_slice(&sum.to_le_bytes());
     page.extend(&bytes[length..]);
     page
@@ -127,12 +117,18 @@ mod tests {
     use crate::testing::SILENCE_OPUS;
 
     #[test]
+    fn the_crc_is_ogg_s() {
+        assert_eq!(PAGE_CRC.checksum(b"123456789"), 0x89A1_897F);
+        assert_eq!(PAGE_CRC.checksum(b"OggS"), 0x5FB0_A94F);
+    }
+
+    #[test]
     fn the_fixtures_first_page_sums_to_its_crc() {
         let (length, _) = id_page(SILENCE_OPUS).unwrap();
         let mut page = SILENCE_OPUS[..length].to_vec();
         let stored = u32::from_le_bytes(page[CRC_AT..CRC_AT + 4].try_into().unwrap());
         page[CRC_AT..CRC_AT + 4].fill(0);
-        assert_eq!(crc(&page), stored);
+        assert_eq!(PAGE_CRC.checksum(&page), stored);
         assert_eq!(output_gain(SILENCE_OPUS), Some(0));
         assert_eq!(output_gain(crate::testing::SILENCE_VORBIS), None);
     }
@@ -156,7 +152,7 @@ mod tests {
         let mut page = bytes[..length].to_vec();
         let stored = u32::from_le_bytes(page[CRC_AT..CRC_AT + 4].try_into().unwrap());
         page[CRC_AT..CRC_AT + 4].fill(0);
-        assert_eq!(crc(&page), stored);
+        assert_eq!(PAGE_CRC.checksum(&page), stored);
         let mut reopened = File::open(&path).unwrap();
         lofty::ogg::OpusFile::read_from(&mut reopened, lofty::config::ParseOptions::new()).unwrap();
         let mut vorbis = std::fs::OpenOptions::new()

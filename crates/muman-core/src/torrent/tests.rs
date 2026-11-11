@@ -325,6 +325,17 @@ fn a_magnet_link_names_its_torrent_by_hex_or_base32() {
     assert_eq!(Magnet::parse(&magnet.link()).unwrap(), magnet);
     let base32 = Magnet::parse("magnet:?xt=urn:btih:AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH").unwrap();
     assert_eq!(base32.hash(), hex);
+    let lower = Magnet::parse("magnet:?xt=urn:btih:aerukz4jvpg66ajdivtyTK6N54ASGRLH").unwrap();
+    assert_eq!(lower.hash(), hex);
+    for bad in [
+        "AERUKZ4JVPG66AJDIVTYTK6N54ASGR==",
+        "AERUKZ4JVPG66AJDIVTYTK6N54ASGRL1",
+    ] {
+        assert!(
+            Magnet::parse(&format!("magnet:?xt=urn:btih:{bad}")).is_err(),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

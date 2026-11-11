@@ -16,11 +16,7 @@ pub fn digest(bytes: &[u8]) -> String {
 
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    data_encoding::HEXLOWER.encode(bytes)
 }
 
 /// [`digest`] of a file's bytes, read a block at a time.

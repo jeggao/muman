@@ -19,6 +19,7 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use anyhow::{Context, Result, bail};
+use crc::{CRC_8_SMBUS, CRC_16_UMTS, Crc};
 
 /// The bytes before STREAMINFO: `fLaC` and the block's header.
 const STREAMINFO_AT: u64 = 8;
@@ -113,8 +114,8 @@ fn frame_end(bytes: &[u8], block: u64) -> Option<u64> {
     let header = 4 + at;
     let (body, stated) = bytes.split_at(bytes.len().checked_sub(2)?);
     if header >= body.len()
-        || crc8(&bytes[..header]) != bytes[header]
-        || crc16(body) != u16::from_be_bytes([stated[0], stated[1]])
+        || HEADER_CRC.checksum(&bytes[..header]) != bytes[header]
+        || FRAME_CRC.checksum(body) != u16::from_be_bytes([stated[0], stated[1]])
     {
         return None;
     }
@@ -145,31 +146,11 @@ fn coded(bytes: &[u8], most: usize) -> Option<(u64, usize)> {
     Some((value, len))
 }
 
-/// CRC-8 of a frame header: polynomial 0x07, starting at 0.
-fn crc8(bytes: &[u8]) -> u8 {
-    bytes.iter().fold(0, |crc, &b| {
-        (0..8).fold(crc ^ b, |c, _| {
-            if c & 0x80 == 0 {
-                c << 1
-            } else {
-                (c << 1) ^ 0x07
-            }
-        })
-    })
-}
+/// The CRC of a frame header: CRC-8, polynomial 0x07, starting at 0.
+static HEADER_CRC: Crc<u8> = Crc::<u8>::new(&CRC_8_SMBUS);
 
-/// CRC-16 of a frame: polynomial 0x8005, starting at 0.
-fn crc16(bytes: &[u8]) -> u16 {
-    bytes.iter().fold(0, |crc, &b| {
-        (0..8).fold(crc ^ (u16::from(b) << 8), |c, _| {
-            if c & 0x8000 == 0 {
-                c << 1
-            } else {
-                (c << 1) ^ 0x8005
-            }
-        })
-    })
-}
+/// The CRC of a frame: CRC-16, polynomial 0x8005, starting at 0.
+static FRAME_CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_UMTS);
 
 #[cfg(test)]
 mod tests {
@@ -196,10 +177,10 @@ mod tests {
         }
         f.extend(coded);
         f.extend((size - 1).to_be_bytes());
-        f.push(crc8(&f));
+        f.push(HEADER_CRC.checksum(&f));
         // A constant subframe of 16-bit zeros, padded to a byte.
         f.extend([0x00, 0x00, 0x00]);
-        let crc = crc16(&f);
+        let crc = FRAME_CRC.checksum(&f);
         f.extend(crc.to_be_bytes());
         f
     }
@@ -219,6 +200,16 @@ mod tests {
             bytes.extend(f);
         }
         bytes
+    }
+
+    #[test]
+    fn the_crcs_are_flac_s() {
+        assert_eq!(HEADER_CRC.checksum(b"123456789"), 0xF4);
+        assert_eq!(FRAME_CRC.checksum(b"123456789"), 0xFEE8);
+        assert_eq!(
+            HEADER_CRC.checksum(&[0xFF, 0xF8, 0x69, 0x08, 0x00, 0x13]),
+            0x64
+        );
     }
 
     #[test]

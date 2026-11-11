@@ -6,6 +6,8 @@
 // Tests make and change the files they check; shipped code changes one
 // only where an `#[expect]` says why.
 #![cfg_attr(test, expect(clippy::disallowed_methods))]
+// Not in tests, as each test target sees every dev-dependency.
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 pub mod atomic;
 pub mod defaults;

@@ -771,22 +771,9 @@ fn v1_hash(text: &str) -> Option<String> {
     if text.len() != 32 {
         return None;
     }
-    let mut bits: u64 = 0;
-    let mut held = 0;
-    let mut bytes = Vec::with_capacity(20);
-    for c in text.bytes() {
-        let v = match c.to_ascii_uppercase() {
-            c @ b'A'..=b'Z' => c - b'A',
-            c @ b'2'..=b'7' => c - b'2' + 26,
-            _ => return None,
-        };
-        bits = (bits << 5) | u64::from(v);
-        held += 5;
-        if held >= 8 {
-            held -= 8;
-            bytes.push((bits >> held) as u8);
-        }
-    }
+    let bytes = data_encoding::BASE32_NOPAD
+        .decode(text.to_ascii_uppercase().as_bytes())
+        .ok()?;
     Some(hex(&bytes))
 }
 

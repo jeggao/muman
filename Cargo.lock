@@ -340,6 +340,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -713,6 +728,12 @@ name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hybrid-array"
@@ -1217,10 +1238,12 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "data-encoding",
  "deunicode",
  "directories",
  "dunce",
  "filetime",
+ "httpdate",
  "icu_locale",
  "icu_properties",
  "indicatif",
@@ -1268,7 +1291,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "trash",
- "unicode-normalization",
  "unicode-width",
 ]
 
@@ -1279,6 +1301,7 @@ dependencies = [
  "anyhow",
  "base64",
  "chardetng",
+ "crc",
  "deunicode",
  "ebur128",
  "encoding_rs",
@@ -1293,6 +1316,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strsim",
  "tempfile",
  "unicode-normalization",
  "unicode-security",
