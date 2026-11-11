@@ -744,38 +744,50 @@ pub fn hearing<'a, R: Runner>(
 }
 
 /// How [`Following::follow`] keeps what it follows.
-pub(super) struct Following<'a> {
+#[derive(Debug)]
+pub struct Following<'a> {
     pub home: &'a Path,
     pub lock: &'a crate::atomic::Lock,
     pub rec: crate::history::Recording<'a>,
     pub dry_run: bool,
     pub settling: Duration,
+    /// Whether the caller lists the files dropped in next, as `sync` does,
+    /// which takes a file deleted by hand out of its song too
+    /// ([`deleted`]).
+    pub listing: bool,
 }
 
 impl Following<'_> {
-    /// Follow each named manual file to where it moved ([`moved`]), in
-    /// the song list and the state, saved, the list noted in `rec`; a dry
-    /// run follows them in memory alone, so it reports on the songs as
-    /// the next sync will find them. What it cannot tell is returned, as
-    /// [`Moves::unsure`].
-    pub(super) fn follow<W: Write>(
+    /// Follow each named manual file to where it moved ([`moved`]), and
+    /// when listing take each file deleted by hand out of its song, in the
+    /// song list and the state, saved, the list noted in `rec`; a dry run
+    /// follows them in memory alone, so it reports on the songs as the
+    /// next sync will find them. Returns the moves, with what it cannot
+    /// tell ([`Moves::unsure`]), and the files no song names that are none
+    /// of those followed.
+    pub fn follow<W: Write>(
         mut self,
         manifest: &mut Manifest,
         state: &mut State,
         store: &Store,
         hear: impl FnMut(&Located) -> Option<String>,
         out: &mut W,
-    ) -> Result<Vec<(BTreeSet<SourceKey>, BTreeSet<SourceKey>)>> {
+    ) -> Result<(Moves, Unlisted)> {
         let mut unlisted = Unlisted::of(manifest, state, store, self.settling);
         let moves = moved(manifest, state, store, &mut unlisted, hear);
+        let deleted = if self.listing {
+            deleted(manifest, store, &moves, &unlisted)
+        } else {
+            Vec::new()
+        };
         for line in moves.unsure_lines() {
             crate::ui::warning(out, &line)?;
         }
-        for line in moves.anew_lines(true) {
+        for line in moves.anew_lines(!self.listing) {
             crate::ui::info(out, &line)?;
         }
-        if moves.moved.is_empty() {
-            return Ok(moves.unsure);
+        if moves.moved.is_empty() && deleted.is_empty() {
+            return Ok((moves, unlisted));
         }
         for line in moves
             .moved
@@ -784,20 +796,32 @@ impl Following<'_> {
         {
             crate::ui::info(out, &line)?;
         }
+        for key in deleted {
+            crate::ui::info(
+                out,
+                &format!(
+                    "Deleted from sources/manual by hand, so taken out of its song: {key}; \
+                     `muman undo` puts it back"
+                ),
+            )?;
+            manifest.edit(Edit::Drop(key));
+        }
         if self.dry_run {
             manifest.rekey(&moves.moved);
         } else {
-            manifest.edit(Edit::Moved(moves.moved.clone()));
+            if !moves.moved.is_empty() {
+                manifest.edit(Edit::Moved(moves.moved.clone()));
+            }
             // The list before the state: stopped between, the next run
             // measures the file again, where the other way it would find
             // no record of the file gone to follow it by.
             manifest.save_locked(self.lock, &mut self.rec)?;
         }
         state.rekey(&moves.of_state())?;
-        if !self.dry_run {
+        if !self.dry_run && !moves.moved.is_empty() {
             state.save(self.home)?;
         }
-        Ok(moves.unsure)
+        Ok((moves, unlisted))
     }
 }
 

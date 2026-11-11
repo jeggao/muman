@@ -489,16 +489,16 @@ pub(crate) fn list<R: Runner, W: Write>(
 
 /// Song files dropped into the manual folder that no song lists, each a
 /// proposal; a listed file moved within the folder is followed instead,
-/// the song list saved as `run` records.
+/// and one deleted by hand taken out of its song, by
+/// [`crate::reconcile::Following`], the song list saved as `run` records.
 pub(crate) fn dropped_in<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     wait: Duration,
-    run: &mut dyn Recorder,
+    run: &mut Run,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     for twin in store.twins() {
         ui::warning(
@@ -510,19 +510,27 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
             ),
         )?;
     }
-    let mut unlisted = Unlisted::of(&manifest, &state, &store, wait);
     let scratch = atomic::Scratch::new()?;
-    let hear = crate::reconcile::hearing(runner, scratch.path());
-    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
-    let deleted = crate::reconcile::deleted(&manifest, &store, &moves, &unlisted);
+    let (moves, unlisted, state) = {
+        let lock = atomic::Lock::folder(&dirs.home)?;
+        let mut state = State::load(&dirs.home)?;
+        let following = crate::reconcile::Following {
+            home: &dirs.home,
+            lock: &lock,
+            rec: Recording::Run(run),
+            dry_run: false,
+            settling: wait,
+            listing: true,
+        };
+        let hear = crate::reconcile::hearing(runner, scratch.path());
+        let (moves, unlisted) = following.follow(&mut manifest, &mut state, &store, hear, out)?;
+        (moves, unlisted, state)
+    };
     let Unlisted {
         mut ready,
         settling,
         ..
     } = unlisted;
-    for line in moves.anew_lines(false) {
-        ui::info(out, &line)?;
-    }
     let unlisted: Vec<SourceKey> = ready
         .iter()
         .filter(|k| state.listed.contains(k) && !moves.anew.contains(k))
@@ -551,31 +559,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
             ),
         )?;
     }
-    for line in moves.moved.keys().filter_map(|k| moves.line(k, false)) {
-        ui::info(out, &line)?;
-    }
-    if !moves.moved.is_empty() {
-        manifest.edit(Edit::Moved(moves.moved.clone()));
-    }
-    for key in deleted {
-        ui::info(
-            out,
-            &format!(
-                "Deleted from sources/manual by hand, so taken out of its song: {key}; \
-                 `muman undo` puts it back"
-            ),
-        )?;
-        manifest.edit(Edit::Drop(key));
-    }
     manifest.save(run)?;
-    // So the song's plan names its file anew and the song is not written
-    // again for a file that only moved.
-    if !moves.moved.is_empty() {
-        let _lock = atomic::Lock::folder(&dirs.home)?;
-        let mut state = State::load(&dirs.home)?;
-        state.rekey(&moves.of_state())?;
-        state.save(&dirs.home)?;
-    }
     Ok(ready
         .into_iter()
         .map(|key| Proposal {

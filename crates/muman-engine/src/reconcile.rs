@@ -47,8 +47,8 @@ use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
 pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built, left_in_place};
 pub(crate) use self::keys::arriving;
-use self::keys::{Following, sites_found};
-pub use self::keys::{Moves, Unlisted, deleted, hearing, moved};
+use self::keys::sites_found;
+pub use self::keys::{Following, Moves, Unlisted, deleted, hearing, moved};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
 pub use self::measure::{analyze_mixes, compare};
@@ -218,9 +218,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
         rec: rec.reborrow(),
         dry_run: opts.dry_run,
         settling: opts.settling,
+        listing: false,
     };
     let hear = hearing(runner, temp.path());
-    let unsure = following.follow(&mut manifest, &mut state, &store, hear, out)?;
+    let unsure = (following
+        .follow(&mut manifest, &mut state, &store, hear, out)?
+        .0)
+        .unsure;
     let listed = manifest.keys();
     let mut how = Measuring {
         retry: opts.retry,
