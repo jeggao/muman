@@ -16,53 +16,97 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Every source file under `src`, and under each `crates/<crate>/src`,
-/// by its path from its `src`, without its tests.
-fn sources() -> BTreeMap<String, String> {
-    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(&path, found);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                found.push(path);
-            }
+/// The `src` folders the code is in: the root crate's, then each
+/// `crates/<crate>/src`.
+fn source_roots() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut crates: Vec<PathBuf> = std::fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some(e.ok()?.path().join("src")))
+        .filter(|src| src.is_dir())
+        .collect();
+    crates.sort();
+    [vec![root.join("src")], crates].concat()
+}
+
+fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            walk(&path, found);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            found.push(path);
         }
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut roots = vec![root.join("src")];
-    if let Ok(crates) = std::fs::read_dir(root.join("crates")) {
-        roots.extend(
-            crates
-                .filter_map(|e| Some(e.ok()?.path().join("src")))
-                .filter(|src| src.is_dir()),
-        );
-    }
-    let mut out = BTreeMap::new();
-    for src in roots {
+}
+
+/// Every Rust file of the code, with the `src` it is in.
+fn files() -> Vec<(PathBuf, PathBuf)> {
+    let mut out = Vec::new();
+    for src in source_roots() {
         let mut found = Vec::new();
         walk(&src, &mut found);
-        for p in found {
-            let name = p.file_name().unwrap().to_string_lossy();
-            if name == "tests.rs" || name == "testing.rs" || p.starts_with(src.join("tests")) {
-                continue;
-            }
-            let text = std::fs::read_to_string(&p).unwrap();
-            let shipped = match text.find("#[cfg(test)]\nmod tests {") {
-                Some(at) => text[..at].to_string(),
-                None => text,
-            };
-            let name = p
-                .strip_prefix(&src)
-                .unwrap()
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            out.insert(name, shipped);
-        }
+        out.extend(found.into_iter().map(|f| (src.clone(), f)));
     }
     out
+}
+
+/// Whether `path`, in `src`, holds tests alone.
+fn tests_alone(src: &Path, path: &Path) -> bool {
+    let name = path.file_name().unwrap();
+    name == "tests.rs" || name == "testing.rs" || path.starts_with(src.join("tests"))
+}
+
+/// `path` from the repository's root, its parts joined by `/` on every
+/// platform: two crates' files of one name stay apart.
+fn key(path: &Path) -> String {
+    path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+        .unwrap()
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every source file under `src`, and under each `crates/<crate>/src`,
+/// by its [`key`], without its tests.
+fn sources() -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (src, path) in files() {
+        if tests_alone(&src, &path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let shipped = match text.find("#[cfg(test)]\nmod tests {") {
+            Some(at) => text[..at].to_string(),
+            None => text,
+        };
+        out.insert(key(&path), shipped);
+    }
+    out
+}
+
+/// Each file that ships is read once, under its own key, so every rule
+/// holds it.
+#[test]
+fn every_file_that_ships_is_read() {
+    let read = sources();
+    let shipped: Vec<String> = files()
+        .into_iter()
+        .filter(|(src, path)| !tests_alone(src, path))
+        .map(|(_, path)| key(&path))
+        .collect();
+    let unread: Vec<&String> = shipped
+        .iter()
+        .filter(|f| !read.contains_key(f.as_str()))
+        .collect();
+    assert!(
+        unread.is_empty() && read.len() == shipped.len(),
+        "{} files ship, {} are read; unread: {unread:?}",
+        shipped.len(),
+        read.len()
+    );
 }
 
 /// The lines of `text` holding any of `needles`, comments aside.
@@ -81,26 +125,26 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
 /// `atomic`'s primitives; a file the list does not name makes none.
 const MUTATIONS: &[(&str, &str)] = &[
     (
-        "atomic.rs",
+        "crates/muman-core/src/atomic.rs",
         "the primitives every other write goes through, a second name for a file, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
     ),
     (
-        "library.rs",
+        "crates/muman-engine/src/library.rs",
         "the ledger: every move and removal in the library, recorded first, \
          and a song's staged files put in place over only what it proved muman's",
     ),
     (
-        "render.rs",
+        "crates/muman-engine/src/render.rs",
         "a song's new files staged beside their paths, whatever was at a staged \
          name removed first, and those staged files removed when the song fails \
          or the files beside it, written again alone, cannot be put in place",
     ),
     (
-        "history.rs",
+        "crates/muman-engine/src/history.rs",
         "run records, the files kept for undo, undo putting them back or removing lyrics it added and the copies `add` made, and an undone run's record let go of once its sync ends",
     ),
     (
-        "store.rs",
+        "crates/muman-core/src/store.rs",
         "an upload its release replaced, deleted from the sources; a file \
          fetched moved to its key's place, replacing the key's other; a \
          file a site renamed named at its new key's place, replacing \
@@ -108,46 +152,49 @@ const MUTATIONS: &[(&str, &str)] = &[
          new; a torrent's file aria2c finished moved to its key's place",
     ),
     (
-        "aria2.rs",
+        "crates/muman-net/src/aria2.rs",
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
          damaged copy copied in to be checked; the input file of a run, \
          in scratch",
     ),
-    ("purge.rs", "sources no song uses, deleted on request"),
+    ("src/purge.rs", "sources no song uses, deleted on request"),
     (
-        "state.rs",
+        "crates/muman-engine/src/state.rs",
         "state.json brought into state.db once: the store made from it \
          linked or renamed into place, its other name and what a stopped \
          import left removed, and state.json kept as state.json.bak",
     ),
     (
-        "change.rs",
+        "src/change.rs",
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
     (
-        "given.rs",
+        "crates/muman-core/src/given.rs",
         "files copied in by `add`, and a download taken up",
     ),
     (
-        "add.rs",
+        "src/add.rs",
         "a file fetched before, removed again when its info JSON cannot be cleared; \
          the files an add copied, removed again when it is refused partway",
     ),
-    ("sync.rs", "downloads left unfinished too long"),
+    ("src/sync.rs", "downloads left unfinished too long"),
     (
-        "acquire.rs",
+        "crates/muman-engine/src/acquire.rs",
         "the URL list and download archive handed to yt-dlp, in scratch",
     ),
     (
-        "download.rs",
+        "crates/muman-net/src/download.rs",
         "a file just fetched or copied in, written again without the cookies \
          and headers of its info JSON, that JSON kept in scratch; a remux left \
          cut short in partial downloads",
     ),
-    ("editor.rs", "the file the editor is opened on, in scratch"),
     (
-        "export.rs",
+        "src/editor.rs",
+        "the file the editor is opened on, in scratch",
+    ),
+    (
+        "src/export.rs",
         "the zip, made in scratch and placed where no file is, or with \
          --force over one; the folder's song list and library, made in \
          scratch inside it and renamed up; each song encoded for it moved \
@@ -198,7 +245,7 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
 fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
     let sources = sources();
     let render = lines_with(
-        &sources["render.rs"],
+        &sources["crates/muman-engine/src/render.rs"],
         &[
             "atomic::rename(",
             "atomic::remove(",
@@ -218,7 +265,7 @@ fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
         })
         .collect();
     assert!(
-        taken.len() == 1 && taken[0].starts_with("reconcile/owned.rs: "),
+        taken.len() == 1 && taken[0].starts_with("crates/muman-engine/src/reconcile/owned.rs: "),
         "{}",
         taken.join("\n")
     );
@@ -226,21 +273,24 @@ fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
 
 /// The state that lives for the whole process, and why it may.
 const STATICS: &[(&str, &str)] = &[
-    ("progress.rs", "the one progress line a terminal shows"),
     (
-        "history.rs",
+        "crates/muman-core/src/progress.rs",
+        "the one progress line a terminal shows",
+    ),
+    (
+        "crates/muman-engine/src/history.rs",
         "a count that tells two runs of one process apart",
     ),
     (
-        "runner.rs",
+        "crates/muman-core/src/runner.rs",
         "the programs a signal stops with muman, and whether one of the user's own answers it",
     ),
     (
-        "kill.rs",
+        "crates/muman-core/src/kill.rs",
         "the kills and guarded libraries tests arm, compiled for tests alone",
     ),
     (
-        "errors.rs",
+        "crates/muman-core/src/errors.rs",
         "whether a thread catches a panic, and what the one caught said, for its error",
     ),
 ];
@@ -279,7 +329,7 @@ fn sites_are_described_by_the_site_table_alone() {
     };
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "source.rs" {
+        if file == "crates/muman-core/src/source.rs" {
             continue;
         }
         for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -301,7 +351,8 @@ fn sites_are_described_by_the_site_table_alone() {
 fn songs_fit_a_size_by_one_loop() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file != "fit.rs" && !lines_with(&text, &["allocate("]).is_empty() {
+        if file != "crates/muman-engine/src/fit.rs" && !lines_with(&text, &["allocate("]).is_empty()
+        {
             wrong.push(file);
         }
     }
@@ -315,8 +366,8 @@ fn songs_fit_a_size_by_one_loop() {
 fn the_song_list_is_written_by_the_manifest_and_undo_alone() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file != "manifest.rs"
-            && file != "history.rs"
+        if file != "crates/muman-config/src/manifest.rs"
+            && file != "crates/muman-engine/src/history.rs"
             && !lines_with(&text, &["Name::new(MANIFEST)"]).is_empty()
         {
             wrong.push(file);
@@ -330,31 +381,31 @@ fn the_song_list_is_written_by_the_manifest_and_undo_alone() {
 /// outside a run but these.
 const RECORDERS: &[(&str, &str, &str)] = &[
     (
-        "history.rs",
+        "crates/muman-config/src/manifest.rs",
+        "Unrecorded",
+        "the list a new home starts with, before its first run, and tests",
+    ),
+    (
+        "crates/muman-engine/src/history.rs",
         "Run",
         "a run, begun and its record written before the save",
     ),
     (
-        "history.rs",
+        "crates/muman-engine/src/history.rs",
         "Recording<'_>",
         "a sync's run, or the undo's, which it saves as",
     ),
     (
-        "history.rs",
+        "crates/muman-engine/src/history.rs",
         "Undone",
         "the undo whose sync saves, its record marked and the runs lock held",
-    ),
-    (
-        "manifest.rs",
-        "Unrecorded",
-        "the list a new home starts with, before its first run, and tests",
     ),
 ];
 
 /// Where a save may take `Unrecorded`, which no run records, and why. A
 /// dry run's sync takes none: its recorder refuses a save.
 const UNRECORDED: &[(&str, &str)] = &[(
-    "manifest.rs",
+    "crates/muman-config/src/manifest.rs",
     "`start`, the list a new home starts with, before its first run",
 )];
 
@@ -388,14 +439,17 @@ fn the_song_list_is_saved_only_as_a_begun_run_records() {
 /// would change what is measured or written behind the codec's back.
 const RESHAPES: &[(&str, &str)] = &[
     (
-        "codec.rs",
+        "crates/muman-media/src/codec.rs",
         "what a codec does so it holds a source, said by `Codec::adapt`",
     ),
     (
-        "fingerprint.rs",
+        "crates/muman-core/src/fingerprint.rs",
         "the mono copy at Chromaprint's rate that prints are made of",
     ),
-    ("align.rs", "the mono copy two recordings are aligned on"),
+    (
+        "crates/muman-media/src/align.rs",
+        "the mono copy two recordings are aligned on",
+    ),
 ];
 
 #[test]
@@ -432,7 +486,7 @@ fn samples_are_changed_only_as_a_plan_s_chain_says() {
     ];
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file != "codec.rs" {
+        if file != "crates/muman-media/src/codec.rs" {
             for line in lines_with(&text, &filters) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }
@@ -450,7 +504,7 @@ fn samples_are_changed_only_as_a_plan_s_chain_says() {
 fn ffmpeg_reads_a_file_only_as_its_input_says() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file != "ffmpeg.rs" {
+        if file != "crates/muman-media/src/ffmpeg.rs" {
             for line in lines_with(&text, &["\"-i\""]) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }
@@ -467,10 +521,13 @@ fn ffmpeg_reads_a_file_only_as_its_input_says() {
 /// Where ffmpeg is told to encode a picture, and why there.
 const PICTURES: [(&str, &str); 2] = [
     (
-        "render/cover.rs",
+        "crates/muman-engine/src/render/cover.rs",
         "the covers written into the library, each with `PICTURE_ARGS`",
     ),
-    ("quality.rs", "a graymap measured, never written"),
+    (
+        "crates/muman-media/src/quality.rs",
+        "a graymap measured, never written",
+    ),
 ];
 
 /// A picture written into the library is the same bytes on every
@@ -492,7 +549,7 @@ fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
                 .rposition(|l| l.trim_start().starts_with("fn ") || l.contains(" fn "))
                 .unwrap_or(0);
             let exact = lines[start..n].iter().any(|l| l.contains("PICTURE_ARGS"));
-            if !allowed || (file == "render/cover.rs" && !exact) {
+            if !allowed || (file == "crates/muman-engine/src/render/cover.rs" && !exact) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }
         }
@@ -510,7 +567,7 @@ fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
 fn a_folder_s_cover_is_given_in_one_place() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "folder.rs" {
+        if file == "crates/muman-engine/src/folder.rs" {
             continue;
         }
         for line in lines_with(&text, &[".folder = Some("]) {
@@ -545,27 +602,27 @@ fn a_plan_changes_format_with_its_renderer_version() {
 /// lyrics are cleaned only to be measured or matched.
 const CLEANS: [(&str, &str, &str); 5] = [
     (
-        "render/lyrics.rs",
+        "crates/muman-engine/src/render/lyrics.rs",
         "lyrics::clean(",
         "writes a song's lyrics as its plan's `clean_off` and `cleaning` say",
     ),
     (
-        "lyrics.rs",
+        "crates/muman-media/src/lyrics.rs",
         "clean_lrc(",
         "names the cleaning a measure reads by",
     ),
     (
-        "lyrics.rs",
+        "crates/muman-media/src/lyrics.rs",
         "lyrics::all(",
         "cleans by every rule for a measure",
     ),
     (
-        "facts.rs",
+        "crates/muman-media/src/facts.rs",
         "clean_lrc(",
         "measures how a source's lyrics are timed",
     ),
     (
-        "attach.rs",
+        "src/attach.rs",
         "clean_lrc(",
         "times lyrics given to `add` to match them",
     ),
@@ -598,12 +655,12 @@ fn lyrics_are_cleaned_for_a_library_file_only_as_its_plan_says() {
 /// module that writes, moves, keeps or removes one names it alike.
 const RENAMES: [(&str, &str, &str); 2] = [
     (
-        "facts.rs",
+        "crates/muman-media/src/facts.rs",
         "with_extension(\"cue\")",
         "finds the cue sheet beside a source",
     ),
     (
-        "attach.rs",
+        "src/attach.rs",
         "with_extension(\"x\")",
         "folds a song's stem as a file named by it folds",
     ),
@@ -613,7 +670,7 @@ const RENAMES: [(&str, &str, &str); 2] = [
 fn a_file_beside_a_song_is_named_in_one_place() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "outputs.rs" {
+        if file == "crates/muman-engine/src/outputs.rs" {
             continue;
         }
         for line in lines_with(&text, &["with_extension(\""]) {
@@ -638,7 +695,9 @@ fn a_file_beside_a_song_is_named_in_one_place() {
 fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "cues.rs" || file == "render/lyrics.rs" {
+        if file == "crates/muman-media/src/cues.rs"
+            || file == "crates/muman-engine/src/render/lyrics.rs"
+        {
             continue;
         }
         for line in lines_with(&text, &["cues::write("]) {
@@ -681,11 +740,11 @@ fn the_reasons_name_files_that_exist() {
 /// `lookups` or `skip`, and `enabled = false` is a privacy switch.
 const ASKS: &[(&str, &str)] = &[
     (
-        "lookup.rs",
+        "crates/muman-engine/src/lookup.rs",
         "every lookup and every record fetched again, each by its verdict or its provider on",
     ),
     (
-        "acquire.rs",
+        "crates/muman-engine/src/acquire.rs",
         "add's matching, made only while youtube-music is on, and the searches lookup.rs asks for",
     ),
 ];
@@ -716,9 +775,9 @@ fn a_provider_is_asked_only_where_its_switch_is_read() {
 /// it through `Provider::named` or the provider's constant, so a provider
 /// renamed or added is renamed or added everywhere.
 const PROVIDER_NAMES: &[(&str, &str)] = &[
-    ("provider.rs", "the names themselves"),
+    ("crates/muman-core/src/provider.rs", "the names themselves"),
     (
-        "migrate.rs",
+        "crates/muman-config/src/migrate.rs",
         "the triggers edition 7 ran unwritten, as files of that edition named them",
     ),
 ];
@@ -747,9 +806,18 @@ fn a_provider_s_name_is_spelled_in_one_place() {
 /// Where whether a failed fetch is due again is judged: what a sync
 /// fetches is decided once, so the fetches, `status` and `info` agree.
 const FETCH_DUE: &[(&str, &str)] = &[
-    ("due.rs", "what a sync fetches of the listed sources"),
-    ("lookup.rs", "a lookup's record fetched again"),
-    ("state.rs", "how long a failure waits"),
+    (
+        "crates/muman-engine/src/due.rs",
+        "what a sync fetches of the listed sources",
+    ),
+    (
+        "crates/muman-engine/src/lookup.rs",
+        "a lookup's record fetched again",
+    ),
+    (
+        "crates/muman-engine/src/state.rs",
+        "how long a failure waits",
+    ),
 ];
 
 #[test]
@@ -790,12 +858,21 @@ fn what_muman_says_is_never_read_back() {
 /// `Sites::fetched` alone, so a source is named alike however it was
 /// reached.
 const NAMED: &[(&str, &str)] = &[
-    ("sites.rs", "the one place a fetched source is named"),
-    ("info.rs", "the info JSON yt-dlp embedded in a file"),
-    ("music.rs", "an entry a URL listed"),
-    ("download.rs", "the files a fetch reports"),
     (
-        "reconcile/keys.rs",
+        "crates/muman-core/src/sites.rs",
+        "the one place a fetched source is named",
+    ),
+    (
+        "crates/muman-media/src/info.rs",
+        "the info JSON yt-dlp embedded in a file",
+    ),
+    ("crates/muman-net/src/music.rs", "an entry a URL listed"),
+    (
+        "crates/muman-net/src/download.rs",
+        "the files a fetch reports",
+    ),
+    (
+        "crates/muman-engine/src/reconcile/keys.rs",
         "an old key renamed by the page it recorded",
     ),
 ];
@@ -819,20 +896,20 @@ fn a_fetched_source_is_named_in_one_place() {
 /// a regular file at its real path, inside the folder given.
 const COPIES: &[(&str, &str)] = &[
     (
-        "given.rs",
+        "crates/muman-core/src/given.rs",
         "what the user gives `add`, read only from inside the folder given",
     ),
     (
-        "history.rs",
+        "crates/muman-engine/src/history.rs",
         "the library's files undo keeps, and puts back",
     ),
     (
-        "render.rs",
+        "crates/muman-engine/src/render.rs",
         "a song's files, built elsewhere, into the library",
     ),
-    ("export.rs", "the library's files into an export"),
+    ("src/export.rs", "the library's files into an export"),
     (
-        "aria2.rs",
+        "crates/muman-net/src/aria2.rs",
         "the store's damaged copy, copied in to be checked",
     ),
 ];
@@ -860,49 +937,93 @@ fn what_the_user_gives_is_copied_in_one_place() {
 /// that a title or a name from elsewhere cannot hold what a terminal acts
 /// on.
 const WRITES: &[(&str, usize, &str)] = &[
-    ("ui.rs", 9, "the messages, their text made printable"),
     (
-        "progress.rs",
+        "crates/muman-core/src/ui.rs",
+        9,
+        "the messages, their text made printable",
+    ),
+    (
+        "crates/muman-core/src/progress.rs",
         6,
         "a step's line built in a String, from names made printable as given, and written \
          to stderr; the messages the console lifts the status line for",
     ),
     (
-        "ytdlp_log.rs",
+        "crates/muman-net/src/ytdlp_log.rs",
         2,
         "yt-dlp's line rewritten in place, made printable",
     ),
     (
-        "sync.rs",
+        "src/sync.rs",
         1,
         "what torrents fetched beside yt-dlp said through `ui`, held until it is done",
     ),
-    ("cli.rs", 3, "the help's colours, in a String"),
-    ("chapters.rs", 2, "an FFMETADATA file, in a String"),
-    ("attach.rs", 3, "a song offered to pick, in a String"),
-    ("editor.rs", 1, "the file the editor opens, in a String"),
-    ("hash.rs", 1, "a hash in hex, in a String"),
-    ("held.rs", 1, "what a digest is made of, in a String"),
-    ("lrclib.rs", 1, "lyrics as an `.lrc` file, in a String"),
-    ("lyrics.rs", 1, "a timestamp, in a String"),
-    ("sites.rs", 1, "yt-dlp's download archive, in a String"),
-    ("store.rs", 1, "an id escaped for a file name, in a String"),
+    ("src/cli.rs", 3, "the help's colours, in a String"),
     (
-        "trust.rs",
+        "crates/muman-media/src/chapters.rs",
+        2,
+        "an FFMETADATA file, in a String",
+    ),
+    ("src/attach.rs", 3, "a song offered to pick, in a String"),
+    ("src/editor.rs", 1, "the file the editor opens, in a String"),
+    (
+        "crates/muman-core/src/hash.rs",
+        1,
+        "a hash in hex, in a String",
+    ),
+    (
+        "crates/muman-config/src/held.rs",
+        1,
+        "what a digest is made of, in a String",
+    ),
+    (
+        "crates/muman-net/src/lrclib.rs",
+        1,
+        "lyrics as an `.lrc` file, in a String",
+    ),
+    (
+        "crates/muman-media/src/lyrics.rs",
+        1,
+        "a timestamp, in a String",
+    ),
+    (
+        "crates/muman-core/src/sites.rs",
+        1,
+        "yt-dlp's download archive, in a String",
+    ),
+    (
+        "crates/muman-core/src/store.rs",
+        1,
+        "an id escaped for a file name, in a String",
+    ),
+    (
+        "src/trust.rs",
         1,
         "a setting's hidden character escaped, in a String",
     ),
-    ("atomic.rs", 2, "a whole file's bytes, and a private file's"),
-    ("ogg.rs", 1, "an Opus header's page, in its file"),
-    ("flac.rs", 1, "a STREAMINFO's sample count, in its file"),
     (
-        "render.rs",
+        "crates/muman-core/src/atomic.rs",
+        2,
+        "a whole file's bytes, and a private file's",
+    ),
+    (
+        "crates/muman-media/src/ogg.rs",
+        1,
+        "an Opus header's page, in its file",
+    ),
+    (
+        "crates/muman-media/src/flac.rs",
+        1,
+        "a STREAMINFO's sample count, in its file",
+    ),
+    (
+        "crates/muman-engine/src/render.rs",
         3,
         "a song's bytes and its lyrics, in their files, the lyrics again when \
          they alone are written",
     ),
     (
-        "cues.rs",
+        "crates/muman-media/src/cues.rs",
         3,
         "lyrics as cues and word times, into the text render writes to a file",
     ),
