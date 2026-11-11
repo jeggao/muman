@@ -39,8 +39,11 @@
 //! opens no WAL store without it; a command that only reads would fail.
 //! So when the store will not open for writing, it is opened read only
 //! ([`Db::open_read_only`]), which makes no file: as it is when no
-//! `-wal` file stands beside it, every commit then in the store itself,
-//! and through the `-wal` and `-shm` files a run left when they do. A
+//! `-wal` file holding anything stands beside it, every commit then in
+//! the store itself, and through the `-wal` and `-shm` files a run left
+//! when one does. An empty `-wal`, as the failed open for writing
+//! leaves, holds no commit, so it counts as none: opened as a WAL store,
+//! it would need the index Windows cannot do without. A
 //! table a store made before it lacks is made in memory alone, empty.
 //! A command that writes then fails at its first write, naming the store.
 
@@ -189,7 +192,7 @@ impl Db {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let mut wal = file.clone().into_os_string();
         wal.push("-wal");
-        let conn = if Path::new(&wal).is_file() {
+        let conn = if std::fs::metadata(&wal).is_ok_and(|m| m.is_file() && m.len() > 0) {
             Connection::open_with_flags(&file, flags)
         } else {
             Connection::open_with_flags(immutable(&file), flags | OpenFlags::SQLITE_OPEN_URI)
