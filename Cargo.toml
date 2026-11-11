@@ -73,6 +73,10 @@ muman-engine = { path = "crates/muman-engine", version = "=0.11.0" }
 muman-media = { path = "crates/muman-media", version = "=0.11.0" }
 muman-net = { path = "crates/muman-net", version = "=0.11.0" }
 
+# unused_crate_dependencies is warned in each crate's root instead, outside
+# tests: here it would also fire on muman's binary, which sees every
+# dependency of the library, and on each test target, which sees every
+# dev-dependency whichever target uses it.
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"
