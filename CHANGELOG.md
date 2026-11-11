@@ -339,6 +339,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `MUMAN_HOOK_LIBRARY`, so a muman it runs on another library is no
   longer refused as running on its own.
 
+- **A crash in one song fails that song alone**: a panic while building
+  a song, in muman or a library it uses, is that song's failure, with
+  its message and place, recorded for `check`, and leaves no `.part`
+  file, instead of ending the sync with exit 101.
+- **Only a length the file is known to state can mark it cut off**: a
+  source in another format is judged by its packets and decode alone,
+  so no format whose length ffmpeg guesses makes every whole file of it
+  look cut off. Sources are measured again once.
+- **A song left as built keeps its place**: while its source is fetched
+  again and not accepted, or damaged since it was built, no other song
+  takes its file's path or its folder's cover, and its album is not
+  respelled from the new source.
+- **A home muman may not write is read on Windows** when a failed open
+  left an empty `-wal` beside the store.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added
