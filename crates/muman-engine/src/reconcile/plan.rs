@@ -2,13 +2,18 @@
 //! a song is named in messages.
 //!
 //! A song that fails to resolve, its file still in the library, is held
-//! at the plan that file was made from: no song takes its path, and its
-//! album's loudness is pooled with it as it was. What it failed with is
-//! its own sources, never a picture or a record it shares, so no other
-//! song's file is kept for it. A song a sync leaves as built
-//! ([`left_as_built`](super::left_as_built)) keeps its plan and path, and
-//! is pooled in its album's loudness by the plan its file was made from
-//! alike.
+//! at the plan that file was made from: no song takes its path, its
+//! album's loudness is pooled with it as it was, and its folder counts it
+//! and the folder's cover file it holds. What it failed with is its own
+//! sources, never a picture or a record it shares, so no other song's
+//! file is kept for it. A song a sync leaves as built
+//! ([`left_as_built`](super::left_as_built)) is held at its file's plan
+//! alike, and its album agrees with it by that plan, beside its own plan
+//! of what its sources give now, which the sync compares with its file
+//! and does not write. Taken by that plan, what a source holds and is not
+//! yet accepted would reach the songs beside it: another song given its
+//! file's path, or the cover file its folder holds, would write over it,
+//! and its album's songs would be spelled as the source spells it now.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -78,14 +83,17 @@ pub fn path_of(r: &Resolved) -> PathBuf {
 /// and the folder of another. The folders are known before any name is
 /// held, as telling a name apart changes no folder, so the song whose
 /// file it is is told apart, whichever is listed first. `beside` names
-/// the files a song at a path writes beside it by its plan.
+/// the files a song at a path writes beside it by its plan. A song of
+/// `as_made` keeps the name its file has, and its plan in `planned` takes
+/// none.
 pub(super) fn separate(
     planned: &mut [(usize, Resolved)],
-    failed: &[(usize, Resolved)],
+    as_made: &[(usize, Resolved)],
     naming: &Naming,
     beside: &dyn Fn(&Path, &resolve::Plan) -> Vec<PathBuf>,
 ) {
     use crate::relpath::folded;
+    let takes_a_name = |n: &usize| as_made.iter().all(|(m, _)| m != n);
     let files = |r: &Resolved| -> Vec<String> {
         let path = path_of(r);
         let names = beside(&path, &r.plan);
@@ -94,32 +102,32 @@ pub(super) fn separate(
             .map(|p| folded(&p))
             .collect()
     };
-    let folders: BTreeSet<String> = (failed.iter().chain(planned.iter()))
-        .flat_map(|(_, r)| files(r))
-        .flat_map(|f| {
-            (f.match_indices('/'))
-                .map(|(at, _)| f[..at].to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let folders: BTreeSet<String> = (as_made
+        .iter()
+        .chain(planned.iter().filter(|(n, _)| takes_a_name(n))))
+    .flat_map(|(_, r)| files(r))
+    .flat_map(|f| {
+        (f.match_indices('/'))
+            .map(|(at, _)| f[..at].to_string())
+            .collect::<Vec<_>>()
+    })
+    .collect();
     let mut stems: BTreeSet<String> = BTreeSet::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
-    let mut hold = |r: &Resolved, stems: &mut BTreeSet<String>, failed: bool| {
+    let mut hold = |r: &Resolved, stems: &mut BTreeSet<String>, kept: bool| {
         let files = files(r);
         let free = !stems.contains(&folded(&r.stem))
-            && (files.iter()).all(|f| !taken.contains(f) && (failed || !folders.contains(f)));
+            && (files.iter()).all(|f| !taken.contains(f) && (kept || !folders.contains(f)));
         if free {
             stems.insert(folded(&r.stem));
             taken.extend(files);
         }
         free
     };
-    // A song that failed keeps the name its file has, so no song takes
-    // its path, and its file, while it is held.
-    for (_, r) in failed {
+    for (_, r) in as_made {
         hold(r, &mut stems, true);
     }
-    for (_, r) in planned.iter_mut() {
+    for (_, r) in planned.iter_mut().filter(|(n, _)| takes_a_name(n)) {
         if hold(r, &mut stems, false) {
             continue;
         }
@@ -374,14 +382,22 @@ impl<'a> Resolver<'a> {
 
 /// Resolve again each song of an album its songs disagree on, first on the
 /// edition most of them share, then with what they agree on
-/// ([`crate::album`]).
+/// ([`crate::album`]). A song of `as_built` agrees as its file was made,
+/// by the plan there, and is not resolved again.
 fn agree_on_albums(
     planned: &mut Planned,
+    as_built: &[(usize, Resolved)],
     resolver: &Resolver<'_>,
     manifest: &Manifest,
     state: &State,
     on_disk: Option<&BTreeSet<SourceKey>>,
 ) {
+    let now: Vec<(usize, Resolved)> = (planned.iter_mut())
+        .filter_map(|(n, r)| {
+            let (_, built) = as_built.iter().find(|(b, _)| b == n)?;
+            Some((*n, std::mem::replace(r, built.clone())))
+        })
+        .collect();
     let lookups = state.acoustid_lookups();
     let mut picks: BTreeMap<usize, crate::album::Pick> = crate::release::choose(
         planned,
@@ -402,7 +418,9 @@ fn agree_on_albums(
     let again = |planned: &mut Planned,
                  picks: &BTreeMap<usize, crate::album::Pick>,
                  of: &BTreeSet<usize>| {
-        for (n, r) in planned.iter_mut().filter(|(n, _)| of.contains(n)) {
+        for (n, r) in
+            (planned.iter_mut()).filter(|(n, _)| of.contains(n) && now.iter().all(|(m, _)| m != n))
+        {
             let input = Input {
                 pick: picks.get(n),
                 ..resolver.input(&manifest.songs[*n], on_disk)
@@ -445,6 +463,11 @@ fn agree_on_albums(
         (pick.cover, pick.audio_from) = (cover, audio);
     }
     again(planned, &picks, &swayed);
+    for (n, r) in now {
+        if let Some((_, at)) = planned.iter_mut().find(|(m, _)| *m == n) {
+            *at = r;
+        }
+    }
 }
 
 /// The sources on disk, when the store was looked at, and those waiting
@@ -539,7 +562,16 @@ fn resolve_fitted(
             Err(e) => resolution.unresolved.push((n, e)),
         }
     }
-    agree_on_albums(&mut resolution.planned, &resolver, manifest, state, on_disk);
+    let left = super::left_as_built(manifest, state, &resolution.planned, library, asked);
+    let as_built = held(state, left);
+    agree_on_albums(
+        &mut resolution.planned,
+        &as_built,
+        &resolver,
+        manifest,
+        state,
+        on_disk,
+    );
     if let Some(max) = settings.library.max_path {
         resolution.over_max_path = (resolution.planned.iter())
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
@@ -552,24 +584,22 @@ fn resolve_fitted(
         &state.outputs,
     );
     let failing = held(state, failed);
-    let left = super::left_as_built(manifest, state, &resolution.planned, library, asked);
     for (n, r) in &mut resolution.planned {
         if let Some(format) = fitted.get(n) {
             r.plan = r.plan.with_format(*format);
         }
     }
-    let as_made: Vec<(usize, Resolved)> =
-        failing.iter().cloned().chain(held(state, left)).collect();
+    let as_made: Vec<(usize, Resolved)> = failing.iter().cloned().chain(as_built).collect();
     crate::levels::settle(&mut resolution.planned, &as_made, state, settings);
     separate(
         &mut resolution.planned,
-        &failing,
+        &as_made,
         &resolver.naming,
         &|path, plan| crate::artifact::parts(plan).files(path),
     );
     resolution.unplaced = crate::folder::assign(
         &mut resolution.planned,
-        &failing,
+        &as_made,
         &settings.cover,
         &state.facts,
     );

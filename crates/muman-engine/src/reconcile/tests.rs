@@ -3057,3 +3057,127 @@ fn a_source_holding_audio_compared_before_is_not_compared_again() {
         "gone once no source kept holds its audio"
     );
 }
+
+#[test]
+fn a_song_left_as_built_keeps_its_path_from_a_song_named_as_it_was() {
+    let h = home();
+    let source = h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let titled = |a: &str| Fake {
+        hashes: vec![("aaaaaaaaaaa".into(), 7), ("bbbbbbbbbbb".into(), 8)],
+        ..Fake::default()
+            .info(
+                "aaaaaaaaaaa",
+                &format!(r#"{{"id": "aaaaaaaaaaa", "title": "{a}", "uploader": "Chan"}}"#),
+            )
+            .info(
+                "bbbbbbbbbbb",
+                r#"{"id": "bbbbbbbbbbb", "title": "Harbor", "uploader": "Chan"}"#,
+            )
+    };
+    assert!(h.run(&titled("Lantern Weather"), Options::default()).0);
+    let song = h.lib("Chan/Lantern Weather/Lantern Weather.opus");
+    let built = std::fs::read(&song).unwrap();
+    std::fs::write(&source, "fetched again").unwrap();
+    let list = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    let at = list
+        .find("sources = [\"youtube.com:bbbbbbbbbbb\"]")
+        .unwrap();
+    let titled_b = list[at..].replacen("tags.title = \"\"", "tags.title = \"Lantern Weather\"", 1);
+    assert_ne!(titled_b, list[at..], "{list}");
+    std::fs::write(h.dirs.manifest(), format!("{}{titled_b}", &list[..at])).unwrap();
+
+    let (_, text) = h.run(&titled("Paper Comets"), Options::default());
+    let plain = crate::ui::plain(&text);
+    assert!(plain.contains("left as built"), "{plain}");
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{plain}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let rel = PathBuf::from("Chan/Lantern Weather/Lantern Weather.opus");
+    assert_eq!(
+        state.outputs[&rel].sources,
+        vec![SourceKey::parse("youtube.com:aaaaaaaaaaa").unwrap()],
+        "{plain}"
+    );
+}
+
+/// A manual FLAC's probe: a second long, or said to run 200 s where
+/// `said`, titled and on `album`, with an embedded cover.
+fn tagged_flac(title: &str, track: u32, album: &str, said: bool) -> String {
+    let duration = if said { "200.0" } else { "1.0" };
+    format!(
+        r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "flac",
+        "channels": 2, "sample_rate": "44100", "duration": "{duration}"}},
+        {{"index": 1, "codec_type": "video", "codec_name": "mjpeg", "width": 64, "height": 64,
+        "disposition": {{"attached_pic": 1}}}}], "format": {{"format_name": "flac",
+        "duration": "{duration}", "tags": {{"TITLE": "{title}", "ARTIST": "Artist",
+        "ALBUM": "{album}", "track": "{track}"}}}}}}"#
+    )
+}
+
+#[test]
+fn a_song_left_as_built_keeps_the_cover_its_folder_holds() {
+    let h = home();
+    listing(
+        &h,
+        "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n",
+        &["a", "b"],
+    );
+    let whole = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Record", false));
+    let (ok, text) = h.run(&whole, Options::default());
+    assert!(ok, "{text}");
+    let cover = PathBuf::from("Artist/Record/cover.jpg");
+    let holder = |h: &Home| {
+        let state = State::load(&h.dirs.home).unwrap();
+        state
+            .outputs
+            .iter()
+            .filter(|(_, w)| w.sidecar_paths().any(|s| *s == cover))
+            .map(|(p, _)| p.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        holder(&h),
+        [PathBuf::from("Artist/Record/01 Kite.flac")],
+        "{text}"
+    );
+
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..Fake::default()
+            .probe("a.flac", &tagged_flac("Kite", 1, "Other", true))
+            .probe("b.flac", &tagged_flac("Tide", 2, "Record", false))
+    };
+    let (_, text) = h.run(&cut, Options::default());
+    assert!(text.contains("cut off"), "{text}");
+    assert_eq!(
+        holder(&h),
+        [PathBuf::from("Artist/Record/01 Kite.flac")],
+        "{text}"
+    );
+}
+
+#[test]
+fn a_song_left_as_built_spells_its_album_for_no_other_song() {
+    let h = home();
+    listing(&h, "", &["a", "b"]);
+    let whole = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Paper comets", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Paper comets", false));
+    let (ok, text) = h.run(&whole, Options::default());
+    assert!(ok, "{text}");
+    let built = formats(&h);
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..Fake::default()
+            .probe("a.flac", &tagged_flac("Kite", 1, "Paper Comets", true))
+            .probe("b.flac", &tagged_flac("Tide", 2, "Paper comets", false))
+    };
+    let (_, text) = h.run(&cut, Options::default());
+    assert!(text.contains("cut off"), "{text}");
+    assert_eq!(formats(&h), built, "{text}");
+}

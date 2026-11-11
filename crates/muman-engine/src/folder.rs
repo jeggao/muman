@@ -39,11 +39,12 @@
 //! next holder, which writes beside it, and the song's new folder gets
 //! a cover of its own.
 //!
-//! A song held at its last plan while it fails ([`crate::reconcile`]) is
-//! one of its folder's songs still: it counts toward the albums, the
-//! majority and the cover, and one that holds the folder's file keeps
-//! it, its file kept with it. So a song that fails moves no cover, makes
-//! none appear and takes none away, and no two songs list one file.
+//! A song held at its last plan while it fails, or while a sync leaves it
+//! as built ([`crate::reconcile`]), is one of its folder's songs still, by
+//! that plan: it counts toward the albums, the majority and the cover,
+//! and one that holds the folder's file keeps it, its file kept with it.
+//! So such a song moves no cover, makes none appear and takes none away,
+//! and no two songs list one file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -80,7 +81,8 @@ type Album = (Option<crate::album::Album>, Option<usize>);
 
 /// Give each folder's cover, as the folder outputs of `cover` say, to
 /// the song of `planned` that holds it, the songs of `held` counted
-/// among theirs; each folder's file not written, and why.
+/// among theirs, by their plan there alone; each folder's file not
+/// written, and why.
 pub fn assign(
     planned: &mut [(usize, Resolved)],
     held: &[(usize, Resolved)],
@@ -91,15 +93,18 @@ pub fn assign(
     if outs.is_empty() {
         return Vec::new();
     }
-    // Planned songs first, so an index below `planned.len()` is one that
-    // can be given the file.
+    // Planned songs held by no other plan first, so an index below
+    // `free.len()` is one that can be given the file.
     let mut given = Vec::new();
+    let free: Vec<usize> = (0..planned.len())
+        .filter(|&i| held.iter().all(|(n, _)| *n != planned[i].0))
+        .collect();
     let unplaced = {
-        let all: Vec<&(usize, Resolved)> = planned.iter().chain(held).collect();
-        assigned(&all, planned.len(), &outs, facts, &mut given)
+        let all: Vec<&(usize, Resolved)> = free.iter().map(|&i| &planned[i]).chain(held).collect();
+        assigned(&all, free.len(), &outs, facts, &mut given)
     };
     for (i, placed) in given {
-        planned[i].1.plan.folder = Some(placed);
+        planned[free[i]].1.plan.folder = Some(placed);
     }
     unplaced
 }

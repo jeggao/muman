@@ -195,8 +195,8 @@ fn holding(
 /// Each song of `planned` a sync leaves as built, [`Foreseen::held`] as
 /// `foresee` holds it, with its file still in `library`: what a file of
 /// it holds, not what its sources hold now, is what it weighs in its
-/// album's loudness and in the library's size. None is left under
-/// `force`, which writes every song.
+/// album, its folder, the names songs take and the library's size. None
+/// is left under `force`, which writes every song.
 #[must_use]
 pub fn left_as_built(
     manifest: &Manifest,
