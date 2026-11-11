@@ -5140,7 +5140,7 @@ fn a_song_list_that_is_no_toml_is_worded_alike_by_every_command() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     s.run(&flacs(), &["sync"]);
-    let songs = s.dir.path().join("home/songs.toml");
+    let songs = s.dir.path().join("home").join("songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
     std::fs::write(&songs, format!("{listed}\n[[song\n")).unwrap();
     for args in [&["status"][..], &["sync"], &["list"], &["info"]] {
