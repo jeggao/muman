@@ -17,27 +17,27 @@ muman-core.workspace = true
 muman-engine.workspace = true
 muman-media.workspace = true
 muman-net.workspace = true
-anstream = "1"
-anstyle = "1"
-anyhow = "1"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive", "env", "wrap_help"] }
-clap_complete = "4"
-ctrlc = { version = "3.5.2", features = ["termination"] }
-dunce = "1"
-filetime = "0.2"
-icu_properties = "2.3"
-regex = "1"
-serde_json = { version = "1", features = ["float_roundtrip"] }
-sha2 = "0.11"
-shell-words = "1"
-tempfile = "3"
-terminal_size = "0.4"
-toml = "1"
-toml_edit = "0.25"
-unicode-width = "0.2"
-which = "8"
-zip = { version = "9", default-features = false, features = ["chrono"] }
+anstream.workspace = true
+anstyle.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["env", "wrap_help"] }
+clap_complete.workspace = true
+ctrlc.workspace = true
+dunce.workspace = true
+filetime.workspace = true
+icu_properties.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+shell-words.workspace = true
+tempfile.workspace = true
+terminal_size.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+unicode-width.workspace = true
+which.workspace = true
+zip.workspace = true
 
 [features]
 # For tests alone: the hooks a test stops or watches a run by
@@ -72,6 +72,65 @@ muman-core = { path = "crates/muman-core", version = "=0.11.0" }
 muman-engine = { path = "crates/muman-engine", version = "=0.11.0" }
 muman-media = { path = "crates/muman-media", version = "=0.11.0" }
 muman-net = { path = "crates/muman-net", version = "=0.11.0" }
+
+# Every other crate, at the one version muman's crates share, with the
+# features all that use it take; a crate adds those it alone needs.
+anstream = "1"
+anstyle = "1"
+anyhow = "1"
+base64 = "0.23"
+chardetng = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive"] }
+clap-markdown = "=0.1.5"
+clap_complete = "4"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+deunicode = "1"
+directories = "6"
+dunce = "1"
+ebur128 = "0.1.10"
+encoding_rs = "0.8"
+filetime = "0.2"
+html-escape = "0.3"
+icu_casemap = "2.3"
+icu_locale = "2.3"
+icu_properties = "2.3"
+icu_segmenter = "2.3"
+indicatif = "0.18"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+isolang = { version = "2.4", default-features = false }
+lofty = "0.25"
+# Pinned to one release: template.rs reads its unstable_machinery, which
+# may change in any release.
+minijinja = { version = "=3.0.5", features = ["serde", "unstable_machinery"] }
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+percent-encoding = "2"
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+regex = "1"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+rusty-chromaprint = "0.3"
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha1 = "0.11"
+sha2 = "0.11"
+shared_child = { version = "1.1.2", default-features = false }
+shell-words = "1"
+strsim = "0.11"
+tempfile = "3"
+terminal_size = "0.4"
+toml = "1"
+toml_edit = "0.25"
+trash = "5"
+unicode-normalization = "0.1"
+unicode-security = "0.1"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+walkdir = "2"
+which = "8"
+zip = { version = "9", default-features = false, features = ["chrono"] }
 
 # unused_crate_dependencies is warned in each crate's root instead, outside
 # tests: here it would also fire on muman's binary, which sees every
@@ -112,7 +171,7 @@ muman-core = { workspace = true, features = ["testing"] }
 muman-engine = { workspace = true, features = ["testing"] }
 muman-media = { workspace = true, features = ["testing"] }
 muman-net = { workspace = true, features = ["testing"] }
-encoding_rs = "0.8"
-lofty = "0.25"
-proptest = { version = "1.12.0", default-features = false, features = ["std"] }
-sha1 = "0.11"
+encoding_rs.workspace = true
+lofty.workspace = true
+proptest.workspace = true
+sha1.workspace = true
