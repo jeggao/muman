@@ -6,7 +6,7 @@
 //!   Never the file's, which counts every stream: a `WebVTT` subtitle
 //!   running a second or two past the audio would make every such video
 //!   look cut off. Never a length ffmpeg guessed from the bitrate either,
-//!   for a file that states none ([`crate::probe::Probed::guessed`]): a
+//!   for a file not known to state one ([`crate::probe::Probed::guessed`]): a
 //!   whole VBR MP3 with no Xing header, its first frames quieter than the
 //!   rest, said 62 s for 40 s. Guessed from the bytes there are, such a
 //!   length never shows a cut, and only makes one up, so the file is
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/4";
+pub const METHOD: &str = "integrity/5";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -460,13 +460,12 @@ mod tests {
     /// What the pass measures of audio holding samples that are no number,
     /// beside packets whole, gapped, out of order, listed with durations
     /// no packet lasts, or none, and a length stated or guessed, with
-    /// [`METHOD`]. Version 4 measures as 3 did, the method it names aside,
-    /// from probes that take the length of a WAVE file of compressed audio
-    /// with no `fact` chunk for guessed, which every measure of 3 took for
-    /// stated.
+    /// [`METHOD`]. Version 5 measures as 4 did, the method it names aside,
+    /// from probes that take the length of every format not known to state
+    /// one for guessed, which 4 took for stated unless it was known not to.
     const WRITTEN: (&str, &str) = (
-        "integrity/4",
-        "1bfdd380181dab270d75c03c2310c266e66f630fdc14414c286bc784426836c1",
+        "integrity/5",
+        "6ee01e78f50bc7fefc90da25ad48e1930b0d2086fcfc265c4bd3bf6002d55184",
     );
 
     #[test]

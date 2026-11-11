@@ -7749,7 +7749,7 @@ fn an_export_and_a_library_fitted_into_one_size_lower_the_same_songs() {
         for (n, (file, title, packets, seconds)) in songs.into_iter().enumerate() {
             let probe = format!(
                 r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "flac",
-                "channels": 2, "sample_rate": "44100"}}], "format": {{"duration": "{seconds}",
+                "channels": 2, "sample_rate": "44100"}}], "format": {{"format_name": "flac", "duration": "{seconds}",
                 "tags": {{"TITLE": "{title}", "ARTIST": "Marlo Venn", "ALBUM": "Kites",
                 "track": "{}"}}}}}}"#,
                 n + 1

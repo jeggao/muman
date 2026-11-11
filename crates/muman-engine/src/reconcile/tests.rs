@@ -1281,7 +1281,7 @@ fn a_limit_too_small_for_any_bitrate_leaves_songs_out() {
 /// 20 and 10 kB: estimates the size of what the fake writes.
 fn three_flacs() -> Fake {
     let short = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
-        "channels": 2, "sample_rate": "44100"}], "format": {"duration": "1.0",
+        "channels": 2, "sample_rate": "44100"}], "format": {"format_name": "flac", "duration": "1.0",
         "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
     Fake {
         packets: vec![
@@ -1390,7 +1390,7 @@ fn a_song_left_as_built_counts_against_the_limit_as_its_file_is() {
         };
         let said = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
             "channels": 2, "sample_rate": "44100", "duration": "200.0"}], "format":
-            {"duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist",
+            {"format_name": "flac", "duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist",
             "ALBUM": "Record", "track": "2"}}}"#;
         fake.probes.insert(0, ("a.flac".into(), said.into()));
         fake

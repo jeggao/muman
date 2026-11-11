@@ -11,16 +11,34 @@
 //! were loud. [`read`] drops the stream's length where it is such a guess
 //! ([`Probed::guessed`]), so that only a length the file states is held
 //! against its packets and its decode, and the length a song plays is
-//! read from its packets instead. An MP3's own header says whether it
-//! states its frames, as ffmpeg reads it: the Xing or Info tag, with its
-//! frame count, after the first frame's side information, or the VBRI tag
-//! 32 bytes in. A WAVE file states its length for PCM and float audio,
-//! whose data size over its block size is exact, but for compressed audio
-//! held in it, as MP3, only in a `fact` chunk counting its samples:
-//! without one, ffmpeg divides the data's size by the header's average
-//! byte rate, which a muxer may write as anything. An MP3 in WAVE of 90 s
-//! whose header said 27 kb/s for its 112 read as 359 s. A file that cannot
-//! be read keeps ffprobe's lengths.
+//! read from its packets instead.
+//!
+//! A length counts as stated only for a format known to state one
+//! ([`STATED`]), and for MP3 and WAVE only where muman reads it in the
+//! file's own header; any other is taken for a guess. A format that
+//! states its length but is not known so is then judged by its packets
+//! and its decode alone, and a file of it cut short is not found by its
+//! length; one taken to state a length it guesses was judged cut off
+//! whole, every file of its kind, as VBR MP3 and MP3 in WAVE each were,
+//! and encoded rather than copied for it.
+//!
+//! [`STATED`] holds what ffmpeg 6.1 reads from a header that still gives
+//! the whole length once the file is cut: FLAC's STREAMINFO, MP4's `mvhd`
+//! and `mdhd`, Matroska's segment duration and `DURATION` tags, and the
+//! headers of WavPack, Monkey's Audio, TTA, AIFF, ASF, Sun AU and CAF.
+//! Ogg's is its last page's granule, read from the end, so it never shows
+//! a cut and never makes one up. A FLAC whose STREAMINFO counts no
+//! samples, as one encoded into a pipe, has no length at all, and ffmpeg
+//! guesses none. An MP3's own header says whether it states its frames,
+//! as ffmpeg reads it: the Xing or Info tag, with its frame count, after
+//! the first frame's side information, or the VBRI tag 32 bytes in. A
+//! WAVE file states its length for PCM and float audio, whose data size
+//! over its block size is exact, but for compressed audio held in it, as
+//! MP3, only in a `fact` chunk counting its samples: without one, ffmpeg
+//! divides the data's size by the header's average byte rate, which a
+//! muxer may write as anything. An MP3 in WAVE of 90 s whose header said
+//! 27 kb/s for its 112 read as 359 s. An MP3 or WAVE file whose header
+//! cannot be read states nothing muman can confirm.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -349,22 +367,31 @@ pub fn read<R: Runner>(runner: &R, path: &Path) -> Result<Probed> {
     Ok(probed)
 }
 
-/// ffprobe's names of the formats that state no length: raw elementary
-/// streams, whose demuxer leaves ffmpeg to guess one from the bitrate.
-const UNSTATED: [&str; 6] = ["aac", "ac3", "eac3", "dts", "truehd", "mlp"];
+/// ffprobe's names of the formats whose header states the audio's length,
+/// as ffmpeg reads it, besides MP3 and WAVE, which muman reads itself.
+const STATED: [&str; 11] = [
+    "flac",
+    "ogg",
+    "mov,mp4,m4a,3gp,3g2,mj2",
+    "matroska,webm",
+    "wv",
+    "ape",
+    "tta",
+    "aiff",
+    "asf",
+    "au",
+    "caf",
+];
 
-/// Whether a file of `format` states no length: one of [`UNSTATED`], an
-/// MP3 whose header, read from what `open` gives, counts no frames, or a
-/// WAVE file of compressed audio with no `fact` chunk.
+/// Whether a file of `format` states no length muman knows of: one not
+/// of [`STATED`], an MP3 whose header, read from what `open` gives,
+/// counts no frames, or a WAVE file of compressed audio with no `fact`
+/// chunk.
 fn guessed<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> bool {
     match format {
-        "mp3" => open()
-            .and_then(mp3_counts_frames)
-            .is_ok_and(|counts| !counts),
-        "wav" => open()
-            .and_then(wave_states_length)
-            .is_ok_and(|states| !states),
-        _ => UNSTATED.contains(&format),
+        "mp3" => !open().and_then(mp3_counts_frames).unwrap_or(false),
+        "wav" => !open().and_then(wave_states_length).unwrap_or(false),
+        _ => !STATED.contains(&format),
     }
 }
 
@@ -377,12 +404,12 @@ const WAVE_EXTENSIBLE: u16 = 0xfffe;
 
 /// Whether a WAVE file states its length: its audio PCM or float, or a
 /// `fact` chunk counting samples, before its `data`. A file not shaped as
-/// one states it, as ffmpeg's lengths are kept for what is not read.
+/// one states none muman can confirm.
 fn wave_states_length<F: Read + Seek>(mut file: F) -> std::io::Result<bool> {
     let mut head = [0_u8; 12];
     file.read_exact(&mut head)?;
-    if !matches!(&head[..4], b"RIFF" | b"RF64") || &head[8..] != b"WAVE" {
-        return Ok(true);
+    if !matches!(&head[..4], b"RIFF" | b"RF64" | b"BW64") || &head[8..] != b"WAVE" {
+        return Ok(false);
     }
     let (mut tag, mut counted) = (None, false);
     loop {
@@ -643,24 +670,18 @@ mod tests {
             "no frame"
         );
         assert!(
-            !guessed::<Cursor<Vec<u8>>>("mp3", || Err(std::io::ErrorKind::NotFound.into())),
-            "a file that cannot be read keeps ffprobe's lengths"
+            guessed::<Cursor<Vec<u8>>>("mp3", || Err(std::io::ErrorKind::NotFound.into())),
+            "a file whose header cannot be read states nothing muman confirms"
         );
     }
 
     #[test]
-    fn a_raw_stream_states_no_length_and_a_container_does() {
+    fn only_a_format_known_to_state_its_length_states_one() {
         let open = || Ok(Cursor::new(Vec::new()));
-        for format in ["aac", "ac3", "eac3", "dts"] {
-            assert!(guessed(format, open), "{format}");
+        for format in ["aac", "ac3", "eac3", "dts", "dtshd", "shn", "amr", ""] {
+            assert!(guessed(format, open), "{format:?}");
         }
-        for format in [
-            "flac",
-            "ogg",
-            "wav",
-            "matroska,webm",
-            "mov,mp4,m4a,3gp,3g2,mj2",
-        ] {
+        for format in STATED {
             assert!(!guessed(format, open), "{format}");
         }
     }
@@ -708,7 +729,7 @@ mod tests {
         assert!(wav(wave(0x0055, None, None)), "MP3 with no fact chunk");
         assert!(!wav(wave(0x0055, None, Some(3_969_000))), "MP3 counted");
         assert!(wav(wave(0xfffe, Some(0x0055), None)), "extensible MP3");
-        assert!(!wav(b"not a wave at all".to_vec()));
+        assert!(wav(b"not a wave at all".to_vec()));
     }
 
     #[test]
@@ -1032,7 +1053,7 @@ mod tests {
     /// [`METHOD`].
     const WRITTEN: (&str, &str) = (
         "probe/3",
-        "8f725d4bed9c52ee0f23d973b54cda1f3de6b907c9a860e178ba18cf8a664eea",
+        "156e8f078cc6f4601b01c564a6fcfea2e984247747ba318a80e1c9e35af8434a",
     );
 
     #[test]

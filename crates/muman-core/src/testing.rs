@@ -60,14 +60,14 @@ pub const ORIGINAL: &str = r#"{"streams": [
     {"index": 2, "codec_type": "subtitle", "tags": {"language": "eng", "title": "English"}},
     {"index": 3, "codec_type": "attachment", "tags": {"filename": "info.json", "mimetype": "application/json"}},
     {"index": 4, "codec_type": "attachment", "tags": {"filename": "cover.webp", "mimetype": "image/webp"}}
-], "format": {"duration": "200.0"}}"#;
+], "format": {"format_name": "matroska,webm", "duration": "200.0"}}"#;
 
 /// A manual FLAC with an embedded square cover.
 pub const FLAC: &str = r#"{"streams": [
     {"index": 0, "codec_type": "audio", "codec_name": "flac", "channels": 2, "sample_rate": "44100"},
     {"index": 1, "codec_type": "video", "codec_name": "mjpeg", "width": 64, "height": 64,
      "disposition": {"attached_pic": 1}}
-], "format": {"duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
+], "format": {"format_name": "flac", "duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
 
 pub const INFO: &str = r#"{"id": "aaaaaaaaaaa", "title": "Song / Wren", "uploader": "Hoshi7ne",
     "upload_date": "20260527", "subtitles": {"en": [{"name": "English"}]}}"#;
