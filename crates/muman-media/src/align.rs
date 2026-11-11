@@ -27,11 +27,52 @@
 //! starting 920 ms late and an upload with an outro included; an
 //! unrelated song scored 0.289 with none.
 //!
+//! **Short recordings.** Where the shorter of the two is under a minute,
+//! the least overlap is three quarters of it, up to the 10 s it is for
+//! longer ones, and its windows a quarter of it, up to 5 s, so an excerpt
+//! of a few seconds is still judged by several windows. And both are
+//! compared detrended: each frame less the mean loudness of the 2 s
+//! around it, so what correlates is how the sound moves, not a swell or a
+//! fade, which any two recordings share over a few seconds. Under 5 s
+//! ([`SHORTEST`]) nothing is compared, and the two are neither one
+//! recording nor two ([`comparable`]).
+//!
+//! Measured on 58 game soundtrack pieces, two excerpts of each at 30% and
+//! 60% of its length, cut through 128 kbit/s MP3, each against its whole
+//! piece, its own uncut excerpt, every other piece and every other
+//! excerpt of its length: compared as longer ones are, excerpts of 12 s
+//! joined 71 of 13,224 excerpts of other pieces, and of 16 to 45 s 21 to
+//! 48, at scores up to 0.97. Detrended, excerpts of 5 to 45 s joined none
+//! of 19,836 others, the highest scoring 0.88, and the whole pieces none
+//! of the 1,653 pairs of them; 113 to 115 of the 116 excerpts of 6 s and
+//! longer fitted their own piece, and every one its uncut excerpt. At 4 s,
+//! 3 of 19,836 others joined, and at 3 s 17.
+//!
 //! A line is the model: a cut that inserts a scene mid-song lowers the
 //! windows' agreement and fails, where a piecewise map could keep it. A
 //! drift that moves the shift less than 50 ms over the whole upload is
 //! none, and a line that leaves the two other recordings is not kept, so
 //! anything but a drifting copy keeps the one shift it always had.
+//!
+//! The one piecewise map is a copy's holes ([`align_lacking`]). Audio a
+//! damaged copy lost decodes not as silence but not at all, so all that
+//! follows a hole plays that much earlier: a FLAC file missing 1.88 s
+//! halfway scored 0.77 with 48% of its windows on one shift, and an MP3
+//! file missing 2.61 s 0.75 with 50%, and both failed. Where
+//! [`crate::integrity`] finds a side lacking audio, the windows are
+//! searched again as far as it may lack, and the shift may step, down
+//! past each hole in the upload and up past each in the track, its steps
+//! spanning no more than the two lack together, nor 10 s ([`MAX_LOST`]):
+//! whichever steps hold the most windows within 50 ms are kept. The whole
+//! then correlates with each frame placed by the step of the nearest
+//! window agreeing, and the two are one recording by the same 0.8 and 80%
+//! as any. On one step each, the two scored 0.997 and 0.995, every window
+//! agreeing. A radio edit,
+//! whose cut verse is no damage, still fails, and a copy both drifting
+//! and holed keeps its one shift. The offset kept is the first step's,
+//! and the end is placed by the last, so what a hole moved earlier reads
+//! neither as sound beyond the song nor as a cut end; what the holes
+//! lack, [`crate::integrity`] measures.
 //!
 //! The same envelopes say how long a source plays sound outside the
 //! stretch it shares with the other: frames within 40 dB of its median
@@ -73,12 +114,13 @@
 //! song played on; and an excerpt cut in a rest over 100 ms long reads as
 //! whole.
 
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/8";
+pub const METHOD: &str = "envelope-xcorr/10";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
@@ -92,10 +134,22 @@ const MAX_PAST: usize = 6000;
 const COARSE: usize = 4;
 /// The most frames the coarse search correlates, over every shift.
 const COARSE_BUDGET: usize = 100_000_000;
-/// The least overlap a shift is scored on, in frames.
+/// The least overlap a shift is scored on, in frames, where the shorter
+/// recording holds more than [`Scale::of`] scales it to.
 const MIN_OVERLAP: usize = 1000;
+/// A window's length, in frames, where the shorter recording holds more
+/// than [`Scale::of`] scales it to; windows step by half their length.
 const WINDOW: usize = 1000;
-const WINDOW_HOP: usize = 500;
+/// The shortest recording compared, in frames: under it, comparing says
+/// nothing ([`comparable`]).
+const SHORTEST: usize = 500;
+/// Where the shorter recording is under this many frames, both are
+/// compared by how their loudness moves about its level over
+/// [`DETREND`] frames either side, not by the level itself.
+const DETRENDED_UNDER: usize = 6000;
+const DETREND: usize = 100;
+/// A window's length, in frames, where the two are detrended.
+const DETRENDED_WINDOW: usize = 500;
 /// How far a window's own best shift is looked for around the global one.
 const WINDOW_SEARCH: usize = 100;
 /// A window agrees within 50 ms of the global shift, and correlating.
@@ -112,15 +166,24 @@ const FIT_COVERAGE: f64 = 0.8;
 /// and 0.99% fast as many. Other recordings, another take by the same
 /// orchestra among them, kept their one shift.
 const MAX_STRETCH: f64 = 0.01;
+/// The most audio, in frames, the shift steps over holes in all: each
+/// second more costs every window's search as much again, a file cut off
+/// lacks its end, which one shift finds, and a copy lacking more ranks
+/// below every whole one by its damage alone.
+const MAX_LOST: usize = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Alignment {
-    /// How much later the upload plays a moment than the track does.
+    /// How much later the upload plays a moment than the track does; with
+    /// holes, before the first.
     pub offset_ms: i64,
     /// How much longer the upload plays the recording than the track, in
     /// parts per million: negative when it runs fast. The offset then holds
     /// at the track's first moment.
     pub stretch_ppm: i64,
+    /// How far the offset steps over holes by the last moment: negative
+    /// where the upload lacks audio, positive where the track does.
+    pub stepped_ms: i64,
     /// Normalized cross-correlation of the envelopes at that offset.
     pub score: f64,
     /// The share of the upload's windows that agree with the offset.
@@ -296,7 +359,8 @@ impl<'a> Levels<'a> {
 }
 
 /// What `upload` and `track` play outside the stretch they share when `at`
-/// places them. Silence padding the same recording counts for nothing.
+/// places them, the start by its offset and the end by that stepped over
+/// holes. Silence padding the same recording counts for nothing.
 ///
 /// An end is a cut when the other plays the song on past it: from the
 /// last moment the one ending there plays at full sound, the other keeps
@@ -310,24 +374,26 @@ pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
     let stretch = at.stretch();
     let upload_at = |t: i64| lag as f64 + stretch * t as f64;
     let track_at = |u: i64| ((u - lag) as f64 / stretch).floor() as i64;
+    let stepped = at.stepped_ms / FRAME_MS;
+    let upload_end_at = |t: i64| upload_at(t) + stepped as f64;
+    let track_end_at = |u: i64| track_at(u - stepped);
     let (u_len, t_len) = (
         i64::try_from(upload.len()).unwrap_or(i64::MAX),
         i64::try_from(track.len()).unwrap_or(i64::MAX),
     );
     let upload = Levels::new(upload, |u| (0..t_len).contains(&track_at(u)));
     let track = Levels::new(track, |t| (0.0..u_len as f64).contains(&upload_at(t)));
-    let end = ((t_len as f64 * stretch).round() as i64).saturating_add(lag);
-    let on_upload = |t: i64| upload_at(t).round() as i64;
+    let end = ((t_len as f64 * stretch).round() as i64).saturating_add(lag + stepped);
     let track_cut_end = track
         .full_edge(true)
-        .is_some_and(|t| upload.plays_on(on_upload(t), end, 1));
+        .is_some_and(|t| upload.plays_on(upload_end_at(t).round() as i64, end, 1));
     let track_cut_start = track_cut_end
         && track
             .full_edge(false)
-            .is_some_and(|t| upload.plays_on(on_upload(t), lag - 1, -1));
+            .is_some_and(|t| upload.plays_on(upload_at(t).round() as i64, lag - 1, -1));
     let upload_cut_end = upload
         .full_edge(true)
-        .is_some_and(|u| track.plays_on(track_at(u), track_at(u_len), 1));
+        .is_some_and(|u| track.plays_on(track_end_at(u), track_end_at(u_len), 1));
     let upload_cut_start = upload_cut_end
         && upload
             .full_edge(false)
@@ -347,7 +413,7 @@ pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
         found.lacks_ms += track.audible(|t| upload_at(t) < 0.0);
     }
     if upload_cut_end {
-        found.lacks_ms += track.audible(|t| upload_at(t) >= u_len as f64);
+        found.lacks_ms += track.audible(|t| upload_end_at(t) >= u_len as f64);
     }
     found
 }
@@ -413,16 +479,17 @@ fn search(
     track: &[f64],
     factor: usize,
     lags: std::ops::RangeInclusive<isize>,
+    scale: Scale,
 ) -> Option<(isize, f64)> {
     let (u, t) = (decimate(upload, factor), decimate(track, factor));
-    best(lags.filter_map(|lag| Some((lag, score_at(&u, &t, lag, MIN_OVERLAP / factor)?))))
+    best(lags.filter_map(|lag| Some((lag, score_at(&u, &t, lag, scale.overlap / factor)?))))
 }
 
 /// The shift `upload` plays `track` at: searched coarse over every shift
 /// that places the shorter within the longer and up to [`MAX_PAST`] past
 /// either end, as coarse as keeps that under `budget` frames correlated,
 /// then refined at twice the rate in turn to the full one.
-fn shift(upload: &[f64], track: &[f64], budget: usize) -> Option<(isize, f64)> {
+fn shift(upload: &[f64], track: &[f64], budget: usize, scale: Scale) -> Option<(isize, f64)> {
     let longer = upload.len().cast_signed() - track.len().cast_signed();
     let (lo, hi) = (
         longer.min(0) - MAX_PAST.cast_signed(),
@@ -435,16 +502,23 @@ fn shift(upload: &[f64], track: &[f64], budget: usize) -> Option<(isize, f64)> {
         factor *= 2;
     }
     let step = factor.cast_signed();
-    let mut found = search(upload, track, factor, lo.div_euclid(step)..=hi / step)?;
+    let mut found = search(
+        upload,
+        track,
+        factor,
+        lo.div_euclid(step)..=hi / step,
+        scale,
+    )?;
     while factor > 1 {
         let finer = if factor > COARSE { factor / 2 } else { 1 };
-        let scale = (factor / finer).cast_signed();
+        let ratio = (factor / finer).cast_signed();
         let (lag, _) = found;
         found = search(
             upload,
             track,
             finer,
-            lag * scale - 2 * scale..=lag * scale + 2 * scale,
+            lag * ratio - 2 * ratio..=lag * ratio + 2 * ratio,
+            scale,
         )?;
         factor = finer;
     }
@@ -459,27 +533,34 @@ struct Window {
     score: f64,
 }
 
-/// The upload's windows, each searched within [`WINDOW_SEARCH`] of the
+/// The upload's windows, each searched within `reach` frames of the
 /// shift `guess` gives for its middle; flat windows say nothing, nor do
 /// those that shift leaves outside the track.
-fn windows(upload: &[f64], track: &[f64], guess: impl Fn(f64) -> isize) -> Vec<Window> {
+fn windows(
+    upload: &[f64],
+    track: &[f64],
+    reach: usize,
+    scale: Scale,
+    guess: impl Fn(f64) -> isize,
+) -> Vec<Window> {
     let mut found = Vec::new();
-    for at in (0..upload.len().saturating_sub(WINDOW - 1)).step_by(WINDOW_HOP) {
-        let window = &upload[at..at + WINDOW];
+    let length = scale.window;
+    for at in (0..upload.len().saturating_sub(length - 1)).step_by(length / 2) {
+        let window = &upload[at..at + length];
         if window.iter().all(|v| (v - window[0]).abs() < 1e-9) {
             continue;
         }
-        let middle = real(at + WINDOW / 2);
-        let reach = WINDOW_SEARCH.cast_signed();
+        let middle = real(at + length / 2);
+        let reach = reach.cast_signed();
         let centre = guess(middle);
         let inside = usize::try_from(at.cast_signed() - centre)
-            .is_ok_and(|from| from + WINDOW <= track.len());
+            .is_ok_and(|from| from + length <= track.len());
         if !inside {
             continue;
         }
         let best = best((centre - reach..=centre + reach).filter_map(|l| {
             let from = usize::try_from(at.cast_signed() - l).ok()?;
-            Some((l, ncc(window, track.get(from..from + WINDOW)?)))
+            Some((l, ncc(window, track.get(from..from + length)?)))
         }));
         if let Some((lag, score)) = best {
             found.push(Window {
@@ -528,7 +609,13 @@ fn agreeing(windows: &[Window], shift: impl Fn(f64) -> f64) -> f64 {
 
 /// The correlation of `upload` against `track` played `stretch` times as
 /// long and starting `start` frames into the upload, over their overlap.
-fn stretched_score(upload: &[f64], track: &[f64], start: f64, stretch: f64) -> Option<f64> {
+fn stretched_score(
+    upload: &[f64],
+    track: &[f64],
+    start: f64,
+    stretch: f64,
+    scale: Scale,
+) -> Option<f64> {
     let (mut u, mut t) = (Vec::new(), Vec::new());
     for (i, level) in upload.iter().enumerate() {
         let at = (real(i) - start) / stretch;
@@ -540,19 +627,88 @@ fn stretched_score(upload: &[f64], track: &[f64], start: f64, stretch: f64) -> O
         u.push(*level);
         t.push(track[k] + (next - track[k]) * (at - real(k)));
     }
-    (u.len() >= MIN_OVERLAP).then(|| ncc(&u, &t))
+    (u.len() >= scale.overlap).then(|| ncc(&u, &t))
+}
+
+/// The overlap and windows two recordings are compared over, and whether
+/// they are detrended, scaled to what the shorter holds.
+#[derive(Debug, Clone, Copy)]
+struct Scale {
+    overlap: usize,
+    window: usize,
+    detrended: bool,
+}
+
+impl Scale {
+    /// [`MIN_OVERLAP`] and [`WINDOW`], or where the shorter recording,
+    /// `shorter` frames long, holds less, three quarters of it and a
+    /// quarter of it, detrended under [`DETRENDED_UNDER`]; `None` under
+    /// [`SHORTEST`].
+    fn of(shorter: usize) -> Option<Self> {
+        let detrended = shorter < DETRENDED_UNDER;
+        let window = if detrended { DETRENDED_WINDOW } else { WINDOW };
+        (shorter >= SHORTEST).then(|| Self {
+            overlap: MIN_OVERLAP.min(shorter * 3 / 4),
+            window: window.min(shorter / 4),
+            detrended,
+        })
+    }
+
+    /// `envelope` as it is compared at this scale.
+    fn compared(self, envelope: &[f64]) -> Cow<'_, [f64]> {
+        if self.detrended {
+            Cow::Owned(detrended(envelope))
+        } else {
+            Cow::Borrowed(envelope)
+        }
+    }
+}
+
+/// Each frame of `envelope` less the mean of those within [`DETREND`] of
+/// it.
+fn detrended(envelope: &[f64]) -> Vec<f64> {
+    let mut sums = vec![0.0; envelope.len() + 1];
+    for (i, level) in envelope.iter().enumerate() {
+        sums[i + 1] = sums[i] + level;
+    }
+    envelope
+        .iter()
+        .enumerate()
+        .map(|(i, level)| {
+            let (from, to) = (
+                i.saturating_sub(DETREND),
+                (i + DETREND + 1).min(envelope.len()),
+            );
+            level - (sums[to] - sums[from]) / real(to - from)
+        })
+        .collect()
+}
+
+/// Whether two recordings, `a_ms` and `b_ms` long, are long enough to
+/// compare: where they are not, [`align`] says nothing, and neither is
+/// known to be the other's recording or another.
+#[must_use]
+pub fn comparable(a_ms: i64, b_ms: i64) -> bool {
+    let frames = usize::try_from(a_ms.min(b_ms) / FRAME_MS).unwrap_or(0);
+    Scale::of(frames).is_some()
 }
 
 /// Where the upload's envelope sits against the track's, and how it
-/// drifts; `None` when they overlap too little to say.
+/// drifts; `None` where either is too short to compare ([`comparable`]).
 #[must_use]
 pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
-    let (lag, score) = shift(upload, track, COARSE_BUDGET)?;
+    let scale = Scale::of(upload.len().min(track.len()))?;
+    align_by(&scale.compared(upload), &scale.compared(track), scale)
+}
+
+fn align_by(upload: &[f64], track: &[f64], scale: Scale) -> Option<Alignment> {
+    let (lag, score) = shift(upload, track, COARSE_BUDGET, scale)?;
     let one_shift = |_: f64| lag as f64;
-    let flat = windows(upload, track, |_| lag);
+    let flat = windows(upload, track, WINDOW_SEARCH, scale, |_| lag);
     let steady = Alignment {
         offset_ms: i64::try_from(lag).ok()? * FRAME_MS,
         stretch_ppm: 0,
+        stepped_ms: 0,
         score,
         coverage: agreeing(&flat, one_shift),
     };
@@ -562,7 +718,7 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     };
     // Searched again along the line, windows near the ends stay in reach
     // however far the shift has drifted from its value over the whole.
-    let followed = windows(upload, track, |at| {
+    let followed = windows(upload, track, WINDOW_SEARCH, scale, |at| {
         (intercept + slope * at).round() as isize
     });
     let Some((intercept, slope)) = line(&followed).filter(|(_, s)| drifts(*s)) else {
@@ -573,12 +729,13 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     // the windows' shift is u − t.
     let stretch = 1.0 / (1.0 - slope);
     let start = intercept * stretch;
-    let Some(score) = stretched_score(upload, track, start, stretch) else {
+    let Some(score) = stretched_score(upload, track, start, stretch, scale) else {
         return Some(steady);
     };
     let drifting = Alignment {
         offset_ms: (start.round() as i64) * FRAME_MS,
         stretch_ppm: crate::units::ppm_of_ratio(stretch - 1.0).round() as i64,
+        stepped_ms: 0,
         score,
         coverage,
     };
@@ -589,6 +746,142 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     } else {
         Some(steady)
     }
+}
+
+/// How much audio each side may have lost anywhere in it, in ms, as
+/// [`crate::integrity`] finds a damaged source lacking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Lost {
+    pub upload_ms: i64,
+    pub track_ms: i64,
+}
+
+/// [`align`], the shift stepping past the holes `lost` allows where one
+/// shift does not fit: down where the upload lacks audio, up where the
+/// track does.
+#[must_use]
+pub fn align_lacking(upload: &[f64], track: &[f64], lost: Lost) -> Option<Alignment> {
+    let scale = Scale::of(upload.len().min(track.len()))?;
+    let (upload, track) = (&scale.compared(upload)[..], &scale.compared(track)[..]);
+    let steady = align_by(upload, track, scale)?;
+    let frames = |ms: i64| usize::try_from(ms / FRAME_MS).unwrap_or(0);
+    let (down, up) = (frames(lost.upload_ms), frames(lost.track_ms));
+    if steady.fits() || down + up == 0 {
+        return Some(steady);
+    }
+    let lag = isize::try_from(steady.offset_ms / FRAME_MS).ok()?;
+    let span = (down + up).min(MAX_LOST) + WINDOW_TOLERANCE;
+    let found = windows(upload, track, WINDOW_SEARCH + span, scale, |_| lag);
+    let placed = steps(&found, down > 0, up > 0, span.cast_signed());
+    let (Some((_, start)), Some((_, end)), Some(score)) = (
+        placed.first(),
+        placed.last(),
+        stepped_score(upload, track, &placed, scale),
+    ) else {
+        return Some(steady);
+    };
+    let ms = |frames: isize| i64::try_from(frames).unwrap_or(0) * FRAME_MS;
+    let stepped = Alignment {
+        offset_ms: ms(*start),
+        stretch_ppm: 0,
+        stepped_ms: ms(end - start),
+        score,
+        coverage: real(placed.len()) / real(found.len()),
+    };
+    Some(if stepped.fits() && stepped.coverage > steady.coverage {
+        stepped
+    } else {
+        steady
+    })
+}
+
+/// The windows agreeing with the steps that hold the most of them, each
+/// with its step: a shift held over runs of windows, stepping down only
+/// with `down` and up only with `up`, its steps within `span` frames.
+fn steps(windows: &[Window], down: bool, up: bool, span: isize) -> Vec<(f64, isize)> {
+    let sure: Vec<&Window> = windows.iter().filter(|w| w.score >= WINDOW_SCORE).collect();
+    let mut levels: Vec<isize> = sure.iter().map(|w| w.lag).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    let near = |w: &Window, level: isize| w.lag.abs_diff(level) <= WINDOW_TOLERANCE;
+    let mut best: Vec<(f64, isize)> = Vec::new();
+    for &lo in &levels {
+        let allowed: Vec<isize> = levels
+            .iter()
+            .copied()
+            .filter(|l| (lo..=lo + span).contains(l))
+            .collect();
+        let n = allowed.len();
+        // held[c]: the windows so far agreeing with the best steps ending on
+        // allowed[c]; back[i][c]: the step window i was on before them.
+        let mut held = vec![0_usize; n];
+        let mut back: Vec<Vec<usize>> = Vec::with_capacity(sure.len());
+        for w in &sure {
+            let more = |a: usize, b: usize| if held[b] > held[a] { b } else { a };
+            let mut below = Vec::with_capacity(n);
+            for c in 0..n {
+                below.push(below.last().map_or(c, |&b| more(b, c)));
+            }
+            let mut above = vec![n - 1; n];
+            for c in (0..n - 1).rev() {
+                above[c] = more(above[c + 1], c);
+            }
+            let from: Vec<usize> = (0..n)
+                .map(|c| {
+                    let fell = (down && c + 1 < n).then(|| above[c + 1]);
+                    let rose = (up && c > 0).then(|| below[c - 1]);
+                    fell.into_iter().chain(rose).fold(c, more)
+                })
+                .collect();
+            held = (0..n)
+                .map(|c| held[from[c]] + usize::from(near(w, allowed[c])))
+                .collect();
+            back.push(from);
+        }
+        let Some(mut c) = (0..n).reduce(|b, c| if held[c] > held[b] { c } else { b }) else {
+            continue;
+        };
+        if held[c] <= best.len() {
+            continue;
+        }
+        let mut placed = Vec::with_capacity(held[c]);
+        for (w, from) in sure.iter().zip(&back).rev() {
+            if near(w, allowed[c]) {
+                placed.push((w.at, allowed[c]));
+            }
+            c = from[c];
+        }
+        placed.reverse();
+        best = placed;
+    }
+    best
+}
+
+/// The correlation of `upload` against `track`, each upload frame placed
+/// by the step of the nearest of `placed`.
+fn stepped_score(
+    upload: &[f64],
+    track: &[f64],
+    placed: &[(f64, isize)],
+    scale: Scale,
+) -> Option<f64> {
+    let (mut u, mut t) = (Vec::new(), Vec::new());
+    let mut nearest = 0;
+    for (i, level) in upload.iter().enumerate() {
+        let at = real(i);
+        while placed
+            .get(nearest + 1)
+            .is_some_and(|next| next.0 - at < at - placed[nearest].0)
+        {
+            nearest += 1;
+        }
+        let from = i.cast_signed() - placed.get(nearest)?.1;
+        if let Some(heard) = usize::try_from(from).ok().and_then(|k| track.get(k)) {
+            u.push(*level);
+            t.push(*heard);
+        }
+    }
+    (u.len() >= scale.overlap).then(|| ncc(&u, &t))
 }
 
 #[cfg(test)]
@@ -657,7 +950,8 @@ mod tests {
         assert!(a.fits(), "{a:?}");
         let excerpt = upload[8000..9500].to_vec();
         assert_eq!(align(&upload, &excerpt).unwrap().offset_ms, 80_000);
-        let (lag, score) = shift(&upload, &track, 100_000).unwrap();
+        let scale = Scale::of(track.len()).unwrap();
+        let (lag, score) = shift(&upload, &track, 100_000, scale).unwrap();
         assert_eq!(lag, 7000);
         assert!(score > 0.99, "{score}");
     }
@@ -689,6 +983,52 @@ mod tests {
         assert!(a.coverage < 0.8, "{a:?}");
     }
 
+    /// `track` with `frames` lost at each of `at`, as a damaged copy decodes.
+    fn holed(track: &[f64], at: &[usize], frames: usize) -> Vec<f64> {
+        let mut copy = Vec::new();
+        let mut from = 0;
+        for &hole in at {
+            copy.extend(&track[from..hole]);
+            from = hole + frames;
+        }
+        copy.extend(&track[from..]);
+        copy
+    }
+
+    #[test]
+    fn a_copy_with_holes_fits_by_steps_as_far_as_it_lacks() {
+        let track = song(21_000, 7);
+        let copy = holed(&track, &[10_900], 190);
+        assert!(!align(&copy, &track).unwrap().fits());
+        let lost = |upload_ms, track_ms| Lost {
+            upload_ms,
+            track_ms,
+        };
+        let a = align_lacking(&copy, &track, lost(1900, 0)).unwrap();
+        assert!(a.fits(), "{a:?}");
+        assert_eq!((a.offset_ms, a.stepped_ms), (0, -1900));
+        assert_eq!(outside(&copy, &track, &a), Outside::default());
+        let back = align_lacking(&track, &copy, lost(0, 1900)).unwrap();
+        assert!(back.fits(), "{back:?}");
+        assert_eq!((back.offset_ms, back.stepped_ms), (0, 1900));
+        assert_eq!(outside(&track, &copy, &back), Outside::default());
+        assert!(!align_lacking(&copy, &track, lost(0, 1900)).unwrap().fits());
+        assert!(!align_lacking(&copy, &track, lost(500, 0)).unwrap().fits());
+        let twice = holed(&track, &[5000, 15_000], 100);
+        assert!(align_lacking(&twice, &track, lost(2000, 0)).unwrap().fits());
+    }
+
+    #[test]
+    fn a_cut_verse_is_no_hole() {
+        let track = song(21_000, 7);
+        let edit = holed(&track, &[10_000], 2000);
+        let lost = Lost {
+            upload_ms: 1900,
+            track_ms: 0,
+        };
+        assert!(!align_lacking(&edit, &track, lost).unwrap().fits());
+    }
+
     /// As loud as music is in the envelope; silence is zero.
     fn loud(e: Vec<f64>) -> Vec<f64> {
         e.into_iter().map(|v| v + 7.0).collect()
@@ -698,6 +1038,7 @@ mod tests {
         Alignment {
             offset_ms,
             stretch_ppm: 0,
+            stepped_ms: 0,
             score: 1.0,
             coverage: 1.0,
         }
@@ -820,6 +1161,38 @@ mod tests {
     }
 
     #[test]
+    fn short_copies_and_excerpts_of_one_recording_fit_down_to_five_seconds() {
+        let track = song(4000, 7);
+        for frames in [500, 800, 900] {
+            let excerpt = track[1200..1200 + frames].to_vec();
+            let a = align(&excerpt, &track).unwrap();
+            assert!(a.fits(), "{frames}: {a:?}");
+            assert_eq!(a.offset_ms, -12_000);
+            assert!(align(&excerpt, &excerpt.clone()).unwrap().fits());
+        }
+    }
+
+    #[test]
+    fn short_excerpts_of_other_recordings_do_not_fit() {
+        let track = song(4000, 7);
+        for seed in 20..60 {
+            let other = song(600, seed);
+            let a = align(&other, &track).unwrap();
+            assert!(!a.fits(), "{seed}: {a:?}");
+            assert!(!align(&other, &track[1000..1600]).unwrap().fits());
+        }
+    }
+
+    #[test]
+    fn under_five_seconds_is_too_short_to_compare() {
+        let track = song(4000, 7);
+        assert!(align(&track[..499], &track).is_none());
+        assert!(align(&track, &track[..499]).is_none());
+        assert!(!comparable(4_990, 200_000));
+        assert!(comparable(5_000, 5_000));
+    }
+
+    #[test]
     fn too_little_overlap_is_no_answer() {
         assert!(align(&song(100, 1), &song(100, 1)).is_none());
     }
@@ -833,11 +1206,11 @@ mod tests {
     }
 
     /// What comparing makes of a copy with an intro, off centre and
-    /// played fast, and of an excerpt, against their track, with
-    /// [`METHOD`].
+    /// played fast, of an excerpt, and of a copy with a hole, against
+    /// their track, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "envelope-xcorr/8",
-        "0ad88d33a0940a19f3beb59791fcb60577b5009de064a9b57955b1f1baac5ca4",
+        "envelope-xcorr/10",
+        "4f0bb20b86e5b6393ec6680c5cf7eefd7cfdd50eab66799d5c3197fb16172dc7",
     );
 
     #[test]
@@ -847,9 +1220,18 @@ mod tests {
         fast.extend(stretched(&levels, 0.995));
         let track = envelope(&samples(&levels, 0));
         let mut digest = crate::testing::Digest::default();
-        for upload in [samples(&fast, 100), samples(&levels[1000..3000], 0)] {
+        let lost = Lost {
+            upload_ms: 1500,
+            track_ms: 0,
+        };
+        for upload in [
+            samples(&fast, 100),
+            samples(&levels[1000..3000], 0),
+            samples(&holed(&levels, &[2000], 150), 0),
+        ] {
             let upload = envelope(&upload);
-            let found = align(&upload, &track);
+            let found = align_lacking(&upload, &track, lost);
+            assert!(found.is_some_and(|a| a.fits()), "{found:?}");
             digest
                 .debug(&upload)
                 .debug(&found)

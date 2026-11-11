@@ -24,12 +24,22 @@
 //! What each kind of kept record is, its folder, its files and what it
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
 //! providers and `info` all read it there, so a provider added is one
-//! entry. A key of any other scheme is a file yt-dlp fetched.
+//! entry. A key of any other scheme is a file yt-dlp fetched. A record's
+//! files are read by one rule, their extensions in any case, as a
+//! filesystem blind to case holds them, whether a status names them or
+//! a purge deletes them; a part of no record, as a `.json` whose `.lrc`
+//! is gone, is no source.
 //!
 //! A manual song file brings the `.lrc` and pictures named as it is in
 //! any case, as a folder's `COVER.JPG` covers it and as a filesystem
 //! blind to case holds them: one in its own case first, and none named
-//! exactly as another song file, which is that file's.
+//! exactly as another song file, which is that file's. A song file in a
+//! disc's folder, as `Album/CD1/`, with no picture of its own, brings
+//! the album folder's cover: a rip of several discs keeps one cover
+//! above them, for all of them. The folder above a disc's is its album's
+//! where it holds no song file of its own, a torrent's own folder too,
+//! which a rip of several discs is shared as; never the manual folder
+//! itself, which holds what the user drops in, not one album.
 //!
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
@@ -332,6 +342,19 @@ pub enum Kind {
     Tags,
 }
 
+/// Whether a folder's name names one disc of a set: `CD1`, `Disc 2`.
+#[must_use]
+pub fn is_disc_folder(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let rest = ["cd", "disc", "disk"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p));
+    rest.is_some_and(|r| {
+        let digits = r.trim_start_matches([' ', '_', '-', '.']);
+        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
 /// Whether two files are in one folder and named alike but for their
 /// extensions, in any case: `Song.JPG` comes with `song.flac`, as a
 /// folder's `COVER.JPG` covers it.
@@ -420,16 +443,19 @@ impl Kept {
         dirs.sources(self.folder)
     }
 
-    /// The files kept for `id` that are on disk: the one a key names and
-    /// those beside it.
-    #[must_use]
-    pub fn files(&self, dirs: &Dirs, id: &str) -> Vec<PathBuf> {
-        self.main
-            .iter()
-            .chain(self.beside)
-            .map(|ext| self.dir(dirs).join(format!("{id}.{ext}")))
-            .filter(|p| p.exists())
-            .collect()
+    /// The ID of the record `file` in this kind's folder is a part of,
+    /// and the rank in [`Self::main`] of its extension, `None` for one
+    /// kept beside: extensions in any case, as a filesystem blind to
+    /// case holds them and as every reading of a record takes them.
+    fn part<'a>(&self, file: &'a Path) -> Option<(&'a str, Option<usize>)> {
+        let id = file.file_stem()?.to_str()?;
+        let ext = file.extension()?.to_str()?;
+        let rank = |exts: &[&str]| exts.iter().position(|e| e.eq_ignore_ascii_case(ext));
+        let part = rank(self.main);
+        if part.is_none() {
+            rank(self.beside)?;
+        }
+        (self.valid)(id).then_some((id, part))
     }
 }
 
@@ -537,6 +563,9 @@ pub struct Store {
     leftovers: Vec<PathBuf>,
     /// Kept records by scheme, then ID.
     kept: HashMap<&'static str, HashMap<String, PathBuf>>,
+    /// Every file of each kept record by scheme, then ID: the one its key
+    /// names, those beside it and a second of the one a key names.
+    parts: HashMap<&'static str, BTreeMap<String, Vec<PathBuf>>>,
     /// Manual files by their path in the manual folder.
     manual: BTreeMap<PathBuf, Kind>,
     /// The name on disk of each manual file whose key differs from it: a
@@ -599,28 +628,29 @@ impl Store {
         }
         store.leftovers.sort();
         for kind in &KEPT {
-            let mut found: HashMap<String, PathBuf> = HashMap::new();
+            let mut found: HashMap<String, (usize, PathBuf)> = HashMap::new();
+            let mut parts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
             for file in walk(&kind.dir(dirs), 1)? {
-                let (Some(id), Some(ext)) = (
-                    file.file_stem().and_then(|s| s.to_str()),
-                    file.extension().and_then(|e| e.to_str()),
-                ) else {
+                let Some((id, rank)) = kind.part(&file) else {
                     continue;
                 };
-                let Some(rank) = kind.main.iter().position(|m| m.eq_ignore_ascii_case(ext)) else {
-                    continue;
-                };
-                let better = found.get(id).is_none_or(|have| {
-                    have.extension()
-                        .and_then(|e| e.to_str())
-                        .and_then(|e| kind.main.iter().position(|m| m.eq_ignore_ascii_case(e)))
-                        .is_none_or(|r| rank < r)
-                });
-                if (kind.valid)(id) && better {
-                    found.insert(id.to_string(), file.clone());
+                parts.entry(id.to_string()).or_default().push(file.clone());
+                if let Some(rank) = rank
+                    && found.get(id).is_none_or(|(have, _)| rank < *have)
+                {
+                    found.insert(id.to_string(), (rank, file.clone()));
                 }
             }
+            // A part of no record, as a record's `.json` whose `.lrc` is
+            // gone, is what no key reads.
+            for (id, files) in &parts {
+                if !found.contains_key(id) {
+                    store.leftovers.extend(files.iter().cloned());
+                }
+            }
+            let found = found.into_iter().map(|(id, (_, f))| (id, f)).collect();
             store.kept.insert(kind.extractor, found);
+            store.parts.insert(kind.extractor, parts);
         }
         store.scan_torrents()?;
         let root = dirs.manual();
@@ -676,15 +706,11 @@ impl Store {
             };
             sources.insert(file);
             let mut found = BTreeMap::new();
-            let shadowed: BTreeSet<&Path> = crate::torrent::shadowed(&meta)
+            let shadowed: BTreeSet<usize> = crate::torrent::shadowed(&meta)
                 .into_iter()
-                .map(|(lost, _)| lost)
+                .map(|(lost, _)| lost.index)
                 .collect();
-            for f in meta
-                .files
-                .iter()
-                .filter(|f| !shadowed.contains(f.path.as_path()))
-            {
+            for f in meta.files.iter().filter(|f| !shadowed.contains(&f.index)) {
                 let key = TorrentKey::new(&hash, &f.path);
                 let at = torrent_path(&root, &key);
                 if let Some(kind) = kind_of(&f.path).filter(|_| at.is_file()) {
@@ -811,7 +837,7 @@ impl Store {
                 let files = self.torrents.get(t.hash())?;
                 let kind = *files.get(t.path())?;
                 let (lyrics, covers) = if kind == Kind::Media {
-                    sidecars(files, t.path())
+                    sidecars(files, t.path(), true)
                 } else {
                     (None, Vec::new())
                 };
@@ -828,7 +854,7 @@ impl Store {
                 let rel = manual.path();
                 let kind = *self.manual.get(rel)?;
                 let (lyrics, covers) = if kind == Kind::Media {
-                    sidecars(&self.manual, rel)
+                    sidecars(&self.manual, rel, false)
                 } else {
                     (None, Vec::new())
                 };
@@ -944,6 +970,21 @@ impl Store {
         self.kept.get(kind.extractor)?.get(id)
     }
 
+    /// Every file kept for the record `id` of `kind`: the one its key
+    /// names, those beside it, each extension in any case.
+    #[must_use]
+    pub fn record_files(&self, kind: &Kept, id: &str) -> Vec<PathBuf> {
+        (self.parts.get(kind.extractor))
+            .and_then(|parts| parts.get(id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Every manual file, by its key, and its kind, in path order.
+    pub fn manual_files(&self) -> impl Iterator<Item = (SourceKey, Kind)> + '_ {
+        (self.manual.iter()).map(|(rel, kind)| (SourceKey::Manual(rel.into()), *kind))
+    }
+
     /// Manual song files no song lists, in path order, and those
     /// still settling, which wait for a later run.
     #[must_use]
@@ -985,21 +1026,7 @@ impl Store {
     /// song lists or brings cannot be told.
     #[must_use]
     pub fn unused(&self, listed: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
-        let mut used: BTreeSet<PathBuf> = BTreeSet::new();
-        let mut unread: BTreeSet<PathBuf> = BTreeSet::new();
-        for key in listed {
-            if let SourceKey::Torrent(t) = key {
-                used.insert(metainfo_path(&self.torrent_root, t.hash()));
-                if !self.torrents.contains_key(t.hash()) {
-                    unread.insert(self.torrent_root.join(t.hash()));
-                }
-            }
-            if let Some(l) = self.locate(key) {
-                used.insert(l.path);
-                used.extend(l.lyrics);
-                used.extend(l.covers);
-            }
-        }
+        let in_use = self.in_use(listed);
         let torrents: Vec<PathBuf> = self
             .torrents
             .iter()
@@ -1025,19 +1052,98 @@ impl Store {
                     .collect::<Vec<_>>()
                     .iter(),
             )
-            .filter(|p| !used.contains(*p) && !unread.iter().any(|d| p.starts_with(d)))
+            .filter(|p| !in_use(p))
             .cloned()
             .collect();
         unused.sort();
         unused
+    }
+
+    /// Whether a file is one a key of `listed` uses: its file, what it
+    /// brings, its torrent's metainfo or a part of its record; or a file
+    /// in the folder of a listed torrent whose metainfo is gone.
+    fn in_use(&self, listed: &BTreeSet<SourceKey>) -> impl Fn(&Path) -> bool + use<> {
+        let mut used: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut unread: BTreeSet<PathBuf> = BTreeSet::new();
+        for key in listed {
+            if let SourceKey::Torrent(t) = key {
+                used.insert(metainfo_path(&self.torrent_root, t.hash()));
+                if !self.torrents.contains_key(t.hash()) {
+                    unread.insert(self.torrent_root.join(t.hash()));
+                }
+            }
+            if let SourceKey::Remote { site, id } = key
+                && let Some(kind) = kept(site)
+            {
+                used.extend(self.record_files(kind, id));
+            }
+            if let Some(l) = self.locate(key) {
+                used.insert(l.path);
+                used.extend(l.lyrics);
+                used.extend(l.covers);
+            }
+        }
+        move |p| used.contains(p) || unread.iter().any(|d| p.starts_with(d))
+    }
+}
+
+impl Store {
+    /// The sources no key of `known`, every listed and removed song's,
+    /// names, as `status` and `info` name them and `purge` deletes them: a
+    /// fetched file, a torrent's, a kept record, or a copy `add` made in
+    /// the manual folder's `added/`, never another file of the user's.
+    #[must_use]
+    pub fn purgeable(&self, dirs: &Dirs, known: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
+        let added = dirs.manual().join(crate::dirs::ADDED);
+        (self.unused(known).into_iter())
+            .filter(|p| !p.starts_with(dirs.manual()) || p.starts_with(&added))
+            .collect()
+    }
+
+    /// `paths`, as [`Self::purgeable`] names them for `known`, each with
+    /// the files that come with it: a fetch's thumbnail and metadata, a
+    /// record's. Never a file a key of `known` uses, as the file at a
+    /// key's place is when a stray of another extension lies beside it:
+    /// `purge` deletes what `status` names and what comes with it alone.
+    #[must_use]
+    pub fn with_their_files(
+        &self,
+        dirs: &Dirs,
+        known: &BTreeSet<SourceKey>,
+        paths: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        let in_use = self.in_use(known);
+        let mut all = BTreeSet::new();
+        for path in paths {
+            if path.starts_with(dirs.ytdlp()) {
+                all.extend(self.fetched_files_at(path));
+                continue;
+            }
+            let kind = KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
+            let id = path.file_stem().and_then(|s| s.to_str());
+            match (kind, id) {
+                (Some(kind), Some(id)) => all.extend(self.record_files(kind, id)),
+                _ => {
+                    all.insert(path.clone());
+                }
+            }
+        }
+        all.into_iter().filter(|p| !in_use(p)).collect()
     }
 }
 
 /// The `.lrc` and pictures that come with the song file `rel` among
 /// `files`, a folder's or a torrent's: named as it is in any case, those
 /// in its own case first, and none named in its case as another song
-/// file is; then its folder's cover.
-fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
+/// file is; then its folder's cover, or, with none of its own, the cover
+/// of the album folder its disc's folder is in. `top_is_album` where the
+/// folder `files` are in, the empty path, may be that album folder, as a
+/// torrent's is and the manual folder is not.
+fn sidecars(
+    files: &BTreeMap<PathBuf, Kind>,
+    rel: &Path,
+    top_is_album: bool,
+) -> (Option<PathBuf>, Vec<PathBuf>) {
     let stem = rel.with_extension("");
     let another_s = |p: &Path| {
         files.iter().any(|(m, k)| {
@@ -1056,8 +1162,7 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
     };
     let lyrics = named(Kind::Lyrics).into_iter().next();
     let mut covers = named(Kind::Image);
-    let folder = rel.parent().unwrap_or(Path::new(""));
-    covers.extend(
+    let of_folder = |folder: &Path| -> Vec<PathBuf> {
         files
             .iter()
             .filter(|(p, k)| {
@@ -1067,47 +1172,46 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
                         .and_then(|s| s.to_str())
                         .is_some_and(|s| FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()))
             })
-            .map(|(p, _)| p.clone()),
-    );
+            .map(|(p, _)| p.clone())
+            .collect()
+    };
+    let folder = rel.parent().unwrap_or(Path::new(""));
+    let mut own = of_folder(folder);
+    let disc = folder
+        .file_name()
+        .is_some_and(|n| is_disc_folder(&n.to_string_lossy()));
+    // The folder above a disc's is its album's only where it holds discs
+    // and no song file, not a folder of loose songs.
+    let album = folder.parent().filter(|p| {
+        (top_is_album || !p.as_os_str().is_empty())
+            && !files
+                .iter()
+                .any(|(f, k)| *k == Kind::Media && f.parent() == Some(*p))
+    });
+    if let Some(album) = album.filter(|_| covers.is_empty() && own.is_empty() && disc) {
+        own = of_folder(album);
+    }
+    covers.extend(own);
     (lyrics, covers)
 }
 
-/// Each listed manual file gone from its path that is one of `ready`,
-/// the manual files no song lists, by its size and modification time,
-/// which a move keeps: the file moved there, taken out of `ready`. A
-/// listed `.lrc` or picture, which `ready` never holds, is followed to
-/// one no song lists either.
-pub fn moved_manual<'a>(
-    listed: &BTreeSet<SourceKey>,
-    rev_of: impl Fn(&SourceKey) -> Option<&'a str>,
-    store: &Store,
-    ready: &mut Vec<SourceKey>,
-) -> BTreeMap<SourceKey, SourceKey> {
-    let mut moved = BTreeMap::new();
-    let mut loose: Vec<SourceKey> = store
-        .manual
+/// The `.lrc` and pictures among `files` that the song files `songs` of
+/// them bring, as a manual or torrent song file brings them: `files`
+/// are a torrent's, by their paths in it, or a folder's, by whole paths.
+#[must_use]
+pub fn brought_by(files: &[&Path], songs: &[&Path]) -> BTreeSet<PathBuf> {
+    let kinds: BTreeMap<PathBuf, Kind> = files
         .iter()
-        .filter(|(_, kind)| **kind != Kind::Media)
-        .map(|(rel, _)| SourceKey::Manual(rel.into()))
-        .filter(|k| !listed.contains(k))
+        .filter_map(|f| Some((f.to_path_buf(), kind_of(f)?)))
+        .filter(|(f, k)| *k != Kind::Media || songs.contains(&f.as_path()))
         .collect();
-    let gone = listed
+    songs
         .iter()
-        .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
-    for gone in gone {
-        let Some(was) = rev_of(gone).and_then(stamp_of_rev) else {
-            continue;
-        };
-        let media = matches!(gone, SourceKey::Manual(m) if kind_of(m.path()) == Some(Kind::Media));
-        let candidates = if media { &mut *ready } else { &mut loose };
-        let at = candidates
-            .iter()
-            .position(|k| store.locate(k).and_then(|l| stamp(&l.path)) == Some(was));
-        if let Some(at) = at {
-            moved.insert(gone.clone(), candidates.remove(at));
-        }
-    }
-    moved
+        .flat_map(|s| {
+            let (lyrics, covers) = sidecars(&kinds, s, true);
+            lyrics.into_iter().chain(covers)
+        })
+        .collect()
 }
 
 /// Files below `dir`, at most `depth` folders down, without hidden ones
@@ -1506,6 +1610,35 @@ mod tests {
     }
 
     #[test]
+    fn a_record_s_files_are_read_in_any_case_and_a_part_of_none_is_unused() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let upper = [
+            touch(dir.path(), "sources/lrclib/7.LRC"),
+            touch(dir.path(), "sources/lrclib/7.Json"),
+        ];
+        let orphan = touch(dir.path(), "sources/lrclib/8.json");
+        let listed_part = touch(dir.path(), "sources/lrclib/9.json");
+        touch(dir.path(), "sources/lrclib/notes.txt");
+        let store = Store::scan(&d).unwrap();
+        let lrclib = kept(LRCLIB).unwrap();
+        let mut seven = store.record_files(lrclib, "7");
+        seven.sort();
+        assert_eq!(seven, [upper[1].clone(), upper[0].clone()]);
+        assert!(store.has(&SourceKey::parse("lrclib:7").unwrap()));
+        assert!(!store.has(&SourceKey::parse("lrclib:8").unwrap()));
+        let known = BTreeSet::from([SourceKey::parse("lrclib:9").unwrap()]);
+        let named = store.purgeable(&d, &known);
+        assert_eq!(named, [upper[0].clone(), orphan.clone()]);
+        assert_eq!(
+            store.with_their_files(&d, &known, &named),
+            [upper[1].clone(), upper[0].clone(), orphan],
+            "what status names, purge deletes, with the files of its record"
+        );
+        assert!(!store.unused(&known).contains(&listed_part));
+    }
+
+    #[test]
     fn a_decomposed_manual_name_is_listed_composed_and_opened_as_written() {
         let dir = tempfile::tempdir().unwrap();
         let d = dirs(dir.path());
@@ -1535,6 +1668,77 @@ mod tests {
         let other = store.locate(&manual("Album/02 Other.flac")).unwrap();
         assert_eq!(other.lyrics, None);
         assert_eq!(other.covers, vec![folder]);
+    }
+
+    #[test]
+    fn a_disc_s_song_with_no_cover_of_its_own_brings_its_album_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        touch(dir.path(), "sources/manual/Album/CD1/01 Song.flac");
+        touch(dir.path(), "sources/manual/Album/Disc 2/01 Other.flac");
+        let own = touch(dir.path(), "sources/manual/Album/Disc 2/front.jpg");
+        touch(dir.path(), "sources/manual/Album/Extras/01 Demo.flac");
+        let album = touch(dir.path(), "sources/manual/Album/folder.png");
+        let store = Store::scan(&d).unwrap();
+        let covers = |rel: &str| store.locate(&manual(rel)).unwrap().covers;
+        assert_eq!(covers("Album/CD1/01 Song.flac"), vec![album]);
+        assert_eq!(covers("Album/Disc 2/01 Other.flac"), vec![own]);
+        assert_eq!(covers("Album/Extras/01 Demo.flac"), Vec::<PathBuf>::new());
+
+        touch(dir.path(), "sources/manual/Loose.flac");
+        touch(dir.path(), "sources/manual/cover.jpg");
+        touch(dir.path(), "sources/manual/CD1/01 Root Disc.flac");
+        touch(dir.path(), "sources/manual/Singles/Single.flac");
+        touch(dir.path(), "sources/manual/Singles/cover.jpg");
+        touch(dir.path(), "sources/manual/Singles/CD2/01 Beside.flac");
+        let store = Store::scan(&d).unwrap();
+        let covers = |rel: &str| store.locate(&manual(rel)).unwrap().covers;
+        assert_eq!(covers("CD1/01 Root Disc.flac"), Vec::<PathBuf>::new());
+        assert_eq!(covers("Singles/CD2/01 Beside.flac"), Vec::<PathBuf>::new());
+        std::fs::remove_file(d.manual().join("Loose.flac")).unwrap();
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(
+            store
+                .locate(&manual("CD1/01 Root Disc.flac"))
+                .unwrap()
+                .covers,
+            Vec::<PathBuf>::new(),
+            "the manual folder is no album's"
+        );
+    }
+
+    #[test]
+    fn a_torrent_s_own_folder_above_its_discs_is_their_album_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let files = [
+            "cover.jpg",
+            "CD1/01 Paper Comets.flac",
+            "CD2/01 Night Ferry.flac",
+        ];
+        let bytes = crate::testing::metainfo("Lantern Weather", &files);
+        let meta = Metainfo::read(&bytes).unwrap();
+        let selected: Vec<&Path> = (crate::torrent::selected(&meta).iter())
+            .map(|f| f.path.as_path())
+            .collect();
+        assert!(selected.contains(&Path::new("cover.jpg")), "{selected:?}");
+        let hash = meta.hash().to_string();
+        let root = d.torrent();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(metainfo_path(&root, &hash), &bytes).unwrap();
+        let cover = touch(&root, &format!("{hash}/cover.jpg"));
+        for song in &files[1..] {
+            touch(&root, &format!("{hash}/{song}"));
+        }
+        let store = Store::scan(&d).unwrap();
+        for song in &files[1..] {
+            let key =
+                SourceKey::Torrent(TorrentKey::new(&hash, &crate::relpath::from_portable(song)));
+            assert_eq!(
+                store.locate(&key).unwrap().covers,
+                std::slice::from_ref(&cover)
+            );
+        }
     }
 
     #[test]
@@ -1618,6 +1822,51 @@ mod tests {
         assert_eq!(gone.len(), 2);
         assert!(upload.iter().all(|p| !p.exists()));
         assert!(listed.exists());
+    }
+
+    #[test]
+    fn what_comes_with_an_unused_file_is_never_a_file_a_known_key_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let fetched = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.mkv");
+        let thumbnail = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.jpg");
+        let second = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.mka");
+        let legacy = touch(dir.path(), "sources/yt-dlp/c/Paper Comet [vid00000002].mkv");
+        let subtitle = touch(
+            dir.path(),
+            "sources/yt-dlp/c/Paper Comet [vid00000002].en.vtt",
+        );
+        let lyrics = touch(dir.path(), "sources/lrclib/7.lrc");
+        let record = touch(dir.path(), "sources/lrclib/7.json");
+        let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac", "b.flac"]);
+        let hash = Metainfo::read(&bytes).unwrap().hash().to_string();
+        let root = d.torrent();
+        let song = touch(&root, &format!("{hash}/a.flac"));
+        let other = touch(&root, &format!("{hash}/b.flac"));
+        std::fs::write(metainfo_path(&root, &hash), &bytes).unwrap();
+        let known = BTreeSet::from([
+            SourceKey::youtube("vid00000001"),
+            SourceKey::youtube("vid00000002"),
+            SourceKey::parse("lrclib:7").unwrap(),
+            SourceKey::Torrent(TorrentKey::new(&hash, Path::new("a.flac"))),
+        ]);
+        let store = Store::scan(&d).unwrap();
+        let named = store.purgeable(&d, &known);
+        assert_eq!(named, [other, subtitle, thumbnail, second]);
+        assert_eq!(store.with_their_files(&d, &known, &named), named);
+        let used = [
+            fetched,
+            legacy,
+            lyrics,
+            record,
+            song,
+            metainfo_path(&root, &hash),
+        ];
+        assert_eq!(
+            store.with_their_files(&d, &known, &used),
+            named[1..],
+            "a file in use is never purged, whichever file it comes with"
+        );
     }
 
     #[test]

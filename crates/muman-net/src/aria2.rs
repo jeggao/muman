@@ -985,11 +985,10 @@ pub fn take_up<W: Write>(
     from: &Path,
 ) -> Result<usize> {
     let within = crate::given::Folder::new(from);
-    let root = if from.join(&meta.name).is_dir() {
-        from.join(&meta.name)
-    } else {
-        from.to_path_buf()
-    };
+    let root = meta
+        .folder_in(from)
+        .filter(|f| f.is_dir())
+        .unwrap_or_else(|| from.to_path_buf());
     let dir = places.partial.join(meta.hash());
     let mut copied = 0;
     let mut outside = Vec::new();
@@ -1000,8 +999,10 @@ pub fn take_up<W: Write>(
     {
         let at = if root.is_file() {
             root.clone()
+        } else if let Some(at) = file.named_in(&root) {
+            at
         } else {
-            file.path.iter().fold(root.clone(), |p, part| p.join(part))
+            continue;
         };
         if within.leads_out(&at) {
             outside.push(at);
@@ -1263,6 +1264,7 @@ mod tests {
     fn file(parts: &[&str], index: usize) -> File {
         File {
             path: parts.iter().collect(),
+            named: parts.iter().map(ToString::to_string).collect(),
             length: 3,
             root: None,
             index,

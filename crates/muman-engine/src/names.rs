@@ -96,8 +96,9 @@ pub fn spell(
 }
 
 /// The names credited more than one way that no artist ID tells one
-/// artist's, as `check` suggests them: each spelling with how many
-/// credits spell it so, most first, then by name.
+/// artist's, as `check` suggests them: each spelling with how many songs
+/// spell it so, most first, then by name. A song crediting one spelling
+/// as its artist and its album artist counts once.
 #[must_use]
 pub fn suggestions(
     planned: &[(usize, Resolved)],
@@ -108,13 +109,14 @@ pub fn suggestions(
         .flat_map(|(n, r)| credits_of(*n, r))
         .collect();
     let (_, left) = groups(&credits, &known(facts));
-    let mut by_key: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+    let mut by_key: BTreeMap<String, BTreeMap<&str, BTreeSet<usize>>> = BTreeMap::new();
     for c in left.iter().map(|&i| &credits[i]) {
-        *by_key
+        by_key
             .entry(similar::fold(c.name))
             .or_default()
             .entry(c.name)
-            .or_default() += 1;
+            .or_default()
+            .insert(c.n);
     }
     by_key
         .into_values()
@@ -122,7 +124,7 @@ pub fn suggestions(
         .map(|spellings| {
             let mut all: Vec<(String, usize)> = spellings
                 .into_iter()
-                .map(|(s, n)| (s.to_string(), n))
+                .map(|(s, songs)| (s.to_string(), songs.len()))
                 .collect();
             all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             all

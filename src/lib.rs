@@ -120,7 +120,7 @@ use clap::FromArgMatches;
 use crate::atomic::Lock;
 use crate::cli::{Cli, Command, Matching};
 use crate::dirs::Dirs;
-use crate::history::Run;
+use crate::history::{Later, Recording, Run};
 use crate::identify::Mode;
 use crate::manifest::Manifest;
 use crate::platform::Defaults;
@@ -172,7 +172,7 @@ pub struct Hooked {
 pub fn hooked_from(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<Hooked> {
     Some(Hooked {
         home: var(hooks::HOOK_HOME)?.into(),
-        library: var("MUMAN_LIBRARY").map(PathBuf::from),
+        library: var(hooks::HOOK_LIBRARY).map(PathBuf::from),
     })
 }
 
@@ -202,11 +202,7 @@ impl Job {
 /// On Ctrl-C or a signal to stop, stop every program muman started, then
 /// exit; one a program of the user's own in the terminal gets is its own.
 fn stop_on_signals() {
-    let _ = ctrlc::set_handler(|| {
-        if runner::stop() {
-            std::process::exit(i32::from(runner::STOPPED_EXIT));
-        }
-    });
+    let _ = ctrlc::set_handler(runner::stop_and_exit);
 }
 
 #[must_use]
@@ -360,6 +356,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     progress::current().plan(traits.steps);
     if traits.apart {
         dirs.apart()?;
+        // Only `add` and `sync` make a home; any other change would make one,
+        // as its lock does, only to find nothing listed in it.
+        let makes_home = matches!(job.command, Command::Add { .. } | Command::Sync { .. });
+        if !makes_home && !dirs.home.exists() {
+            return Err(change::Refused(format!(
+                "No home at {}: nothing listed yet",
+                dirs.home.display()
+            ))
+            .into());
+        }
         if !matches!(job.command, Command::Undo { .. }) && history::undo_unfinished(&dirs.home) {
             return Err(change::Refused(
                 "An undo stopped partway has not put the library back yet; run `muman undo` to \
@@ -372,6 +378,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     if traits.edits_list {
         crate::state::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
+        // A library the song list cannot name is refused before anything
+        // is changed, rather than after a change is saved.
+        if dirs.manifest().exists() {
+            Manifest::load(&dirs.home)?
+                .settings
+                .library
+                .naming(&dirs.library)?;
+        }
     }
     if traits.gated {
         let held = trust::held_in(&dirs.home)?;
@@ -411,7 +425,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 query,
                 all: *all,
             };
-            let ok = reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))?.ok;
+            let ok = reconcile::reconcile_into(
+                runner,
+                dirs,
+                opts,
+                Recording::DryRun,
+                out,
+                Some(report),
+            )?
+            .ok;
             let problems = diagnose::diagnose(dirs)?.problems();
             if problems > 0 {
                 ui::warning(
@@ -452,32 +474,27 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             yes,
             dry_run,
         } if *resolve || merge.is_some() => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
+            let mut later = Later::new(&dirs.home)?;
             let confirm = cli::Confirm {
                 yes: *yes,
                 all: false,
                 dry_run: *dry_run,
             };
-            let done = (|| {
-                let changed = if *resolve {
-                    duplicates::resolve(runner, dirs, query, &confirm, prompter, out)?
-                } else {
-                    duplicates::merge(runner, dirs, query, &confirm, prompter, out)?
-                };
-                if !changed {
-                    return Ok(true);
-                }
+            let changed = if *resolve {
+                duplicates::resolve(runner, dirs, query, &confirm, prompter, &mut later, out)
+            } else {
+                duplicates::merge(runner, dirs, query, &confirm, prompter, &mut later, out)
+            };
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,
                     runner,
                     Options::default(),
-                    Some(&mut run),
-                    &mut due,
+                    Recording::Run(run),
+                    due,
                     out,
                 )
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Duplicates { query, .. } => {
             duplicates::report(dirs, query, out, data)?;
@@ -562,7 +579,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             if !trust::gate(&dirs.home, &held, job.trust, prompter, out)? {
                 return Ok(true);
             }
-            let undone = {
+            let mut undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let _library = Lock::library(&dirs.library, dirs.lock_folder()?)?;
                 let again = history::plan(dirs)?;
@@ -579,7 +596,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 ..Options::default()
             };
             let mut due = hooks::Due::default();
-            let ok = reconcile_now(job, runner, opts, None, &mut due, out)?;
+            let ok = reconcile_now(
+                job,
+                runner,
+                opts,
+                Recording::Undo(&mut undone),
+                &mut due,
+                out,
+            )?;
             undone.finish()?;
             drop(runs);
             run_hooks(job, runner, &due, out)?;
@@ -636,119 +660,114 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             purge,
             confirm,
         } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::remove(dirs, query, *purge, confirm, prompter, &mut run, out)? {
-                    return Ok(true);
-                }
+            let mut later = Later::new(&dirs.home)?;
+            let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,
                     runner,
                     Options::default(),
-                    Some(&mut run),
-                    &mut due,
+                    Recording::Run(run),
+                    due,
                     out,
                 )
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Restore { query, confirm } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::restore(dirs, query, confirm, prompter, out)? {
-                    return Ok(true);
-                }
+            let mut later = Later::new(&dirs.home)?;
+            let changed = change::restore(runner, dirs, query, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
                 ok &= reconcile_now(
                     job,
                     runner,
                     Options::default(),
-                    Some(&mut run),
-                    &mut due,
+                    Recording::Run(run),
+                    due,
                     out,
                 )?;
                 Ok(ok)
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Review { query } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !review::review(dirs, query, prompter, out)? {
-                    return Ok(true);
-                }
+            let mut later = Later::new(&dirs.home)?;
+            let changed = review::review(dirs, query, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,
                     runner,
                     Options::default(),
-                    Some(&mut run),
-                    &mut due,
+                    Recording::Run(run),
+                    due,
                     out,
                 )
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Set { terms, confirm } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::set(dirs, terms, confirm, prompter, out)? {
-                    return Ok(true);
-                }
+            let mut later = Later::new(&dirs.home)?;
+            let changed = change::set(dirs, terms, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,
                     runner,
                     Options::default(),
-                    Some(&mut run),
-                    &mut due,
+                    Recording::Run(run),
+                    due,
                     out,
                 )
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Edit { query, all } => {
-            // Begun once the editor is closed, so an open editor holds no
-            // other run back.
-            let mut run: Option<Run> = None;
-            let mut due = hooks::Due::default();
+            // Begun as the edit is saved, so an open editor holds no other
+            // run back.
+            let mut later = Later::new(&dirs.home)?;
             let edited = editor::edit(
                 dirs,
                 query,
                 *all,
                 change::reborrow(&mut prompter),
                 &mut editor::launch,
-                &mut || {
-                    if run.is_none() {
-                        run = Some(Run::begin(&dirs.home)?);
-                    }
-                    Ok(())
-                },
+                &mut later,
                 out,
             );
-            let Some(mut run) = run else {
-                return edited.map(|_| true);
-            };
-            let done = edited.and_then(|edited| {
-                if edited {
-                    reconcile_now(
-                        job,
-                        runner,
-                        Options::default(),
-                        Some(&mut run),
-                        &mut due,
-                        out,
-                    )
-                } else {
-                    Ok(true)
-                }
-            });
-            finished(job, runner, run, done, &due, out)
+            synced_after(job, runner, later, edited, out, |run, due, out| {
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
+            })
         }
     }
+}
+
+/// Finish a command that changed the home, or did not: `changed` says
+/// whether it did, and `after` brings the library in line under the run
+/// it began. A command that began no run changed nothing.
+fn synced_after<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    later: Later,
+    changed: Result<bool>,
+    out: &mut W,
+    after: impl FnOnce(&mut Run, &mut hooks::Due, &mut W) -> Result<bool>,
+) -> Result<bool> {
+    let Some(mut run) = later.begun()? else {
+        return changed.map(|_| true);
+    };
+    let mut due = hooks::Due::default();
+    let done = changed.and_then(|changed| {
+        if changed {
+            after(&mut run, &mut due, out)
+        } else {
+            Ok(true)
+        }
+    });
+    finished(job, runner, run, done, &due, out)
 }
 
 /// The offline phase with the run's settling time, as every command
@@ -757,7 +776,7 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     opts: Options,
-    run: Option<&mut Run>,
+    rec: Recording<'_>,
     due: &mut hooks::Due,
     out: &mut W,
 ) -> Result<bool> {
@@ -765,7 +784,7 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
         settling: job.settling,
         ..opts
     };
-    let synced = reconcile::reconcile(runner, &job.dirs, opts, run, out)?;
+    let synced = reconcile::reconcile(runner, &job.dirs, opts, rec, out)?;
     due.then(synced.due);
     Ok(synced.ok)
 }
@@ -796,7 +815,7 @@ pub(crate) struct Traits {
     /// holds songs, and each setting it renames is said first.
     pub edits_list: bool,
     /// It may run a tool, a hook or a request on the song list's
-    /// settings, so asks first ([`trust`]). `undo` asks apart, about the
+    /// settings, so asks first ([`trust`]). `undo` asks again, about the
     /// list it puts back.
     pub gated: bool,
     /// It may run ffmpeg or ffprobe: an export only when it encodes,
@@ -812,8 +831,8 @@ pub(crate) struct Traits {
 }
 
 /// Refuse to run on the library `hooked`, the run whose hook this is,
-/// named in the `MUMAN_LIBRARY` the hook inherits, under another home:
-/// two homes would write one library.
+/// named in the `MUMAN_HOOK_LIBRARY` the hook inherits, under another
+/// home: two homes would write one library.
 fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
     let elsewhere = !platform::same_path(&hooked.home, &dirs.home);
     if elsewhere
@@ -824,7 +843,7 @@ fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
     {
         return Err(change::Refused(format!(
             "a hook cannot run this on {}, the library of the run that started it, under \
-             another home; pass --library to name another",
+             another home; pass --library or set MUMAN_LIBRARY to name another",
             dirs.library.display()
         ))
         .into());
@@ -866,10 +885,8 @@ pub(crate) fn traits(command: &Command) -> Traits {
         | Command::Edit { .. }
         | Command::Review { .. } => edits(CHANGE),
         Command::Undo { .. } => Traits {
-            apart: true,
-            ffmpeg: true,
-            steps: CHANGE,
-            ..reads
+            edits_list: false,
+            ..edits(CHANGE)
         },
         Command::Purge { .. } => Traits {
             apart: true,

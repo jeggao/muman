@@ -101,7 +101,11 @@ pub fn held_in(home: &Path) -> Result<Vec<Held>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => crate::manifest::NEW.to_string(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
-    held_of(&text).with_context(|| format!("reading {}", file.display()))
+    let doc: DocumentMut = text
+        .trim_start_matches('\u{feff}')
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", file.display()))?;
+    held(&doc).with_context(|| format!("reading {}", file.display()))
 }
 
 /// What the song list `text` holds that runs a program or reaches a

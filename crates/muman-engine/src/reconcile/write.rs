@@ -12,6 +12,13 @@
 //! row alone ([`crate::state::State::save_output`]): a run stopped
 //! partway writes again only the song it was writing, and the commit
 //! costs the same whatever the size of the state.
+//!
+//! A panic building a song, in muman or a crate it calls, fails that song
+//! alone, as an error does ([`crate::errors::caught`]), and clears the
+//! `.part` files it staged. Unwinding there is safe: a build changes no
+//! other song's files, and puts each of its own in place through the
+//! ledger whole, so one stopped partway leaves its song as an error at
+//! that point would, recorded as it was before.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -111,31 +118,23 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     what
 }
 
-/// Make the `moves` [`decide`](super::decide::decide) chose, each a song's file to its new path,
-/// as a new `[library]` template makes them, rather than render them
-/// again. A file changed since it was written moves too, still changed:
-/// written again at the new path, it would be left at the old one, a
-/// second copy. The ledger records each move before it is made. Returns
-/// the paths moved to.
+/// Make the `moves` [`decide`](super::decide::decide) chose, each a song's file to its new path
+/// with the files beside it it carries, as a new `[library]` template
+/// makes them, rather than render them again. A file changed since it
+/// was written moves too, still changed: written again at the new path,
+/// it would be left at the old one, a second copy; but a folder's file
+/// the user changed stays in its folder ([`stays`](super::owned::stays)).
+/// The ledger records each move before it is made. Returns the paths
+/// moved to.
 pub(super) fn relocate<W: Write>(
-    moves: Vec<(PathBuf, PathBuf)>,
+    moves: Vec<Relocation>,
     state: &mut State,
     ledger: &mut Ledger<'_>,
     out: &mut W,
 ) -> Result<BTreeSet<PathBuf>> {
-    let pairs: Vec<Relocation> = moves
-        .into_iter()
-        .map(|(from, to)| {
-            let beside = state.outputs[&from]
-                .sidecar_paths()
-                .map(|s| (s.clone(), crate::outputs::moved(&from, &to, s)))
-                .collect();
-            Relocation { from, to, beside }
-        })
-        .collect();
-    let results = ledger.relocate(&pairs, out)?;
+    let results = ledger.relocate(&moves, out)?;
     let mut done = BTreeSet::new();
-    for (m, result) in pairs.into_iter().zip(results) {
+    for (m, result) in moves.into_iter().zip(results) {
         if let Err(e) = result {
             crate::ui::warning(
                 out,
@@ -152,7 +151,7 @@ pub(super) fn relocate<W: Write>(
         done.insert(m.to.clone());
         state
             .outputs
-            .insert(m.to.clone(), moved_to(written, &m.from, &m.to));
+            .insert(m.to.clone(), moved_to(written, &m.beside));
     }
     Ok(done)
 }
@@ -246,12 +245,13 @@ pub(super) fn apply<R: Runner, W: Write>(
         .flat_map(|(_, r)| crate::artifact::parts(&r.plan).folder_files(&path_of(r)))
         .collect();
     let due = due(planned, &doing);
-    let (mut pending, claims) = before_writing(job, &due, state, ledger, force, out)?;
+    let anew = beside_anew(library, &old, &due);
+    let (mut pending, claims) = before_writing(job, (&due, &anew), state, ledger, force, out)?;
     say_left(&doing, job.manifest.settings.history.runs, out)?;
     let mut outputs = kept(planned, &doing, job.manifest, &old);
     let wrote = render_due(
         job,
-        &due,
+        (&due, &anew),
         &old,
         &state.facts,
         (&claims, &shared),
@@ -260,7 +260,17 @@ pub(super) fn apply<R: Runner, W: Write>(
     )?;
     failed.extend(wrote.failed.iter().cloned());
     outputs.extend(wrote.outputs);
-    crate::library::remove_empty_folders(library, &wrote.failed_at);
+    // A folder's file a moved song left behind, cleared, can empty its folder.
+    let beside_before = (due.iter())
+        .filter_map(|((_, r), _)| old.get(&path_of(r)))
+        .flat_map(|w| w.sidecar_paths().cloned());
+    let emptied: Vec<PathBuf> = wrote
+        .failed_at
+        .iter()
+        .cloned()
+        .chain(beside_before)
+        .collect();
+    crate::library::remove_empty_folders(library, &emptied);
     let removed = prune(ledger, &old, &mut outputs, failed, force, out)?;
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
@@ -315,7 +325,7 @@ type Claims = BTreeMap<usize, Vec<Owned>>;
 /// when `forced` the user's own, taken over.
 fn before_writing<R: Runner, W: Write>(
     job: &Writing<'_, R>,
-    due: &[(&PlannedSong, bool)],
+    (due, anew): (&[(&PlannedSong, bool)], &BTreeSet<usize>),
     state: &State,
     ledger: &mut Ledger<'_>,
     forced: bool,
@@ -345,10 +355,7 @@ fn before_writing<R: Runner, W: Write>(
                     .filter(|_| kept.contains(s))
                     .cloned()
             };
-            let sidecars = match old
-                .get(&path)
-                .filter(|_| *retag && !beside_changes(&job.dirs.library, old, r))
-            {
+            let sidecars = match old.get(&path).filter(|_| *retag && !anew.contains(n)) {
                 Some(w) => w.sidecars.clone(),
                 None => crate::artifact::parts(&r.plan)
                     .touched(&path, old.get(&path))
@@ -394,13 +401,14 @@ fn before_writing<R: Runner, W: Write>(
 /// Write `r`'s song, at `job`, as a retag over the file `old` records
 /// there, with `recorded` beside it: its tags written again only where
 /// they or the lyrics inside changed, the lyrics inside made anew where
-/// their part did, and only the files beside it that changed.
+/// their part did, and the files beside it that changed, where
+/// `beside_anew`.
 fn retag_one<R: Runner>(
     runner: &R,
     job: &render::Job<'_>,
-    old: &BTreeMap<PathBuf, Written>,
-    r: &Resolved,
+    (old, r): (&BTreeMap<PathBuf, Written>, &Resolved),
     recorded: &[PathBuf],
+    beside_anew: bool,
 ) -> Result<render::Rendered> {
     let (library, parts) = (job.library, job.parts);
     let path = path_of(r);
@@ -411,19 +419,27 @@ fn retag_one<R: Runner>(
     let anew = was.as_ref().is_none_or(|p| p.lyrics != parts.lyrics);
     let tags = was.as_ref().is_none_or(|p| parts.redo_from(p).retag);
     let bytes = |p: &Path| std::fs::metadata(library.join(p)).map_or(0, |m| m.len());
-    let mut done = if tags {
-        render::retag(runner, job, (&path, recorded), anew)?
-    } else {
-        render::Rendered {
+    // Staged first and put last, so the song's file is as its record says
+    // until every file beside it is written.
+    let staged = tags
+        .then(|| render::retag(runner, job, (&path, recorded), anew))
+        .transpose()?;
+    let beside = beside_anew
+        .then(|| {
+            let kept = kept_beside(library, old, r);
+            render::beside(runner, job, &kept).map(|b| (kept, b))
+        })
+        .transpose()?;
+    let mut done = match staged {
+        Some(staged) => staged.put(library, job.claim)?,
+        None => render::Rendered {
             audio_bytes: bytes(&path),
             audio: path.clone(),
             beside: recorded.iter().map(|b| (b.clone(), bytes(b))).collect(),
             problems: Vec::new(),
-        }
+        },
     };
-    if beside_changes(library, old, r) {
-        let kept = kept_beside(library, old, r);
-        let beside = render::beside(runner, job, &kept)?;
+    if let Some((kept, beside)) = beside {
         done.beside = parts
             .files(&path)
             .into_iter()
@@ -435,6 +451,21 @@ fn retag_one<R: Runner>(
         done.problems.extend(beside.problems);
     }
     Ok(done)
+}
+
+/// The songs of `due` only retagged that write the files beside them
+/// anew, by their place in the song list: judged once, before any song
+/// is written, so a folder's file another song writes meanwhile changes
+/// neither what a song writes nor what it records.
+fn beside_anew(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    due: &[(&PlannedSong, bool)],
+) -> BTreeSet<usize> {
+    due.iter()
+        .filter(|((_, r), retag)| *retag && beside_changes(library, old, r))
+        .map(|((n, _), _)| *n)
+        .collect()
 }
 
 /// Whether the files `r`'s plan has beside the song differ from those
@@ -535,7 +566,7 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
 /// each; `pending` keeps each as it is vouched for.
 fn render_due<R: Runner, W: Write>(
     job: &Writing<'_, R>,
-    due: &[(&PlannedSong, bool)],
+    (due, anew): (&[(&PlannedSong, bool)], &BTreeSet<usize>),
     old: &BTreeMap<PathBuf, Written>,
     facts: &BTreeMap<SourceKey, Facts>,
     (claims, shared): (&Claims, &BTreeSet<PathBuf>),
@@ -560,8 +591,7 @@ fn render_due<R: Runner, W: Write>(
         songs_failed: Vec::new(),
     };
     let writing = progress::step("Writing", Some(due.len() as u64));
-    let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
-        let _working = writing.working(&progress::label(&r.stem));
+    let build_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let claim = &claims[n];
         let path = path_of(r);
         let recorded: Vec<PathBuf> = old
@@ -589,9 +619,25 @@ fn render_due<R: Runner, W: Write>(
             stale: &stale,
         };
         if *retag {
-            return retag_one(*runner, &render_job, old, r, &recorded);
+            return retag_one(*runner, &render_job, (old, r), &recorded, anew.contains(n));
         }
         render::render(*runner, &render_job)
+    };
+    let render_one = |song: &(&PlannedSong, bool)| {
+        let (_, r) = song.0;
+        let _working = writing.working(&progress::label(&r.stem));
+        crate::errors::caught(|| build_one(song)).inspect_err(|e| {
+            if e.is::<crate::errors::Panicked>() {
+                let path = path_of(r);
+                let parts = crate::artifact::parts(&r.plan);
+                let shared = parts.folder_files(&path);
+                let own = parts
+                    .files(&path)
+                    .into_iter()
+                    .filter(|f| !shared.contains(f));
+                crate::library::clear_leftovers(&dirs.library, std::iter::once(path).chain(own));
+            }
+        })
     };
     parallel::chunked(due, parallel::builds(), render_one, |chunk, rendered| {
         for (((n, r), retag), result) in chunk.iter().zip(rendered) {
@@ -599,7 +645,9 @@ fn render_due<R: Runner, W: Write>(
             let name = name_of(song, Some(r), facts);
             match result {
                 Ok(done) => {
-                    let (vouched, learned) = vouch(job, (song, r), (&done, *retag), old, out)?;
+                    let as_recorded = *retag && !anew.contains(n);
+                    let (vouched, learned) =
+                        vouch(job, (song, r), (&done, *retag, as_recorded), old, out)?;
                     wrote.written += 1;
                     wrote.learned.extend(learned);
                     if let Some(pending) = pending.as_deref_mut() {
@@ -629,11 +677,12 @@ fn render_due<R: Runner, W: Write>(
 
 /// Say what writing `done` did to its song, and vouch for it and each
 /// file beside it as written, those of a song only `retag`ged as they
-/// were; with what its plan rendered to, when fitting asks.
+/// were, and all of them as recorded where the retag wrote none of them
+/// (`as_recorded`); with what its plan rendered to, when fitting asks.
 fn vouch<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     (song, r): (&Song, &Resolved),
-    (done, retag): (&render::Rendered, bool),
+    (done, retag, as_recorded): (&render::Rendered, bool, bool),
     old: &BTreeMap<PathBuf, Written>,
     out: &mut W,
 ) -> Result<(Written, Option<(String, state::Measured)>)> {
@@ -660,7 +709,12 @@ fn vouch<R: Runner, W: Write>(
         out,
         &format!("{verb}: {}", crate::relpath::show(&done.audio)),
     )?;
-    for problem in &done.problems {
+    // A file beside the song it had none of before, as lyrics found since.
+    let had = |path: &Path| before.is_some_and(|w| w.sidecars.iter().any(|s| s.path == path));
+    for (path, _) in done.beside.iter().filter(|(path, _)| !had(path)) {
+        crate::ui::success(out, &format!("Added: {}", crate::relpath::show(path)))?;
+    }
+    for problem in done.problems.iter().chain(&r.why.chapters) {
         crate::ui::warning(out, &format!("  {problem}"))?;
     }
     let learned = job.fitted.map(|f| {
@@ -676,10 +730,7 @@ fn vouch<R: Runner, W: Write>(
     } else {
         Vec::new()
     };
-    let sidecars = match old
-        .get(&done.audio)
-        .filter(|_| retag && !beside_changes(library, old, r))
-    {
+    let sidecars = match old.get(&done.audio).filter(|_| as_recorded) {
         Some(w) => w.sidecars.clone(),
         None => done
             .beside

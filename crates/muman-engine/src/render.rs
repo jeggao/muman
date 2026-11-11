@@ -13,12 +13,18 @@
 //! elsewhere. ffmpeg, which opens its output itself, writes into a `.part`
 //! made so just before it runs. A song's files go into place through
 //! [`crate::library::put`] and [`crate::library::clear`], over or in
-//! place of only the files the sync claimed as muman's or took over.
+//! place of only the files the sync claimed as muman's or took over,
+//! every one checked before any is changed ([`crate::library::claimed`]):
+//! a song one file refuses changes none, and keeps its file as its record
+//! says, never one written but recorded as it was.
 //! A cover or lyrics that fail are reported and the song is written
 //! without them. A song that fails leaves the folders made for it, since
 //! another song rendered at the same time may be writing into one; the
 //! sync clears the folders failures leave once every song is written.
 //!
+//! A FLAC copied from a stream whose STREAMINFO states no length, as a
+//! FLAC encoded into a pipe or an Ogg FLAC holds, is given the count of
+//! its samples ([`crate::flac`]): ffmpeg copies the 0 as it is.
 //! A FLAC's tags and cover are written into padding ffmpeg reserves for
 //! them (`write_flac_blocks`), so the file is written once: `lofty`
 //! writes a tag of another length by moving every byte of audio after it,
@@ -26,7 +32,12 @@
 //! all the same. Ogg, MP3, MP4 and WavPack are `lofty`'s to write. In an
 //! MP4 it keeps the room a shrunken tag leaves as a `free` atom, and fills
 //! it on the next write, so a retag would write other bytes than a build;
-//! that room is removed (`drop_mp4_padding`). In Ogg it writes the whole
+//! that room is removed (`drop_meta_atoms`). The old tag is removed before
+//! the new one is written, so `lofty` only adds one at the end of `meta`,
+//! where ffmpeg puts it: lofty 0.25 panics on a tag exactly 8 bytes shorter
+//! than the one it replaces, which leaves room for a `free` atom of a
+//! header alone. A writer that panics all the same fails that file's tags,
+//! as an error does, and no other song's. In Ogg it writes the whole
 //! file again on every write, so the padding it would add after the
 //! comments, rounded up to a page of 8160 bytes, saves no write and only
 //! takes room: none is asked for.
@@ -79,8 +90,9 @@
 //! file, the tag writers every other's beside the tags.
 //!
 //! A song whose plan changed in its tags or the lyrics inside it alone is
-//! tagged again in place (`retag`), and the files beside it written again
-//! where they changed ([`beside`]), as a build writes them, with the cover
+//! tagged again (`retag`), staged and put in place last, as a build's
+//! audio is, after the files beside it are written again where they
+//! changed ([`beside`]), as a build writes them, with the cover
 //! its file holds, and its lyrics made anew from their source where their
 //! part changed, else as the file holds them, each read as each container
 //! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
@@ -369,6 +381,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
         }
+        if made.audio.format.codec().container() == Container::Flac {
+            state_samples(&audio_part, &mut problems)?;
+        }
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -501,13 +516,31 @@ fn stage_beside(
 /// Put each of `rels` staged at `parts` that `written` names in its
 /// place, and clear the files the song's last build left beside it that
 /// are not written again, its lyrics that are none now among them; each
-/// put with what it takes.
+/// put with what it takes. Each of them, and the song's audio file, is
+/// first checked to be the song's to change, so a file not muman's among
+/// them leaves every one as it was.
 fn put_beside(
     job: &Job<'_>,
     parts: &[PathBuf],
     rels: &[PathBuf],
     written: &[PathBuf],
 ) -> Result<Vec<(PathBuf, u64)>> {
+    let audio = with_extension(job.stem, job.parts.audio.format.extension());
+    // A file the last build left that is not written again, changed by
+    // the user since, is theirs now: left where it is, not cleared.
+    let cleared: Vec<&PathBuf> = (job.stale.iter().chain(rels))
+        .filter(|gone| !written.contains(gone) && !left_alone(job, gone))
+        .filter(|gone| {
+            !job.stale.contains(gone) || crate::library::may_change(job.library, gone, job.claim)
+        })
+        .collect();
+    crate::library::claimed(
+        job.library,
+        std::iter::once(&audio)
+            .chain(written)
+            .chain(cleared.iter().copied()),
+        job.claim,
+    )?;
     let mut beside = Vec::new();
     for (staged, rel) in parts.iter().zip(rels) {
         if written.contains(rel) {
@@ -515,10 +548,8 @@ fn put_beside(
             beside.push((rel.clone(), size_of(&job.library.join(rel))));
         }
     }
-    for gone in job.stale.iter().chain(rels) {
-        if !written.contains(gone) && !left_alone(job, gone) {
-            crate::library::clear(job.library, gone, job.claim)?;
-        }
+    for gone in cleared {
+        crate::library::clear(job.library, gone, job.claim)?;
     }
     Ok(beside)
 }
@@ -577,8 +608,10 @@ fn embeddable(made: &Parts<'_>, text: &str, problems: &mut Vec<String>) -> Optio
 /// cover that file holds: what [`render`] would write, without decoding
 /// or encoding anything. The lyrics inside are made anew from their
 /// source where `lyrics_anew`, as [`render`] makes them, else kept as the
-/// file holds them. Through `.part`, as [`render`] writes, put over the
-/// file `job`'s claim holds.
+/// file holds them. Staged at its `.part`, as [`render`] writes, and put
+/// over the file `job`'s claim holds by [`Retagged::put`], once the files
+/// beside it are, so a song whose other files fail keeps its file as it
+/// was, and as its record says.
 // Removes a song's staged file when its tags fail.
 #[expect(clippy::disallowed_methods)]
 pub(crate) fn retag<R: Runner>(
@@ -586,7 +619,7 @@ pub(crate) fn retag<R: Runner>(
     job: &Job<'_>,
     (audio, beside): (&Path, &[PathBuf]),
     lyrics_anew: bool,
-) -> Result<Rendered> {
+) -> Result<Retagged> {
     use lofty::file::TaggedFileExt;
 
     let (made, library) = (job.parts, job.library);
@@ -650,26 +683,57 @@ pub(crate) fn retag<R: Runner>(
         set_opus_header(&staged, made.tags.opus_header)?;
         Ok(verify(&staged, &tags, covered))
     })();
-    let problems = match result {
-        Ok(verified) => problems.into_iter().chain(verified).collect(),
+    match result {
+        Ok(verified) => Ok(Retagged {
+            staged: Some(staged),
+            audio: audio.to_path_buf(),
+            beside: beside.to_vec(),
+            problems: problems.into_iter().chain(verified).collect(),
+        }),
         Err(e) => {
             let _ = fs::remove_file(&staged);
-            return Err(e);
+            Err(e)
         }
-    };
-    if let Err(e) = crate::library::put(library, &staged, audio, job.claim) {
-        let _ = fs::remove_file(&staged);
-        return Err(e);
     }
-    Ok(Rendered {
-        audio_bytes: size_of(&path),
-        audio: audio.to_path_buf(),
-        beside: beside
-            .iter()
-            .map(|b| (b.clone(), size_of(&library.join(b))))
-            .collect(),
-        problems,
-    })
+}
+
+/// A song's file [`retag`] staged with its new tags, not yet in place:
+/// removed unless [`put`](Self::put).
+#[derive(Debug)]
+pub(crate) struct Retagged {
+    staged: Option<PathBuf>,
+    audio: PathBuf,
+    beside: Vec<PathBuf>,
+    problems: Vec<String>,
+}
+
+impl Retagged {
+    /// Put the file in place in `library`, over the one `claim` holds.
+    pub(crate) fn put(mut self, library: &Path, claim: &[Owned]) -> Result<Rendered> {
+        if let Some(staged) = self.staged.take() {
+            crate::library::put(library, &staged, &self.audio, claim).inspect_err(|_| {
+                self.staged = Some(staged);
+            })?;
+        }
+        Ok(Rendered {
+            audio_bytes: size_of(&library.join(&self.audio)),
+            audio: self.audio.clone(),
+            beside: (self.beside.iter())
+                .map(|b| (b.clone(), size_of(&library.join(b))))
+                .collect(),
+            problems: std::mem::take(&mut self.problems),
+        })
+    }
+}
+
+impl Drop for Retagged {
+    // Removes a staged file never put in place.
+    #[expect(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        if let Some(staged) = &self.staged {
+            let _ = fs::remove_file(staged);
+        }
+    }
 }
 
 /// The front cover of the WavPack file at `path`, which `lofty`'s
@@ -748,6 +812,23 @@ fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
         .with_context(|| format!("setting the gain of {}", path.display()))
 }
 
+/// The sample count of the FLAC at `path` stated where its STREAMINFO
+/// states none, as a stream copied from a pipe's FLAC or an Ogg FLAC
+/// does ([`crate::flac`]); one that cannot be counted is said.
+// Sets the count in a staged file's STREAMINFO in place.
+#[expect(clippy::disallowed_methods)]
+fn state_samples(path: &Path, problems: &mut Vec<String>) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if let Err(e) = crate::flac::state_samples(&mut file) {
+        problems.push(format!("no length stated in the file: {e:#}"));
+    }
+    Ok(())
+}
+
 fn size_of(path: &Path) -> u64 {
     fs::metadata(path).map_or(0, |m| m.len())
 }
@@ -756,8 +837,8 @@ fn size_of(path: &Path) -> u64 {
 /// place in `library`, as rendering it there would have: the files beside
 /// it first, audio last, each through `.part`, and those of `stale` the
 /// last build left that it has none of now gone: over or in place of only
-/// the files `claim` holds, a file of its `folder` at a name a file not
-/// muman's holds left alone, said.
+/// the files `claim` holds, all checked before any is changed, a file of
+/// its `folder` at a name a file not muman's holds left alone, said.
 // Removes a song's staged files when they cannot be put in place.
 #[expect(clippy::disallowed_methods)]
 pub fn place(
@@ -792,13 +873,23 @@ pub fn place(
         .iter()
         .cloned()
         .partition(|(file, _)| left_alone(file));
+    let cleared: Vec<&PathBuf> = stale
+        .iter()
+        .filter(|gone| !left_alone(gone) && !beside.iter().any(|(b, _)| b == *gone))
+        .filter(|gone| crate::library::may_change(library, gone, claim))
+        .collect();
+    crate::library::claimed(
+        library,
+        (beside.iter().map(|(file, _)| file))
+            .chain(cleared.iter().copied())
+            .chain([&rendered.audio]),
+        claim,
+    )?;
     for (file, _) in &beside {
         copy_in(file)?;
     }
-    for gone in stale {
-        if !left_alone(gone) && !beside.iter().any(|(b, _)| b == gone) {
-            crate::library::clear(library, gone, claim)?;
-        }
+    for gone in cleared {
+        crate::library::clear(library, gone, claim)?;
     }
     copy_in(&rendered.audio)?;
     let mut problems = rendered.problems.clone();
@@ -824,9 +915,10 @@ pub struct Beside {
 /// Write the files `job`'s plan has beside the song, its lyrics and its
 /// cover, from their sources, as [`render`] writes them, leaving the
 /// song's audio file as it is: for a song whose file holds what it would
-/// be written with, its tags aside, as `retag` writes them. Those of
-/// `keep`, as they would be written already, are left as they are, and
-/// nothing is made for them. A file the last build left beside it that
+/// be written with, its tags aside, as `retag` writes them. `retag` puts
+/// the audio file in place after, so `job`'s claim holds it too, or
+/// nothing is written. Those of `keep`, as they would be written already,
+/// are left as they are, and nothing is made for them. A file the last build left beside it that
 /// the plan has none of goes, as [`render`] clears it.
 // Removes the staged files beside a song when they cannot be put in place.
 #[expect(clippy::disallowed_methods)]
@@ -926,42 +1018,60 @@ fn write_tags(
         .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
     let codec = format.codec();
-    let written = match codec.container() {
-        Container::Flac => {
-            let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
-            if write_flac_blocks(&mut file, &comments)
-                .with_context(|| format!("writing tags to {}", path.display()))?
-            {
-                return Ok(());
-            }
-            file.seek(SeekFrom::Start(0))?;
-            comments.save_to(&mut file, WriteOptions::default())
-        }
-        Container::Ogg => {
-            let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
-            file.seek(SeekFrom::Start(0))?;
-            comments.save_to(&mut file, WriteOptions::default().preferred_padding(0))
-        }
-        Container::Mp3 => {
-            id3_tag(tags, lyrics, picture, chapters).save_to(&mut file, WriteOptions::default())
-        }
-        Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
-        Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
-    };
-    written.with_context(|| format!("writing tags to {}", path.display()))?;
     if codec.container() == Container::Mp4 {
-        drop_mp4_padding(&mut file)
+        drop_meta_atoms(&mut file, &[*b"ilst", *b"free"])
+            .and_then(|()| file.rewind())
+            .with_context(|| format!("writing tags to {}", path.display()))?;
+    }
+    crate::errors::caught(|| save_tags(&mut file, path, codec, tags, lyrics, picture, chapters))
+        .with_context(|| format!("writing tags to {}", path.display()))?;
+    if codec.container() == Container::Mp4 {
+        drop_meta_atoms(&mut file, &[*b"free"])
             .with_context(|| format!("writing tags to {}", path.display()))?;
     }
     Ok(())
 }
 
-/// Remove the `free` atoms in an MP4's `moov.udta.meta`, the room
-/// `lofty` leaves where a tag shrank and fills on the next write, so the
-/// file's bytes do not follow its history. Only where `moov` ends the
-/// file, as ffmpeg's `ipod` muxer writes it: no chunk offset then points
-/// past what moves.
-fn drop_mp4_padding(file: &mut fs::File) -> std::io::Result<()> {
+/// [`write_tags`]'s tags written into `file` at `path` by the container's
+/// own writer.
+fn save_tags(
+    file: &mut fs::File,
+    path: &Path,
+    codec: Codec,
+    tags: &[(String, Vec<String>)],
+    lyrics: Option<&str>,
+    picture: Option<Picture>,
+    chapters: &[Chapter],
+) -> Result<()> {
+    let written = match codec.container() {
+        Container::Flac => {
+            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            if write_flac_blocks(file, &comments)
+                .with_context(|| format!("writing tags to {}", path.display()))?
+            {
+                return Ok(());
+            }
+            file.seek(SeekFrom::Start(0))?;
+            comments.save_to(file, WriteOptions::default())
+        }
+        Container::Ogg => {
+            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            file.seek(SeekFrom::Start(0))?;
+            comments.save_to(file, WriteOptions::default().preferred_padding(0))
+        }
+        Container::Mp3 => {
+            id3_tag(tags, lyrics, picture, chapters).save_to(file, WriteOptions::default())
+        }
+        Container::Mp4 => ilst_of(tags, picture).save_to(file, WriteOptions::default()),
+        Container::WavPack => ape_tag(tags, picture).save_to(file, WriteOptions::default()),
+    };
+    written.with_context(|| format!("writing tags to {}", path.display()))
+}
+
+/// Remove the atoms of each of `kinds` in an MP4's `moov.udta.meta`.
+/// Only where `moov` ends the file, as ffmpeg's `ipod` muxer writes it:
+/// no chunk offset then points past what moves.
+fn drop_meta_atoms(file: &mut fs::File, kinds: &[[u8; 4]]) -> std::io::Result<()> {
     use std::io::{Read as _, Write as _};
 
     let len = file.metadata()?.len();
@@ -996,15 +1106,15 @@ fn drop_mp4_padding(file: &mut fs::File) -> std::io::Result<()> {
     let Some(meta) = child_atom(&moov, udta, 8, *b"meta") else {
         return Ok(());
     };
-    let frees: Vec<(usize, usize)> = atoms(&moov, meta, 12)
-        .filter(|&(.., kind)| kind == *b"free")
+    let dropped: Vec<(usize, usize)> = atoms(&moov, meta, 12)
+        .filter(|(.., kind)| kinds.contains(kind))
         .map(|(start, size, _)| (start, size))
         .collect();
-    if frees.is_empty() {
+    if dropped.is_empty() {
         return Ok(());
     }
-    let removed: usize = frees.iter().map(|(_, size)| size).sum();
-    for &(start, size) in frees.iter().rev() {
+    let removed: usize = dropped.iter().map(|(_, size)| size).sum();
+    for &(start, size) in dropped.iter().rev() {
         moov.drain(start..start + size);
     }
     for parent in [0, udta, meta] {

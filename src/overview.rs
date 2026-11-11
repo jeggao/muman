@@ -123,8 +123,8 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
         &manifest.settings,
         &state,
         &dirs.library,
-        Some(&on_disk),
-        &BTreeSet::new(),
+        (Some(&on_disk), &BTreeSet::new()),
+        (false, false),
     )?;
     let mut planned = resolution.planned;
     crate::limit::as_written(&manifest, &state, &mut planned);
@@ -298,9 +298,10 @@ fn differences(file: &Path, was: &Plan, r: &Resolved) -> Vec<(String, String)> {
         add("lyrics", &before, "written again", "");
     }
     let values = |tags: &[(String, Vec<String>)], k: &str| {
-        tags.iter()
-            .find(|(t, _)| t == k)
-            .map_or_else(|| "none".to_string(), |(_, v)| v.join("; "))
+        tags.iter().find(|(t, _)| t == k).map_or_else(
+            || "none".to_string(),
+            |(_, v)| crate::tags::escaped(&v.join("; ")),
+        )
     };
     for ((k, _), why) in now.tags.iter().zip(&r.why.tags) {
         let (before, after) = (values(&was.tags, k), values(&now.tags, k));
@@ -315,7 +316,7 @@ fn differences(file: &Path, was: &Plan, r: &Resolved) -> Vec<(String, String)> {
     }
     for (k, v) in &was.tags {
         if !now.tags.iter().any(|(t, _)| t == k) {
-            add(k, &v.join("; "), "none", "");
+            add(k, &crate::tags::escaped(&v.join("; ")), "none", "");
         }
     }
     differ
@@ -631,12 +632,9 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let (mut unused, mut strays) = (Group::default(), Group::default());
-    for path in c
-        .store
-        .unused(&listed)
-        .iter()
-        .filter(|p| !p.starts_with(c.dirs.manual()))
-    {
+    let mut known = listed.clone();
+    known.extend(c.manifest.removed_keys());
+    for path in &c.store.purgeable(c.dirs, &known) {
         if c.store.leftovers().contains(path) {
             strays.add(&path.display().to_string());
         } else {

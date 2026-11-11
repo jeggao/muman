@@ -28,13 +28,13 @@ Without them, each folder is the platform's own:
 
 | Platform | Home | Library |
 |---|---|---|
-| Linux | `$XDG_DATA_HOME/muman`, usually `~/.local/share/muman` | `$XDG_MUSIC_DIR/muman`, usually `~/Music/muman` |
+| Linux | `$XDG_DATA_HOME/muman`, usually `~/.local/share/muman` | `$XDG_MUSIC_DIR/muman`, from the environment or else `user-dirs.dirs`, usually `~/Music/muman` |
 | macOS | `~/Library/Application Support/muman` | `~/Music/muman` |
 | Windows | `%LOCALAPPDATA%\muman\data` | `%USERPROFILE%\Music\muman` |
 
 Neither folder may hold the other, except that the library may sit
 beside `sources/` in the home. A command that writes refuses a library
-inside `sources/`, or a home inside the library.
+inside `sources/`, `history/` or `partial/`, or a home in the library.
 
 When you point muman at another library folder, it writes the library
 there. Files it finds there exactly as it wrote them, as after you
@@ -93,17 +93,16 @@ A quantity takes its unit after the number; the space is optional:
 |---|---|---|
 | Size | `"32 GiB"`, `"700 MB"`, `"4K"` | `[library] max_size`, `block_size`, `[history] max_size` |
 | Bitrate | `"160 kb/s"`, `"160 kbps"`, `"160k"` | `[audio] *_bitrate` |
-| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[audio.pick.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, a song's `lyrics_offset` |
+| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[audio.pick.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, never negative; a song's `lyrics_offset`, either way |
 | Frequency | `"500 Hz"`, `"1.5 kHz"` | `[audio.pick.bandwidth] step` |
-| Share | `"1 %"`, or `0.01` | `[audio.pick.stereo] incoherence`, `[audio.pick.clipping] cutoffs`, `[cover.pick.resolution] step` |
+| Share | `"1 %"`, or `0.01` | `[audio.pick.stereo] incoherence` and `[audio.pick.clipping] cutoffs`, at most 100 %, the cutoffs rising; `[cover.pick.resolution] step` |
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
-Every unit may also be spelled out, singular or plural, as `"2
-gibibytes"` or `"3 hours"`. `K`, `M`, `G` and `T` alone are binary
-sizes, as `KiB`; `KB`, `MB` and `GB` are decimal. A bare number is
-bytes for a size, hertz for a frequency and a fraction for a share. A
-bitrate, a time, a loudness or a level needs its unit.
+Every unit but `LUFS` and `LKFS` may be spelled out, as `"2 gibibytes"`
+or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary sizes; `KB`,
+`MB` and `GB` decimal. A bare number is bytes, hertz or a fraction; a
+bitrate, time, loudness or level needs its unit.
 
 | Table | Sets |
 |---|---|
@@ -202,10 +201,9 @@ defaults for finding peers:
 
 Local peer discovery and the IPv6 DHT are off. Once a torrent's files
 are fetched, aria2c seeds them for `[torrent] seed_time` at most, or
-until it has sent as much as it fetched. `[torrent] args` changes any
-of this: `["--enable-dht=false", "--enable-peer-exchange=false"]` keeps
-to a torrent's trackers, and `["--max-overall-upload-limit=50K"]` caps
-the upload.
+until it has sent as much as it fetched. `[torrent] args` changes all
+this: `["--enable-dht=false", "--enable-peer-exchange=false"]` keeps to
+a torrent's trackers; `["--max-overall-upload-limit=50K"]` caps uploads.
 
 ### Commands, servers and secrets
 
@@ -341,14 +339,14 @@ format = "webp"
 max_side = 600
 ```
 
-`scope = "folder"` writes one file in the song's folder, named by
-`name` and the format's extension: the cover most of the folder's songs
-take. Songs share an album when they share an album artist and album;
-a single is an album of its own. A folder holding songs of several
-albums gets no file, and `sync` says so, unless `mixed = "majority"`
-takes the album most of its songs are on. A file of yours at that name
-is left alone, even by `sync --force`. This writes the cover inside
-each song and as `cover.jpg` in its folder:
+`scope = "folder"` writes one file in the song's folder, named by `name`
+and the format's extension: the cover most of the folder's songs take.
+Songs share an album as their tags [agree on one](metadata.md#tags); a
+single is an album of its own. A folder holding songs of several albums gets no
+file, and `sync` says so, unless `mixed = "majority"` takes the album
+most of its songs are on; the library folder itself never gets one. A
+file of yours at that name is left alone, even by `sync --force`. This
+writes the cover inside each song and as `cover.jpg` in its folder:
 
 ```toml
 [[cover.out]]
@@ -411,8 +409,10 @@ without the extension. `/` in the template separates folders.
 | `bpm`, `key` | The tempo and the musical key, or empty |
 | `id` | The ID or file name of the song's audio source |
 
-A template naming any other variable is refused before a sync fetches
-or writes anything (exit 5); `list` and `edit` still work.
+A template that does not parse, names another variable or a filter or
+test there is not, or gives `pad` or `truncate` other than a whole
+number up to 255 is refused before a sync fetches or writes anything
+(exit 5); `list` and `edit` still work.
 
 Beside MiniJinja's own filters (`default`, `lower`, `upper`, `replace`,
 `first`, `join` and more), muman adds:
@@ -436,11 +436,10 @@ template = "{{ album_artist }}/{% if year %}{{ year }} - {% endif %}{{ album }}/
 template = "{{ genre | default('Unsorted', true) }}/{{ artist }} - {{ title }}"
 ```
 
-muman makes every tag value safe before the template sees it, so a `/`
-in a title never makes a folder; only the template's own `/` does. When two
-songs resolve to one path, the second song's source ID tells them
-apart: `Title [vid00000001]`. `muman status` shows each song's path
-before anything is written.
+Every tag value is made safe before the template sees it, so only the
+template's own `/` makes a folder. Two songs of one path are told apart
+by the second's source ID: `Title [vid00000001]`. `muman status` shows
+each song's path before anything is written.
 
 ## Safe names on every system
 
@@ -461,22 +460,23 @@ replaces what `windows` does, since Windows can hold no such name.
 `[library] replace` maps characters or strings to replacements of your
 own, applied first: `{ ":" = " -" }` turns `A: B` into `A - B`.
 
-File and folder names are cut to `max_name_bytes` and
-`max_folder_bytes` bytes of UTF-8, once in Unicode NFC, which no
-filesystem counts more strictly. A cut never splits a character as a
-reader sees one, such as a flag or a letter with its accent, unless
-that character alone is too long, and never ends on a joiner. A name
-keeps room for what tells it apart, so `max_name_bytes` takes at least
-40, more when a file beside a song has a longer tail than `.flac`, and
-`max_folder_bytes` at least 16. Neither takes more than 255, as much as
-any filesystem holds.
+File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
+bytes of UTF-8, once in Unicode NFC, which no filesystem counts more
+strictly. A cut never splits a character as a reader sees one, such as a
+flag or a letter with its accent, unless that character alone is too
+long, and never ends on a joiner. A name keeps room for what tells it
+apart, so `max_name_bytes` takes at least 40, more when a file beside a
+song has a longer tail than `.flac`, and `max_folder_bytes` at least 16.
+Neither takes more than 255, as much as any filesystem holds.
 
 Windows programs and some players stop at 260 characters for a whole
 path. `max_path` cuts each title so the full path, library folder
 included, stays within it, and a sync warns of any song it cannot fit.
-It counts characters as Windows does, in UTF-16 units, so an emoji
-counts two.
+Folders that would leave a title less than an even share are cut to
+that share, for every song in them alike. It counts characters as
+Windows does, in UTF-16 units, so an emoji counts two.
 
 Two names a case-insensitive filesystem holds as one, as `Song` and
 `SONG`, or `ΟΔΟΣ` and `οδοσ`, are told apart by a suffix naming the
-song's source, so a library copied to Windows or macOS loses neither.
+song's source, so a library copied to Windows or macOS loses neither; so
+is a file named as another song's folder.

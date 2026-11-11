@@ -233,10 +233,11 @@ impl Read {
             .collect()
     }
 
-    /// Save the recorded edits unless a picked song changed meanwhile.
-    pub fn save(&mut self, picked: &[usize]) -> Result<()> {
+    /// Save the recorded edits unless a picked song changed meanwhile,
+    /// as `run` records.
+    pub fn save(&mut self, picked: &[usize], run: &mut crate::history::Run) -> Result<()> {
         let expected = self.songs(picked);
-        let changed = self.manifest.save_if_unchanged(&expected)?;
+        let changed = self.manifest.save_if_unchanged(&expected, run)?;
         if !changed.is_empty() {
             self.manifest.discard();
             bail!(
@@ -254,10 +255,10 @@ impl Read {
 
 /// Every file in the store a key brings: what yt-dlp fetched under its
 /// ID, or a manual or torrent's file with its own lyrics and pictures.
-fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
+fn store_files(store: &Store, key: &SourceKey) -> Vec<PathBuf> {
     match key {
         SourceKey::Remote { site, id } if crate::store::kept(site).is_some() => {
-            crate::store::kept(site).map_or_else(Vec::new, |k| k.files(dirs, id))
+            crate::store::kept(site).map_or_else(Vec::new, |k| store.record_files(k, id))
         }
         SourceKey::Remote { .. } => store.fetched_files(key),
         SourceKey::Manual(_) | SourceKey::Torrent(_) => {
@@ -283,7 +284,7 @@ pub fn remove<W: Write>(
     purge: bool,
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
-    run: &mut crate::history::Run,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -337,7 +338,7 @@ pub fn remove<W: Write>(
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
-                    for file in store_files(&store, dirs, key) {
+                    for file in store_files(&store, key) {
                         crate::ui::line(
                             out,
                             &format!("    keeps {}, which a removed song lists", file.display()),
@@ -345,7 +346,7 @@ pub fn remove<W: Write>(
                     }
                     continue;
                 }
-                for file in store_files(&store, dirs, key) {
+                for file in store_files(&store, key) {
                     let how = if own { "trashes" } else { "deletes" };
                     crate::ui::line(out, &format!("    {how} {}", file.display()))?;
                     doomed.push((file, own));
@@ -367,16 +368,14 @@ pub fn remove<W: Write>(
         };
         read.manifest.edit(Edit::Remove {
             key: id.clone(),
-            note: view.name(),
+            note: view.note(),
         });
     }
+    let run = later.begin()?;
     for (file, _) in doomed.iter().filter(|(_, own)| *own) {
         run.trashed(&dirs.home, file);
     }
-    if doomed.iter().any(|(_, own)| *own) {
-        run.checkpoint(&dirs.home)?;
-    }
-    read.save(&picked)?;
+    read.save(&picked, run)?;
     purge_all(doomed)?;
     Ok(true)
 }
@@ -462,11 +461,13 @@ fn removal(
 
 /// List again the removed songs the query picks. Returns whether any
 /// was.
-pub fn restore<W: Write>(
+pub fn restore<R: crate::runner::Runner, W: Write>(
+    runner: &R,
     dirs: &Dirs,
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut manifest = Manifest::load(&dirs.home)?;
@@ -492,12 +493,18 @@ pub fn restore<W: Write>(
     }
     // A file of your own `remove --purge` trashed would leave its song
     // listed with nothing to make it from, and every sync failing.
+    // A file moved within the folder is followed by the sync after.
     let store = Store::scan(dirs)?;
+    let mut unlisted =
+        crate::reconcile::Unlisted::of(&manifest, &state, &store, crate::store::SETTLING);
+    let scratch = crate::atomic::Scratch::new()?;
+    let hear = crate::reconcile::hearing(runner, scratch.path());
+    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
     let gone: Vec<String> = picked
         .iter()
         .flat_map(|n| &manifest.removed[*n].sources)
         .filter_map(|k| match k {
-            SourceKey::Manual(m) if store.locate(k).is_none() => {
+            SourceKey::Manual(m) if store.locate(k).is_none() && !moves.moved.contains_key(k) => {
                 Some(format!("  {}", dirs.manual().join(m.path()).display()))
             }
             _ => None,
@@ -542,7 +549,7 @@ pub fn restore<W: Write>(
     for id in picked.iter().filter_map(|n| views[*n].id()) {
         manifest.edit(Edit::Restore(id.clone()));
     }
-    manifest.save()?;
+    manifest.save(later.begin()?)?;
     Ok(true)
 }
 
@@ -552,6 +559,20 @@ pub(crate) enum Assign {
     Tag(String, Vec<String>),
     Pin(&'static str, Option<String>),
     Offset(Option<i64>),
+    /// The MusicBrainz release the song is pinned to, or none.
+    Release(Option<String>),
+}
+
+/// Why `name` is no tag `set` sets, if it is none: a field a query reads
+/// of a song ([`crate::terms::DERIVED`]) that is no pin, or how the song
+/// list names a song's parts.
+pub(crate) fn no_tag(name: &str) -> Option<String> {
+    let lower = name.trim().to_ascii_lowercase();
+    let pin = ["audio", "cover", "lyrics"].contains(&lower.as_str());
+    let derived = crate::terms::DERIVED.contains(&lower.as_str()) && !pin;
+    (derived || ["sources", "id", "held"].contains(&lower.as_str())).then(|| {
+        format!("{lower} is no tag; set a tag, audio, cover, lyrics, lyrics_offset or release")
+    })
 }
 
 /// Refuse `term`, setting a lyrics offset of `ms`, when it is no song's.
@@ -581,6 +602,9 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
             continue;
         };
         let lower = name.to_ascii_lowercase();
+        if let Some(why) = no_tag(&lower) {
+            return refuse(format!("`{term}`: {why}"));
+        }
         match lower.as_str() {
             "audio" | "cover" | "lyrics" => {
                 let pin = match lower.as_str() {
@@ -620,12 +644,17 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                 refuse_offset(term, ms)?;
                 other.push(Assign::Offset(ms));
             }
-            // What a query reads of a song, or how the song list names its
-            // parts, but no tag a file carries.
-            "key" | "path" | "format" | "sources" | "id" | "held" => {
-                return refuse(format!(
-                    "`{term}`: {lower} is no tag; set a tag, audio, cover, lyrics or lyrics_offset"
-                ));
+            "release" => {
+                let id = match v.map(str::trim).filter(|v| !v.is_empty()) {
+                    None => None,
+                    Some(v) => match crate::tags::Kind::Mbid.read(v) {
+                        Ok(id) => Some(id),
+                        Err(_) => {
+                            return refuse(format!("`{term}` is no MusicBrainz release ID"));
+                        }
+                    },
+                };
+                other.push(Assign::Release(id));
             }
             _ => {
                 // Shown and stored as it takes effect; one that reads as
@@ -661,6 +690,7 @@ impl Assign {
             Self::Tag(name, _) => name,
             Self::Pin(pin, _) => pin,
             Self::Offset(_) => "lyrics_offset",
+            Self::Release(_) => "release",
         }
     }
 
@@ -668,7 +698,7 @@ impl Assign {
     pub(crate) fn describe(&self, view: &View) -> String {
         match self {
             Self::Tag(name, values) => {
-                let now = view.values(name).join("; ");
+                let now = crate::tags::escaped(&view.values(name).join("; "));
                 let now = if now.is_empty() {
                     "nothing".to_string()
                 } else {
@@ -677,7 +707,10 @@ impl Assign {
                 if values.is_empty() {
                     format!("{name}: {now} → what the sources offer")
                 } else {
-                    format!("{name}: {now} → {}", values.join("; "))
+                    format!(
+                        "{name}: {now} → {}",
+                        crate::tags::escaped(&values.join("; "))
+                    )
                 }
             }
             Self::Pin(pin, Some(v)) if v == "false" => format!("{pin}: none taken"),
@@ -686,6 +719,8 @@ impl Assign {
             Self::Offset(Some(ms)) if *ms < 0 => format!("lyrics earlier by {} ms", -ms),
             Self::Offset(Some(ms)) => format!("lyrics later by {ms} ms"),
             Self::Offset(None) => "lyrics offset: none".to_string(),
+            Self::Release(Some(id)) => format!("release: pinned to {id}"),
+            Self::Release(None) => "release: chosen with its album".to_string(),
         }
     }
 
@@ -717,13 +752,43 @@ impl Assign {
                 table.remove("lyrics_offset_ms");
                 table.remove("lyrics_offset");
             }
+            Self::Release(Some(id)) => {
+                table.insert("release", value(id.as_str()));
+            }
+            Self::Release(None) => {
+                table.remove("release");
+            }
         }
         Ok(())
     }
 }
 
+/// Whether `a` changes any song at `picked` as the song list holds it:
+/// one already so, as a pin taken off a song pinned to nothing, is no
+/// change.
+pub(crate) fn changes(read: &Read, picked: &[usize], a: &Assign) -> Result<bool> {
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.manifest.songs[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
+    for n in picked {
+        let song = &read.manifest.songs[*n];
+        let Some(table) = song.id().and_then(|id| tables.get_mut(id)) else {
+            continue;
+        };
+        let before = table.to_string();
+        a.apply(table, song)?;
+        if table.to_string() != before {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The songs at `picked` with `assigns` applied, each said to `out` as
-/// it changes; a song already so is left out.
+/// it changes, by the assignments that change it; a song already so is
+/// left out.
 pub(crate) fn rewrite<W: Write>(
     read: &Read,
     picked: &[usize],
@@ -743,16 +808,20 @@ pub(crate) fn rewrite<W: Write>(
         let Some(mut table) = tables.remove(&id) else {
             bail!("{id} is no longer listed");
         };
-        let before = table.to_string();
+        let mut said = Vec::new();
         for a in assigns {
+            let before = table.to_string();
             a.apply(&mut table, song)?;
+            if table.to_string() != before {
+                said.push(a.describe(view));
+            }
         }
-        if table.to_string() == before {
+        if said.is_empty() {
             continue;
         }
         crate::ui::line(out, &format!("  ~ {}", named(view)))?;
-        for a in assigns {
-            crate::ui::line(out, &format!("    {}", a.describe(view)))?;
+        for line in said {
+            crate::ui::line(out, &format!("    {line}"))?;
         }
         songs.push((id, Rewritten::Table(SongTable(table))));
     }
@@ -774,6 +843,7 @@ pub fn set<W: Write>(
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let (query_terms, assigns) = split_terms(terms).map_err(|e| Refused(format!("{e:#}")))?;
@@ -781,7 +851,7 @@ pub fn set<W: Write>(
         if let Some(p) = prompter
             && !query_terms.is_empty()
         {
-            return crate::guided::edit(dirs, &query_terms, confirm, p, out);
+            return crate::guided::edit(dirs, &query_terms, confirm, p, later, out);
         }
         return refuse(
             "Nothing to set: give NAME=VALUE or NAME!, or a query alone on a terminal to set \
@@ -818,7 +888,7 @@ pub fn set<W: Write>(
         songs,
         new: Vec::new(),
     });
-    read.save(&picked)?;
+    read.save(&picked, later.begin()?)?;
     Ok(true)
 }
 
@@ -855,6 +925,28 @@ mod tests {
             ]
         );
         assert!(split_terms(&strings(&["cover=false"])).is_err());
+        for term in [
+            "from=manual",
+            "HAS=title",
+            "key=x",
+            "path=x",
+            "format=opus",
+            "id!",
+        ] {
+            let e = split_terms(&strings(&[term])).unwrap_err();
+            assert!(e.downcast_ref::<Refused>().is_some(), "{term}: {e:#}");
+            assert!(format!("{e:#}").contains("is no tag"), "{term}: {e:#}");
+        }
+        let id = "00000000-0000-4000-8000-00000000000A";
+        let (_, assigns) = split_terms(&strings(&[&format!("release={id}")])).unwrap();
+        assert_eq!(assigns, [Assign::Release(Some(id.to_ascii_lowercase()))]);
+        let (_, assigns) = split_terms(&strings(&["release!"])).unwrap();
+        assert_eq!(assigns, [Assign::Release(None)]);
+        let e = split_terms(&strings(&["release=abc"])).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("no MusicBrainz release ID"),
+            "{e:#}"
+        );
         assert!(split_terms(&strings(&["lyrics_offset_ms=soon"])).is_err());
         assert!(split_terms(&strings(&["genre=a", "genre!"])).is_err());
         let e = split_terms(&strings(&["format=mp3"])).unwrap_err();

@@ -153,7 +153,7 @@ pub(super) fn edit(m: &Manifest, keeper: usize, others: &[usize], winners: &Tags
     let mut songs = vec![(id, Rewritten::Table(SongTable(table)))];
     for o in others {
         let other = m.songs[*o].id().context("a song lists no source")?.clone();
-        let note = other.to_string();
+        let note = other.to_string().into();
         songs.push((other, Rewritten::Removed(note)));
     }
     Ok(Edit::Rewrite {
@@ -202,7 +202,11 @@ held."youtube.com:vid00000001" = { audio = "7c1cfa040b3b82c0" }
         let edit = edit(&m, 0, &[1], &winners).unwrap();
         m.trial(std::slice::from_ref(&edit)).unwrap();
         m.edit(edit);
-        assert_eq!(m.save_if_unchanged(&[]).unwrap(), Vec::<SourceKey>::new());
+        assert_eq!(
+            m.save_if_unchanged(&[], &mut crate::manifest::Unrecorded)
+                .unwrap(),
+            Vec::<SourceKey>::new()
+        );
         let m = Manifest::load(dir.path()).unwrap();
         assert_eq!(m.songs.len(), 1, "{:?}", m.songs);
         assert!(m.removed.is_empty(), "a merged song leaves no tombstone");

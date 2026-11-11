@@ -17,7 +17,20 @@
 //! - leave it as it is, or stop.
 //!
 //! Each change is saved as it is made, so stopping keeps what was
-//! decided, and the run that saves them is one `undo` reverses.
+//! decided, under one run begun at the first ([`crate::history::Later`]):
+//! its record is written ahead of every save, so a review stopped
+//! anywhere, by Ctrl-C or a kill, leaves no change a record does not
+//! cover, and one `undo` reverses them all. The run lets go of the runs
+//! lock before each next question, so no other run waits on one; a run
+//! begun meanwhile goes on in its record, as in a stopped run's, and ends
+//! it, the answers before then undone with that run. The sync after the
+//! last answer goes on in the record too.
+//!
+//! One run per answer would also leave none uncovered, but take as many
+//! `undo`s as answers and push older runs out of the history's count,
+//! and its sync could not be one: a run that only syncs records no change
+//! of the song list, so undoing it would take back the library alone,
+//! which the sync after that undo writes again.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -81,6 +94,7 @@ pub fn review<W: Write>(
     dirs: &Dirs,
     terms: &[String],
     prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let Some(p) = prompter else {
@@ -135,9 +149,11 @@ pub fn review<W: Write>(
                     all: true,
                     dry_run: false,
                 };
-                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, out)?;
+                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, later, out)?;
             }
-            Answer::Release => changed |= pin_release(dirs, song, id, &read.state, p, out)?,
+            Answer::Release => {
+                changed |= pin_release(dirs, song, id, &read.state, p, later, out)?;
+            }
             Answer::Never {
                 field,
                 torrent,
@@ -149,7 +165,7 @@ pub fn review<W: Write>(
                     channel: channel.clone(),
                     drop: vec![field.vorbis().to_lowercase()],
                 });
-                m.save()?;
+                m.save(later.begin()?)?;
                 crate::ui::info(
                     out,
                     &format!("Added to [[tags.from]]: {}", answers[chosen].label()),
@@ -159,6 +175,7 @@ pub fn review<W: Write>(
             Answer::Skip => {}
             Answer::Stop => break,
         }
+        later.let_go();
     }
     Ok(changed)
 }
@@ -228,13 +245,15 @@ fn releases(song: &Song, state: &State) -> Vec<(String, String)> {
 }
 
 /// Pin `song`, listed by `id`, to a release its recording is on, or take
-/// away the pin it has. Returns whether the song list changed.
+/// away the pin it has, saved under the run `later` begins. Returns
+/// whether the song list changed.
 fn pin_release<W: Write>(
     dirs: &Dirs,
     song: &Song,
     id: &SourceKey,
     state: &State,
     p: &mut dyn Prompter,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let releases = releases(song, state);
@@ -254,7 +273,7 @@ fn pin_release<W: Write>(
         key: id.clone(),
         release: release.clone(),
     });
-    m.save()?;
+    m.save(later.begin()?)?;
     let said = match &release {
         Some(r) => format!("Pinned to release {r}"),
         None => "Its release pin taken away".into(),
@@ -328,7 +347,14 @@ mod tests {
             library: dir.path().join("library"),
             locks: None,
         };
-        let e = review(&dirs, &[], None, &mut Vec::new()).unwrap_err();
+        let e = review(
+            &dirs,
+            &[],
+            None,
+            &mut crate::history::Later::new(&dirs.home).unwrap(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("needs a terminal"), "{e}");
     }
 }

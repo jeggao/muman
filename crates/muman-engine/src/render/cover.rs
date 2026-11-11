@@ -287,7 +287,7 @@ pub(super) fn cover_plans<R: Runner>(
 
 /// The file the cover at `at` of `source` is in, as its own bytes; none
 /// for a picture stream, which a run reads. An attachment is dumped out of
-/// its file into `scratch`, as is an MP4's picture.
+/// its file into `scratch`, as is a picture of its tags `lofty` reads.
 pub(super) fn picture_file<R: Runner>(
     runner: &R,
     at: &CoverAt,
@@ -311,9 +311,9 @@ pub(super) fn picture_file<R: Runner>(
             .ok_or_else(|| anyhow!("the picture beside {} is gone", source.path.display()))?,
         CoverAt::File => source.path.clone(),
         CoverAt::Atom { index } => {
-            let bytes = crate::picture::mp4_covers(&source.path)
-                .into_iter()
-                .nth(*index)
+            let bytes = crate::picture::tag_pictures(&source.path)
+                .and_then(|pictures| pictures.into_iter().nth(*index))
+                .map(|(bytes, _)| bytes)
                 .ok_or_else(|| anyhow!("{} holds no picture {index}", source.path.display()))?;
             let name = crate::atomic::Name::new("atom".to_string())?;
             crate::atomic::write(scratch, &name, &bytes)?;

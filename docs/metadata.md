@@ -24,15 +24,21 @@ Each field describes either the recording or the release.
   totals, country and release IDs, all come from the one source whose
   album ranks best. So one release's IDs never mix with another's. Of
   albums that rank alike, the source with more of the release's fields
-  wins.
+  wins. With no album artist offered, muman fills in the first artist,
+  less anyone it features: `Marlo Venn feat. Kiri Hoshino` fills in
+  `Marlo Venn`, so a guest on one song leaves its album whole.
 
 Then the songs of one album agree: a MusicBrainz release group, else
 an album artist and album alike but for case and punctuation, in one
-year. Songs on several releases of it take the one most can be on, as
+year. A song with no date joins the songs of its name dated in one
+year; of two, as an original and its reissue, it stays an album of its
+own. The songs of one album are levelled as one too. Songs on several releases of it take the one most can be on, as
 [releases rank](library.md#musicbrainz-and-acoustid); a mono mix on a mono edition keeps its own. An
 album spelled two ways, as `On The Border` and `On the Border`, is
-spelled as most of its songs spell it, and songs on one release share
-its date, label and IDs. A tag set by hand never changes nor counts.
+spelled as most of its songs spell it; of spellings as common, the one
+with more words opening with a capital, then fewer capitals, whatever
+order the songs were added in. Songs on one release share its date,
+label and IDs. A tag set by hand never changes nor counts.
 `original_year` puts every edition in one folder
 ([configuration](configuration.md#the-path-template)).
 
@@ -64,7 +70,9 @@ YouTube Music track, and an upload; `files-first` puts files first;
 The kind believed first decides:
 
 - how a value its sources agree on is spelled, so a file's typo gives
-  way to MusicBrainz's spelling;
+  way to MusicBrainz's spelling. Of sources believed alike that spell
+  it alike but for case and punctuation, the spelling most of them
+  write wins, then as an album's tie goes, whatever their order;
 - which artists a song credits when its sources credit others, so a
   concert's record crediting each singer wins over a file crediting its
   star; a record vetting is unsure of never does, nor one crediting no
@@ -223,7 +231,8 @@ against another source:
   `[no label]` and `[non-album tracks]`, a tagger's `Unknown Artist`, a
   video site's category given as a genre, an artist that is a
   soundtrack's short name, as `Night Ferry OST 2`, and a release country
-  that is no two-letter code.
+  that is no two-letter code. Each is told whatever its case, spacing,
+  quotes or hyphens, so typography never keeps one.
 - **Watermarks**, the name of whoever shared the files, written into
   the work, label, copyright, comment or grouping: a value that stands as
   a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
@@ -282,9 +291,11 @@ status` names `style` among what changed a value.
 
 One rip tags every file the same wrong way, and one channel titles
 every upload one way. A `[[tags.from]]` in the song list says what the
-sources of one torrent, by its info hash, or of one channel, by the
-name its uploads credit where they name no artist of their own, are
-not believed for, before any rule cleans them:
+sources of one torrent, by its info hash of 40 or 64 hex digits, or of
+one channel, by the name its uploads credit where they name no artist
+of their own, case aside in any script, are not believed for, before any rule cleans them. Each
+table names one torrent or one channel, and muman refuses one naming
+both or a hash that is none:
 
 ```toml
 [[tags.from]]
@@ -312,6 +323,11 @@ Comets (Album Version)` agrees with `Paper Comets`. Lyrics are cleaned as a
 song is written. Tags you set in a song's or an album's `tags.<name>`
 are never cleaned.
 
+Lyrics are read alike from a file and a tag, whatever the switches say:
+a control character, as DOS's end-of-file mark or a terminal's colour
+code, is dropped. A lyrics file that reads as other data gives no
+lyrics, and is said when its song is measured.
+
 Each rule is a switch under `[tags.clean.<tier>]`, or
 `[lyrics.clean.<tier>]` for lyrics; the song list lists every one.
 `muman status` names each rule that changed a tag, as `<tier>.<key>`.
@@ -322,6 +338,17 @@ Each rule is a switch under `[tags.clean.<tier>]`, or
 | `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, credits, the title and artist restated around the lyrics, ID tags in untimed lyrics, a tag given twice, and from subtitles the uploader's notes around the lyrics and descriptions of sounds |
 | `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | Put lines in time order; join a subtitle's line wrapped in two; keep once a subtitle written again for each frame |
 | `guesswork` | Read a video title by convention, as `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | Keep, as one line, a subtitle line typed out over three lines or more |
+
+Of the `packaging` lyric rules, `cues` drops a line that names a
+section or a sound, not sung: wholly in brackets of any kind, `[Intro]`,
+`(Bridge)`, `{Chorus}`, `【MV】`, with a count, a number or who sings,
+as `[Chorus x2]` or `[Verse 2: Ada Quill]`; out of brackets, a
+section's name closed by a colon or in capitals, as `Verse 1:` or
+`CHORUS`. `Chorus` alone in small letters may be sung, and stays.
+`credits` drops a credit, as `Written by …`, `Translated by …`, `Mix:
+…` or a copyright line, `© 2024 …`, before the first line sung or
+after the last; between two lines sung, it is sung. `headers` drops the
+ID tags, as `[ar:]`, an untimed player would show as lines.
 
 Flipping a lyric switch writes every song's lyrics again. A new title
 or artist writes again the lyrics of a song cleaned by its old one.

@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -24,17 +24,17 @@ use crate::Job;
 use crate::acquire::{Acquire, Additions, Fetcher, Proposal};
 use crate::cli::Matching;
 use crate::dirs::Dirs;
-use crate::history::Run;
+use crate::history::{Recording, Run};
 use crate::http::HttpTransport;
 use crate::identify::Mode;
-use crate::manifest::{Edit, Manifest, Tags};
-use crate::reconcile::Options;
+use crate::manifest::{Edit, Manifest, Recorder, Tags};
+use crate::reconcile::{Options, Unlisted};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::Store;
 use crate::ui::Prompter;
-use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, store, ui};
+use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, ui};
 
 /// What `sync` was given: its flags, each on its own.
 #[derive(Debug, Clone, Copy)]
@@ -71,9 +71,9 @@ pub(crate) fn run<R: Runner, W: Write>(
     let mut due = crate::hooks::Due::default();
     let done = (|| {
         if request.update_defaults {
-            update_settings(&dirs.home, out)?;
+            update_settings(&dirs.home, &mut run, out)?;
         }
-        let proposals = dropped_in(dirs, job.settling, out)?;
+        let proposals = dropped_in(runner, dirs, job.settling, &mut run, out)?;
         if !job.offline {
             crate::reconcile::note_damaged(runner, dirs, request.retry, out)?;
         }
@@ -86,31 +86,33 @@ pub(crate) fn run<R: Runner, W: Write>(
             tags: Vec::new(),
             loose: false,
         };
-        list(runner, dirs, proposals, &how, prompter, out)?;
+        list(runner, dirs, proposals, &how, prompter, &mut run, out)?;
         let ask = lookup::Ask {
             rematch: request.rematch,
             persist: request.until_done,
         };
-        ok &= look_up(job, runner, http, ask, &BTreeSet::new(), out)?;
+        ok &= look_up(job, runner, http, ask, &BTreeSet::new(), &mut run, out)?;
         let opts = Options {
             force: request.force,
             retry,
             accept: request.accept,
             ..Options::default()
         };
-        ok &= crate::reconcile_now(job, runner, opts, Some(&mut run), &mut due, out)?;
+        ok &= crate::reconcile_now(job, runner, opts, Recording::Run(&mut run), &mut due, out)?;
         Ok(ok)
     })();
     crate::finished(job, runner, run, done, &due, out)
 }
 
-/// Make every lookup due, as `lookup::run` does.
+/// Make every lookup due, as `lookup::run` does, its saves as `run`
+/// records.
 pub(crate) fn look_up<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     http: &(dyn HttpTransport + Sync),
     ask: lookup::Ask,
     declined: &BTreeSet<SourceKey>,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<bool> {
     if job.offline {
@@ -118,7 +120,7 @@ pub(crate) fn look_up<R: Runner, W: Write>(
     }
     let (ok, ()) = network(job, runner, out, |acquire| {
         Ok((
-            lookup::run(acquire, &job.dirs, http, &job.throttles, ask, declined)?,
+            lookup::run(acquire, &job.dirs, http, &job.throttles, ask, declined, run)?,
             (),
         ))
     })?;
@@ -142,7 +144,11 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     let mut state = State::load(&job.dirs.home)?;
     let base = state.caches();
     let root = job.dirs.torrent();
-    let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
+    let partial = job
+        .dirs
+        .home
+        .join(crate::dirs::PARTIAL)
+        .join(crate::source::TORRENT);
     let places = crate::aria2::Places {
         store: &root,
         partial: &partial,
@@ -292,11 +298,15 @@ fn torrents_due<W: Write>(
 
 /// Move the song list's settings still at an earlier edition's default
 /// to the current one, saying which moved.
-pub(crate) fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
+pub(crate) fn update_settings<W: Write>(
+    home: &Path,
+    run: &mut dyn Recorder,
+    out: &mut W,
+) -> Result<()> {
     let mut manifest = Manifest::load(home)?;
     let moved = manifest.stale_defaults.clone();
     manifest.edit(Edit::UpdateDefaults);
-    manifest.save()?;
+    manifest.save(run)?;
     if moved.is_empty() {
         ui::info(
             out,
@@ -322,7 +332,7 @@ pub(crate) fn network<R: Runner, W: Write, T>(
     let store = Store::scan(&job.dirs)?;
     let temp = atomic::Scratch::new()?;
     let ytdlp = job.dirs.ytdlp();
-    let partial = job.dirs.home.join("partial");
+    let partial = job.dirs.home.join(crate::dirs::PARTIAL);
     clear_stale(
         &partial,
         manifest.settings.ytdlp.keep_partial,
@@ -401,8 +411,13 @@ pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Opt
 }
 
 /// Record what a network step found beyond its proposals: albums and
-/// renames in the song list, replaced uploads in the state.
-pub(crate) fn record(dirs: &Dirs, additions: Additions) -> Result<Vec<Proposal>> {
+/// renames in the song list, as `run` records, replaced uploads in the
+/// state.
+pub(crate) fn record(
+    dirs: &Dirs,
+    additions: Additions,
+    run: &mut dyn Recorder,
+) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
     for (source, tracks) in additions.albums {
         manifest.edit(Edit::AddAlbum {
@@ -413,7 +428,7 @@ pub(crate) fn record(dirs: &Dirs, additions: Additions) -> Result<Vec<Proposal>>
     for (from, to) in additions.renames {
         manifest.edit(Edit::Rename { from, to });
     }
-    manifest.save()?;
+    manifest.save(run)?;
     State::keep_lookups(&dirs.home, &additions.looked_up, &additions.replaced)?;
     Ok(additions.proposals)
 }
@@ -430,13 +445,14 @@ pub(crate) struct Listing {
 
 /// List each proposal as a song, or as a source of the song it is the
 /// same recording as, and set the tags given on each: whether any song
-/// was given them.
+/// was given them; saved as `run` records.
 pub(crate) fn list<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     proposals: Vec<Proposal>,
     how: &Listing,
     prompter: Option<&mut dyn Prompter>,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<bool> {
     let edits = identify::identify(
@@ -467,23 +483,23 @@ pub(crate) fn list<R: Runner, W: Write>(
             });
         }
     }
-    manifest.save()?;
+    manifest.save(run)?;
     Ok(any)
 }
 
 /// Song files dropped into the manual folder that no song lists, each a
-/// proposal; a listed file moved within the folder is followed instead.
-pub(crate) fn dropped_in<W: Write>(
+/// proposal; a listed file moved within the folder is followed instead,
+/// and one deleted by hand taken out of its song, by
+/// [`crate::reconcile::Following`], the song list saved as `run` records.
+pub(crate) fn dropped_in<R: Runner, W: Write>(
+    runner: &R,
     dirs: &Dirs,
     wait: Duration,
+    run: &mut Run,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let listed = manifest.keys();
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
     for twin in store.twins() {
         ui::warning(
             out,
@@ -494,20 +510,30 @@ pub(crate) fn dropped_in<W: Write>(
             ),
         )?;
     }
-    let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), wait);
-    // A file listed before is no new one still copying in, however
-    // recently it was touched.
-    settling.retain(|path| {
-        let key = SourceKey::Manual(path.into());
-        let was_listed = state.listed.contains(&key);
-        if was_listed {
-            ready.push(key);
-        }
-        !was_listed
-    });
+    let scratch = atomic::Scratch::new()?;
+    let (moves, unlisted, state) = {
+        let lock = atomic::Lock::folder(&dirs.home)?;
+        let mut state = State::load(&dirs.home)?;
+        let following = crate::reconcile::Following {
+            home: &dirs.home,
+            lock: &lock,
+            rec: Recording::Run(run),
+            dry_run: false,
+            settling: wait,
+            listing: true,
+        };
+        let hear = crate::reconcile::hearing(runner, scratch.path());
+        let (moves, unlisted) = following.follow(&mut manifest, &mut state, &store, hear, out)?;
+        (moves, unlisted, state)
+    };
+    let Unlisted {
+        mut ready,
+        settling,
+        ..
+    } = unlisted;
     let unlisted: Vec<SourceKey> = ready
         .iter()
-        .filter(|k| state.listed.contains(k))
+        .filter(|k| state.listed.contains(k) && !moves.anew.contains(k))
         .cloned()
         .collect();
     ready.retain(|k| !unlisted.contains(k));
@@ -533,28 +559,7 @@ pub(crate) fn dropped_in<W: Write>(
             ),
         )?;
     }
-    let renames = store::moved_manual(
-        &listed,
-        |k| state.facts.get(k).map(|f| f.rev.as_str()),
-        &store,
-        &mut ready,
-    );
-    for (gone, to) in &renames {
-        ui::info(out, &format!("Moved: {gone} is now {to}"))?;
-        manifest.edit(Edit::Rename {
-            from: gone.clone(),
-            to: to.clone(),
-        });
-    }
-    manifest.save()?;
-    // So the song's plan names its file anew and the song is not written
-    // again for a file that only moved.
-    if !renames.is_empty() {
-        let _lock = atomic::Lock::folder(&dirs.home)?;
-        let mut state = State::load(&dirs.home)?;
-        state.rekey(&renames)?;
-        state.save(&dirs.home)?;
-    }
+    manifest.save(run)?;
     Ok(ready
         .into_iter()
         .map(|key| Proposal {

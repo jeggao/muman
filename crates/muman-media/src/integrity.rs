@@ -5,12 +5,20 @@
 //! - **Said:** the audio stream's own length, [`crate::probe::Audio::duration`].
 //!   Never the file's, which counts every stream: a `WebVTT` subtitle
 //!   running a second or two past the audio would make every such video
-//!   look cut off.
+//!   look cut off. Never a length ffmpeg guessed from the bitrate either,
+//!   for a file not known to state one ([`crate::probe::Probed::guessed`]): a
+//!   whole VBR MP3 with no Xing header, its first frames quieter than the
+//!   rest, said 62 s for 40 s. Guessed from the bytes there are, such a
+//!   length never shows a cut, and only makes one up, so the file is
+//!   judged by its span and its decode alone.
 //! - **Span:** from where the stream's first packet starts to where its
 //!   last ends ([`Timeline`]), as the packets list them without decoding.
 //!   Not the sum of the packets' durations: Matroska leaves some packets'
 //!   durations out, so healthy files sum about 2 s short, and corrupt
-//!   packets can sum to more than the file runs.
+//!   packets can sum to more than the file runs. A duration no packet can
+//!   last, wrapped around from a negative one ([`WRAP`]) or past
+//!   [`LONGEST_PACKET_S`], ends nothing: one such packet at the end of a
+//!   whole Ogg file spanned 27 hours.
 //! - **Decoded:** the frames the decoder produced, counted as the
 //!   analysis pass reads them.
 //! - **Stated:** the length the site gave, for what yt-dlp fetched, kept
@@ -41,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/1";
+pub const METHOD: &str = "integrity/5";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -55,12 +63,30 @@ const STATED_SLACK: (f64, f64) = (2.0, 0.01);
 /// A gap between packets longer than this is a hole: five Opus packets.
 const HOLE_S: f64 = 0.1;
 
+/// Ticks past which a packet's listed duration wrapped around 32 bits: a
+/// negative one, as an Ogg page whose granule ends inside its last packet
+/// trims that packet, listed unsigned. A Vorbis file remuxed with
+/// `-c copy` listed its last packet as 4,294,966,620 ticks, 2^32 less 676,
+/// and read as lacking 97,392 s of its 207 s.
+const WRAP: i64 = 1 << 32;
+
+/// Seconds no audio packet lasts: the longest frames of any codec are a
+/// FLAC block of 65,535 samples, 1.5 s at 44.1 kHz. A packet listed as
+/// longer says nothing of where it ends, and counts as one listing no
+/// duration.
+const LONGEST_PACKET_S: f64 = 10.0;
+
 /// What a source's audio was found to hold, in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Measure {
-    /// The audio stream's own length, where it says one.
+    /// The audio stream's own length, where it states one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<f64>,
+    /// Whether the file states no length, so that the one ffprobe gave
+    /// was a guess, left out of `said`, and the audio plays to where its
+    /// packets end.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guessed: bool,
     pub decoded: f64,
     /// Where the first packet starts and the last ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +176,23 @@ impl Damage {
             Self::Missing { seconds, .. } => (seconds * 1000.0).round() as i64,
         }
     }
+
+    /// Milliseconds of its audio that may be lost anywhere in it, which
+    /// comparing it lets it lack ([`crate::align::align_lacking`]): what is
+    /// missing, or what a cut stream says past its packets' end, since
+    /// packets a demuxer skips as unreadable end the stream that much
+    /// early; and [`SLACK_S`] more, as far as the lengths may be off. An
+    /// MP3 file with a run of its bytes zeroed said 2.51 s past its end and
+    /// had lost 2.61 s.
+    #[must_use]
+    pub fn lost_ms(&self) -> i64 {
+        let lost = match *self {
+            Self::Cut { said, ends } => said - ends,
+            Self::Short { .. } => return 0,
+            Self::Missing { seconds, .. } => seconds,
+        };
+        ((lost + SLACK_S) * 1000.0).round() as i64
+    }
 }
 
 /// Where a stream's packets lie, from a `framecrc` list of them.
@@ -175,16 +218,28 @@ impl Timeline {
         if den <= 0.0 {
             return None;
         }
+        let seconds = |ticks: i64| ticks as f64 * num / den;
+        let length = |ticks: i64| {
+            let ticks = if (WRAP / 2..WRAP).contains(&ticks) {
+                ticks - WRAP
+            } else {
+                ticks
+            };
+            if seconds(ticks) > LONGEST_PACKET_S {
+                0
+            } else {
+                ticks.max(0)
+            }
+        };
         let mut packets: Vec<(i64, i64)> = framecrc
             .lines()
             .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
             .filter_map(|l| {
                 let mut fields = l.split(',').skip(2).map(|f| f.trim().parse::<i64>().ok());
-                Some((fields.next()??, fields.next()??.max(0)))
+                Some((fields.next()??, length(fields.next()??)))
             })
             .collect();
         packets.sort_unstable();
-        let seconds = |ticks: i64| ticks as f64 * num / den;
         let start = packets.first()?.0;
         let mut end = start;
         let mut holes = 0.0;
@@ -206,8 +261,10 @@ impl Timeline {
 /// What the pass is told of a stream beside its samples.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Found {
-    /// The audio stream's own length.
+    /// The audio stream's own length, where the file states one.
     pub said: Option<f64>,
+    /// Whether ffprobe only guessed it ([`crate::probe::Probed::guessed`]).
+    pub guessed: bool,
     pub timeline: Option<Timeline>,
 }
 
@@ -220,6 +277,7 @@ pub fn measure(rate: Option<u32>, frames: u64, unfinite: u64, found: &Found) -> 
     let decoded = frames as f64 / f64::from(rate);
     Some(Measure {
         said: found.said,
+        guessed: found.guessed,
         decoded,
         span: found.timeline.map(|t| (t.start, t.end)),
         holes: found.timeline.map_or(0.0, |t| t.holes),
@@ -249,6 +307,7 @@ mod tests {
     fn a_file_whole_in_itself_but_short_of_its_sites_length_is_cut_short() {
         let measure = Measure {
             said: Some(143.78),
+            guessed: false,
             decoded: 143.78,
             span: Some((0.0, 143.78)),
             holes: 0.0,
@@ -303,9 +362,29 @@ mod tests {
         assert_eq!(Timeline::parse("#tb 0: 1/1000\n"), None, "no packet");
     }
 
+    #[test]
+    fn a_duration_no_packet_lasts_ends_nothing() {
+        // The last packet of a remuxed Ogg file, trimmed by its page's
+        // granule, listed 7 ms short of 2^32 ticks.
+        let mut trimmed = whole(10);
+        trimmed.push((9993, WRAP - 7));
+        let t = Timeline::parse(&list(&trimmed)).unwrap();
+        assert!((t.end - 9.993).abs() < 1e-9, "{t:?}");
+        assert_eq!(measured(Some(10.0), &trimmed, 10.0).damage(), None);
+        let mut long = whole(10);
+        long.push((9993, 86_400_000));
+        assert!((Timeline::parse(&list(&long)).unwrap().end - 9.993).abs() < 1e-9);
+        let blocks: Vec<(i64, i64)> = (0..10).map(|n| (n * 1486, 1486)).collect();
+        assert!(
+            (Timeline::parse(&list(&blocks)).unwrap().end - 14.86).abs() < 1e-9,
+            "FLAC's longest blocks"
+        );
+    }
+
     fn measured(said: Option<f64>, packets: &[(i64, i64)], decoded: f64) -> Measure {
         let found = Found {
             said,
+            guessed: false,
             timeline: Timeline::parse(&list(packets)),
         };
         let frames = (decoded * 48_000.0).round() as u64;
@@ -360,6 +439,16 @@ mod tests {
             holes.describe(&key)
         );
         assert_eq!(holes.missing_ms(), 10_600);
+        assert_eq!((cut.lost_ms(), holes.lost_ms()), (270_000, 11_600));
+        let short = Damage::Short {
+            stated: 200.0,
+            ends: 150.0,
+        };
+        assert_eq!(
+            short.lost_ms(),
+            0,
+            "it lacks its end, which comparing finds"
+        );
         let corrupt = Damage::Missing {
             seconds: 56.0,
             holes: 0.0,
@@ -369,11 +458,14 @@ mod tests {
     }
 
     /// What the pass measures of audio holding samples that are no number,
-    /// beside packets whole, gapped, out of order or none, with
-    /// [`METHOD`].
+    /// beside packets whole, gapped, out of order, listed with durations
+    /// no packet lasts, or none, and a length stated or guessed, with
+    /// [`METHOD`]. Version 5 measures as 4 did, the method it names aside,
+    /// from probes that take the length of every format not known to state
+    /// one for guessed, which 4 took for stated unless it was known not to.
     const WRITTEN: (&str, &str) = (
-        "integrity/1",
-        "bb71ab3ecdf2f533a5f2d2b0d7e05f739cb5dcb51dedf03a15290ffc93c00167",
+        "integrity/5",
+        "6ee01e78f50bc7fefc90da25ad48e1930b0d2086fcfc265c4bd3bf6002d55184",
     );
 
     #[test]
@@ -388,19 +480,24 @@ mod tests {
             .into_iter()
             .filter(|(pts, _)| !(1000..1150).contains(pts) && !(2000..2080).contains(pts))
             .collect();
+        let mut trimmed = whole(3);
+        trimmed.push((2993, WRAP - 7));
+        trimmed.push((3013, 86_400_000));
         let packets = [
             Some(whole(3)),
             Some(gapped),
             Some(vec![(60, 0), (0, 20), (20, 20), (500, 20)]),
             None,
+            Some(trimmed),
         ];
         let mut digest = crate::testing::Digest::default();
-        for (said, packets) in [Some(3.5), None, Some(2.0), Some(3.0)]
+        for (said, packets) in [Some(3.5), None, Some(2.0), Some(3.0), Some(3.0)]
             .into_iter()
             .zip(packets)
         {
             let found = Found {
                 said,
+                guessed: said.is_none(),
                 timeline: packets.and_then(|p| Timeline::parse(&list(&p))),
             };
             let mut pass = Pass::new(vec![Kind::Integrity]);

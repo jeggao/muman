@@ -5,12 +5,26 @@
 //!
 //! Every program [`System`] starts is held in `LIVE` until it has been
 //! waited for, so a signal that stops muman stops them too ([`stop`]):
-//! a Ctrl-C reaches a terminal's whole process group, but a `kill` or a
-//! service manager's stop reaches muman alone, and aria2c, left behind,
-//! would go on fetching into the home. Once [`stop`] begins nothing more
-//! starts, so none is spawned between it and the exit. While a program
-//! of the user's own runs in the terminal, as an editor, a signal is
-//! that program's to answer ([`Interactive`]): Ctrl-C in vim is no stop.
+//! a `kill` or a service manager's stop reaches muman alone, and
+//! aria2c, left behind, would go on fetching into the home. Once
+//! [`stop`] begins nothing more starts, so none is spawned between it
+//! and the exit. While a program of the user's own runs in the terminal,
+//! as an editor, a signal is that program's to answer ([`Interactive`]):
+//! Ctrl-C in vim is no stop.
+//!
+//! What those programs started is stopped with them where the system
+//! allows. On Unix each starts in a process group of its own, and
+//! [`stop`] kills the whole group: a hook's background job, the ffmpeg
+//! a yt-dlp started, the program a wrapper script runs. A Ctrl-C at the
+//! terminal so reaches muman alone, which stops each group. On Windows
+//! the program muman started is ended alone: a job object would hold
+//! what it starts, and no safe interface offers one, so what it started
+//! runs on, though a Ctrl-C at the console reaches every program there.
+//!
+//! A program streamed is waited for, not what it leaves running: a
+//! background job it started, as a hook's `mpc update &` or a daemon,
+//! holds its pipes open, so once it exits they are read for
+//! [`AFTER_EXIT`] more at most, for what it wrote last, and let go.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -18,6 +32,7 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use shared_child::SharedChild;
 
@@ -48,9 +63,30 @@ pub fn stop() -> bool {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     live.0 = true;
     for child in &live.1 {
-        let _ = child.kill();
+        end(child);
     }
     true
+}
+
+/// [`stop`], then exit with [`STOPPED_EXIT`]: what Ctrl-C or a signal to
+/// stop does, at a prompt too. Returns while a program of the user's own
+/// runs in the terminal.
+pub fn stop_and_exit() {
+    if stop() {
+        std::process::exit(i32::from(STOPPED_EXIT));
+    }
+}
+
+/// Kill `child` and, on Unix, every program in its process group.
+fn end(child: &SharedChild) {
+    #[cfg(unix)]
+    if let Ok(group) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(group),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.kill();
 }
 
 /// Held while a program of the user's own runs in the terminal, so a
@@ -81,6 +117,8 @@ impl Spawned {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         anyhow::ensure!(!live.0, "muman is stopping; {} was not started", name(cmd));
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(command, 0);
         let child = Arc::new(
             SharedChild::spawn(command).with_context(|| format!("spawning {}", name(cmd)))?,
         );
@@ -160,7 +198,9 @@ pub trait Runner: Sync {
         crate::fingerprint::compute(pcm)
     }
 
-    /// [`Self::stream`] with `env` added to the program's environment.
+    /// [`Self::stream`] with `env` added to the program's environment, and
+    /// its stdout and stderr one pipe, so their lines keep the order they
+    /// were written in, each a [`Line::Out`].
     fn stream_env(
         &self,
         cmd: &[OsString],
@@ -361,7 +401,17 @@ impl Runner for System {
     }
 
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
-        self.stream_env(cmd, &[], on_line)
+        let mut command = self.command(cmd)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = Spawned::new(&mut command, cmd)?;
+        let (tx, rx) = mpsc::sync_channel(AHEAD);
+        if let Some(r) = child.0.take_stdout() {
+            reader(r, true, tx.clone());
+        }
+        if let Some(r) = child.0.take_stderr() {
+            reader(r, false, tx.clone());
+        }
+        relayed(&child, tx, &rx, on_line)
     }
 
     fn stream_env(
@@ -371,27 +421,18 @@ impl Runner for System {
         on_line: &mut dyn FnMut(Line<'_>),
     ) -> Result<bool> {
         let mut command = self.command(cmd)?;
+        let (pipe, write) = std::io::pipe().context("making a pipe")?;
         command
             .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(write.try_clone().context("making a pipe")?)
+            .stderr(write);
         let child = Spawned::new(&mut command, cmd)?;
-        let (tx, rx) = mpsc::channel();
-        let readers = [
-            child.0.take_stdout().map(|r| reader(r, true, tx.clone())),
-            child.0.take_stderr().map(|r| reader(r, false, tx)),
-        ];
-        for (out, line) in rx {
-            on_line(if out {
-                Line::Out(&line)
-            } else {
-                Line::Err(&line)
-            });
-        }
-        for r in readers.into_iter().flatten() {
-            let _ = r.join();
-        }
-        Ok(child.0.wait()?.success())
+        // It holds muman's copies of the pipe's end, which would keep the
+        // pipe open once the program's close.
+        drop(command);
+        let (tx, rx) = mpsc::sync_channel(AHEAD);
+        reader(pipe, true, tx.clone());
+        relayed(&child, tx, &rx, on_line)
     }
 
     fn tool(&self, name: &str) -> Option<Status> {
@@ -731,13 +772,26 @@ fn quoted(arg: &str) -> String {
     }
 }
 
+/// What a streamed program said: a line, on stdout or not, or that it
+/// exited.
+enum Said {
+    Line(bool, String),
+    Exited,
+}
+
+/// How long a streamed program's pipes are read after it exits, for
+/// what a program it left running holds open.
+const AFTER_EXIT: Duration = Duration::from_secs(1);
+
+/// How many lines a streamed program's pipes are read ahead of the one
+/// handed on, so a program saying much faster than it is relayed waits
+/// rather than fill memory.
+const AHEAD: usize = 1024;
+
 /// Send each line of `pipe` until it closes; a carriage return ends a
-/// line too, as progress written in place does.
-fn reader<R: Read + Send + 'static>(
-    pipe: R,
-    out: bool,
-    tx: mpsc::Sender<(bool, String)>,
-) -> std::thread::JoinHandle<()> {
+/// line too, as progress written in place does. Not joined: a program
+/// left running by the one streamed may hold the pipe for ever.
+fn reader<R: Read + Send + 'static>(pipe: R, out: bool, tx: mpsc::SyncSender<Said>) {
     std::thread::spawn(move || {
         let mut pipe = BufReader::new(pipe);
         let mut buf = Vec::new();
@@ -746,16 +800,52 @@ fn reader<R: Read + Send + 'static>(
                 .split(|b| *b == b'\r' || *b == b'\n')
                 .filter(|p| !p.is_empty())
             {
-                if tx
-                    .send((out, String::from_utf8_lossy(part).into_owned()))
-                    .is_err()
-                {
+                let line = String::from_utf8_lossy(part).into_owned();
+                if tx.send(Said::Line(out, line)).is_err() {
                     return;
                 }
             }
             buf.clear();
         }
-    })
+    });
+}
+
+/// Hand each line of `child`'s that `rx` brings to `on_line`, as it
+/// comes, and whether it exited successfully; `tx` says when it exits.
+fn relayed(
+    child: &Spawned,
+    tx: mpsc::SyncSender<Said>,
+    rx: &mpsc::Receiver<Said>,
+    on_line: &mut dyn FnMut(Line<'_>),
+) -> Result<bool> {
+    let waited = Arc::clone(&child.0);
+    std::thread::spawn(move || {
+        let _ = waited.wait();
+        let _ = tx.send(Said::Exited);
+    });
+    relay(rx, on_line);
+    Ok(child.0.wait()?.success())
+}
+
+/// Hand each line `rx` brings to `on_line` until every pipe closes, or
+/// [`AFTER_EXIT`] once the program has exited.
+fn relay(rx: &mpsc::Receiver<Said>, on_line: &mut dyn FnMut(Line<'_>)) {
+    let mut exited: Option<Instant> = None;
+    loop {
+        let said = match exited {
+            None => rx.recv().ok(),
+            Some(at) => match AFTER_EXIT.checked_sub(at.elapsed()) {
+                Some(left) => rx.recv_timeout(left).ok(),
+                None => None,
+            },
+        };
+        match said {
+            None => return,
+            Some(Said::Exited) => exited = Some(Instant::now()),
+            Some(Said::Line(true, line)) => on_line(Line::Out(&line)),
+            Some(Said::Line(false, line)) => on_line(Line::Err(&line)),
+        }
+    }
 }
 
 fn name(cmd: &[OsString]) -> String {
@@ -884,6 +974,58 @@ mod tests {
             err.contains("[tools.yt-dlp] command names muman-no-such-fork"),
             "{err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_stopped_takes_what_it_started_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let late = dir.path().join("late");
+        let script = format!("(sleep 1; touch '{}') & wait", late.display());
+        let cmd = ["sh", "-c", &script].map(OsString::from);
+        let mut command = System::default().command(&cmd).unwrap();
+        let started = Spawned::new(&mut command, &cmd).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        end(&started.0);
+        assert!(!started.0.wait().unwrap().success());
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert!(!late.exists(), "the background job outlived its program");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_streamed_is_not_held_by_the_job_it_left_running() {
+        let cmd = ["sh", "-c", "sleep 30 & echo done"].map(OsString::from);
+        let start = Instant::now();
+        let mut said = Vec::new();
+        let ran = System::default().stream(&cmd, &mut |line| {
+            let (Line::Out(l) | Line::Err(l)) = line;
+            said.push(l.to_string());
+        });
+        assert!(ran.unwrap());
+        assert_eq!(said, ["done"]);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_s_stdout_and_stderr_lines_keep_their_order() {
+        let script = "for n in 1 2 3 4 5 6 7 8; do echo out $n; echo err $n >&2; done";
+        let cmd = ["sh", "-c", script].map(OsString::from);
+        let mut said = Vec::new();
+        let ran = System::default().stream_env(&cmd, &[], &mut |line| {
+            let (Line::Out(l) | Line::Err(l)) = line;
+            said.push(l.to_string());
+        });
+        assert!(ran.unwrap());
+        let written: Vec<String> = (1..=8)
+            .flat_map(|n| [format!("out {n}"), format!("err {n}")])
+            .collect();
+        assert_eq!(said, written);
     }
 
     #[test]

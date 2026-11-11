@@ -27,7 +27,7 @@ icu_properties = "2.3"
 isolang = { version = "2.4", default-features = false }
 indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
-minijinja = { version = "3", features = ["serde"] }
+minijinja = { version = "=3.0.5", features = ["serde", "unstable_machinery"] }
 percent-encoding = "2"
 regex = "1"
 rusty-chromaprint = "0.3"
@@ -46,6 +46,9 @@ uom = { version = "0.38", default-features = false, features = ["f64", "si", "st
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 walkdir = "2"
 which = "8"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [lints]
 workspace = true

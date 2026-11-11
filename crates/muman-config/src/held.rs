@@ -32,9 +32,12 @@
 //! song keeps the file built from what was recorded until `sync
 //! --accept` takes what the source holds now, and is built
 //! from what is there when no file of it is left, its record kept for
-//! the next sync to say so again. The format lets a fetch again ask a
-//! site for the same stream, and the page, kept for a site whose keys
-//! name none, lets a home made from the song list alone fetch it.
+//! the next sync to say so again. Audio damaged since, of any source, is
+//! never followed nor built from, file or not, but by `sync --force`:
+//! the record, not the library, says what the song was built from.
+//! The format lets a fetch again ask a site for the same stream, and the
+//! page, kept for a site whose keys name none, lets a home made from the
+//! song list alone fetch it.
 //!
 //! The size lets `check --upstream` ask a site whether it still serves
 //! a source as fetched, before anything is lost: YouTube gives each
@@ -115,8 +118,24 @@ fn of_all(parts: &[(String, &String)]) -> Option<String> {
     cut(&crate::hash::digest(text.as_bytes()))
 }
 
+/// What a record holds of `aspect` for a source that is one file whole,
+/// a lyrics file, a picture or a tag file, whose bytes' digest is
+/// `digest`, as [`Held::now`] records it; none of audio, which no such
+/// file offers.
+#[must_use]
+pub fn of_file(aspect: Aspect, digest: &str) -> Option<String> {
+    let digest = digest.to_string();
+    match aspect {
+        Aspect::Audio => None,
+        Aspect::Cover => of_all(&[(format!("{:?}", crate::facts::CoverAt::File), &digest)]),
+        Aspect::Lyrics => of_all(&[(format!("{:?}", crate::facts::LyricsAt::File), &digest)]),
+        Aspect::Tags => cut(&digest),
+    }
+}
+
 /// Whether two digests agree as far as both go.
-fn agree(a: &str, b: &str) -> bool {
+#[must_use]
+pub fn agree(a: &str, b: &str) -> bool {
     let n = a.len().min(b.len());
     a[..n] == b[..n]
 }

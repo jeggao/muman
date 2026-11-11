@@ -136,6 +136,112 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
     assert!(facts.audio.unwrap().is_lossless());
 }
 
+/// A FLAC at `path` holding `picture`'s bytes as its front cover,
+/// labelled `label`.
+fn with_cover(path: &Path, picture: &[u8], label: lofty::picture::MimeType) {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{Picture, PictureType};
+    use lofty::tag::{Tag, TagExt, TagType};
+
+    std::fs::write(path, crate::testing::SILENCE_FLAC).unwrap();
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push_picture(
+        Picture::unchecked(picture.to_vec())
+            .pic_type(PictureType::CoverFront)
+            .mime_type(label)
+            .build(),
+    );
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+#[test]
+fn a_picture_labelled_otherwise_than_its_bytes_is_read_by_them() {
+    use lofty::picture::MimeType;
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let scratch = dir.path().join("scratch");
+    let covers = |json: &str| {
+        let fake = Fake::default().probe("Song.flac", json);
+        let facts = gather(&fake, &source, &scratch, &[]).unwrap();
+        let at: Vec<(CoverAt, String)> = (facts.covers.into_iter())
+            .map(|c| (c.at, c.mimetype))
+            .collect();
+        at
+    };
+    let as_png = FLAC.replace(r#""mjpeg""#, r#""png""#);
+    let unshown = FLAC.replace(r#""codec_type": "video""#, r#""codec_type": "data""#);
+
+    with_cover(&source.path, crate::testing::PIXEL_JPEG, MimeType::Png);
+    let atom = vec![(CoverAt::Atom { index: 0 }, "image/jpeg".to_string())];
+    assert_eq!(
+        covers(&as_png),
+        atom,
+        "ffprobe shows a PNG it cannot decode"
+    );
+    with_cover(
+        &source.path,
+        crate::testing::PIXEL,
+        MimeType::Unknown("image/x-png".into()),
+    );
+    let atom = vec![(CoverAt::Atom { index: 0 }, "image/png".to_string())];
+    assert_eq!(covers(&unshown), atom, "ffprobe shows none");
+    with_cover(&source.path, crate::testing::PIXEL_JPEG, MimeType::Jpeg);
+    assert_eq!(
+        covers(FLAC),
+        [(CoverAt::Picture { index: 1 }, "image/jpeg".to_string())],
+        "labelled as it is, read as ffprobe shows it"
+    );
+}
+
+#[test]
+fn a_picture_that_does_not_decode_is_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let mut fake = Fake::default().probe("Song.flac", FLAC);
+    fake.failing = vec!["image2".into()];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
+    assert_eq!(facts.covers, []);
+    assert_eq!(facts.unkept, [Unkept::Picture]);
+}
+
+#[test]
+fn a_picture_source_that_does_not_decode_whole_is_no_cover_and_is_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = Located {
+        kind: Kind::Image,
+        ..located(dir.path(), "A/cover.jpg")
+    };
+    std::fs::write(&source.path, crate::testing::PIXEL_JPEG).unwrap();
+    let scratch = dir.path().join("scratch");
+    let whole = gather(&Fake::default(), &source, &scratch, &[]).unwrap();
+    assert_eq!(whole.covers.len(), 1);
+    assert_eq!(whole.unkept, []);
+
+    let cut = Fake {
+        failing: vec!["image2".into()],
+        ..Fake::default()
+    };
+    let facts = gather(&cut, &source, &scratch, &[]).unwrap();
+    assert!(facts.covers.is_empty(), "{:?}", facts.covers);
+    assert_eq!(facts.unkept, [Unkept::Picture]);
+
+    let kept_before = Facts {
+        method: before_whole_files(),
+        covers: vec![CoverFacts {
+            quality: None,
+            ..whole.covers[0].clone()
+        }],
+        ..whole.clone()
+    };
+    assert!(!kept_before.holds_for(&whole.rev), "measured again");
+    let whole_before = Facts {
+        method: before_whole_files(),
+        ..whole.clone()
+    };
+    assert!(whole_before.holds_for(&whole.rev));
+}
+
 #[test]
 fn a_file_s_own_lyrics_tag_is_lyrics_of_it_measured_hashed_and_read_again() {
     use lofty::config::WriteOptions;
@@ -239,11 +345,90 @@ fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
             clipping: 0.0,
             bits: 16,
         }),
+        codec: "flac".into(),
         ..AudioFacts::default()
     });
     assert!(f.holds_for(&source.rev()));
     f.audio.as_mut().unwrap().quality = None;
     assert!(!f.holds_for(&source.rev()), "measured again");
+}
+
+#[test]
+fn facts_of_older_measures_with_a_picture_that_did_not_decode_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].flac");
+    for method in [before_tiff(), before_unclipped(), before_sound()] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.covers = vec![CoverFacts {
+            at: CoverAt::Picture { index: 1 },
+            mimetype: "image/unknown".into(),
+            quality: None,
+            digest: None,
+            look: None,
+            other: false,
+        }];
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+        f.covers.clear();
+        assert!(f.holds_for(&source.rev()), "{method}: no picture");
+    }
+}
+
+#[test]
+fn facts_of_older_measures_of_audio_that_clips_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    for method in [
+        before_unclipped(),
+        before_lowest(),
+        before_square(),
+        before_alpha(),
+        before_sound(),
+    ] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.audio = Some(AudioFacts {
+            quality: Some(AudioQuality {
+                bandwidth_hz: 20_437.0,
+                incoherence: 0.5,
+                clipping: 0.0,
+                bits: 16,
+            }),
+            codec: "flac".into(),
+            ..AudioFacts::default()
+        });
+        assert!(f.holds_for(&source.rev()), "{method}: no clipping");
+        f.audio.as_mut().unwrap().quality.as_mut().unwrap().clipping = 1e-3;
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
+}
+
+#[test]
+fn facts_of_lossy_audio_before_the_lowest_wall_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    for method in [
+        before_lowest(),
+        before_square(),
+        before_alpha(),
+        before_sound(),
+    ] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.audio = Some(AudioFacts {
+            quality: Some(AudioQuality {
+                bandwidth_hz: 20_437.0,
+                incoherence: 0.5,
+                clipping: 0.0,
+                bits: 0,
+            }),
+            codec: "flac".into(),
+            ..AudioFacts::default()
+        });
+        assert!(f.holds_for(&source.rev()), "{method}: lossless");
+        f.audio.as_mut().unwrap().codec = "opus".into();
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
 }
 
 #[test]
@@ -310,11 +495,47 @@ fn facts_of_older_measures_of_a_picture_past_the_largest_measured_do_not_hold() 
                 clipping: 0.0,
                 bits: 16,
             }),
+            codec: "flac".into(),
             ..AudioFacts::default()
         });
         f.covers = vec![picture(4000)];
         assert!(f.holds_for(&source.rev()), "{method}");
         f.covers = vec![picture(9000)];
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
+}
+
+#[test]
+fn facts_of_older_measures_of_a_frame_trimmed_to_no_square_do_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let framed = |x: u32, width: u32| CoverFacts {
+        at: CoverAt::File,
+        mimetype: "image/png".into(),
+        quality: Some(ImageQuality {
+            width: 1280,
+            height: 720,
+            content: quality::Rect {
+                x,
+                y: 0,
+                width,
+                height: 720,
+            },
+            effective: 512,
+            blockiness: 0.0,
+        }),
+        digest: None,
+        look: None,
+        other: false,
+    };
+    for method in [before_square(), before_alpha(), before_sound()] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.covers = vec![framed(280, 720)];
+        assert!(f.holds_for(&source.rev()), "{method}: its square art");
+        f.covers = vec![framed(0, 1280)];
+        assert!(f.holds_for(&source.rev()), "{method}: a frame untrimmed");
+        f.covers = vec![framed(320, 640)];
         assert!(!f.holds_for(&source.rev()), "{method}: measured again");
     }
 }
@@ -369,6 +590,62 @@ fn a_file_cut_off_is_judged_by_its_stream_and_measured_within_its_packets() {
     .probe("Song.flac", &said);
     let facts = gather(&whole, &source, &dir.path().join("whole"), &wanted).unwrap();
     assert_eq!((facts.damage(), facts.length()), (None, Some(200.0)));
+}
+
+/// An MP3 whose ffprobe says it plays `said` seconds, its first bytes
+/// `head`, decoding to `decoded` seconds of audio.
+fn mp3_facts(head: Vec<u8>, said: f64, decoded: f64) -> Facts {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.mp3");
+    std::fs::write(&source.path, head).unwrap();
+    let json = format!(
+        r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+            "sample_rate": "44100", "channels": 2, "duration": "{said}"}}],
+            "format": {{"format_name": "mp3", "duration": "{said}"}}}}"#
+    );
+    let fake = Fake {
+        wavs: vec![("Song.mp3".into(), wav_of(decoded))],
+        ..Fake::default()
+    }
+    .probe("Song.mp3", &json);
+    let wanted = [crate::analysis::Kind::Integrity];
+    gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap()
+}
+
+#[test]
+fn an_mp3_whose_length_ffmpeg_guessed_is_whole_and_plays_its_packets() {
+    let bare = mp3_facts(crate::probe::mp3_head(true, true, true, None), 62.0, 40.0);
+    assert_eq!(bare.damage(), None, "62 s is a guess from its bitrate");
+    assert_eq!(bare.integrity().unwrap().said, None);
+    assert_eq!((bare.duration, bare.length()), (None, Some(40.0)));
+    let xing = Some((b"Xing", 36, 0x0f, 7656));
+    let cut = mp3_facts(crate::probe::mp3_head(true, true, true, xing), 200.0, 50.0);
+    assert_eq!(
+        cut.damage(),
+        Some(crate::integrity::Damage::Cut {
+            said: 200.0,
+            ends: 50.0
+        }),
+        "its Xing header counts the frames it should hold"
+    );
+    assert_eq!(cut.length(), Some(50.0));
+}
+
+#[test]
+fn an_adts_stream_states_no_length_to_be_cut_short_of() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.aac");
+    let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+        "sample_rate": "44100", "channels": 2, "duration": "123.0"}],
+        "format": {"format_name": "aac", "duration": "123.0"}}"#;
+    let fake = Fake {
+        wavs: vec![("Song.aac".into(), wav_of(44.0))],
+        ..Fake::default()
+    }
+    .probe("Song.aac", json);
+    let wanted = [crate::analysis::Kind::Integrity];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap();
+    assert_eq!((facts.damage(), facts.length()), (None, Some(44.0)));
 }
 
 #[test]
@@ -564,7 +841,40 @@ fn quality_audio() -> Vec<(Vec<quality::Segment>, bool)> {
         .iter()
         .map(|x| (x * 32_768.0).round() / 32_768.0)
         .collect();
+    // A tone at every FFT bin to 16 kHz, and 25 dB down from there to
+    // 20 kHz, as Opus fills past an MP3's lowpass.
+    let phases = crate::testing::words(1858, 7);
+    let filled: Vec<f32> = (0..16_384)
+        .map(|n| {
+            let t = f64::from(n) / 44_100.0;
+            let sum: f64 = phases
+                .iter()
+                .enumerate()
+                .map(|(k, phase)| {
+                    let hz = (k + 1) as f64 * 44_100.0 / 4096.0;
+                    let gain = if hz <= 16_000.0 { 1.0 } else { 0.056 };
+                    let phase = f64::from(*phase) / f64::from(u32::MAX);
+                    gain * (std::f64::consts::TAU * (hz * t + phase)).sin()
+                })
+                .sum();
+            (sum / 200.0) as f32
+        })
+        .collect();
+    // The same, a frame of it raised into clipping.
+    let burst: Vec<f32> = filled
+        .iter()
+        .enumerate()
+        .map(|(n, x)| {
+            if n / 4096 == 1 {
+                (x * 12.0).clamp(-1.0, 1.0)
+            } else {
+                *x
+            }
+        })
+        .collect();
     vec![
+        (thrice(stereo(&filled, &filled)), false),
+        (thrice(stereo(&burst, &burst)), false),
         (thrice(stereo(&left, &right)), false),
         (thrice(stereo(&full, &half)), false),
         (thrice(Segment::new(2, clipped)), false),
@@ -606,6 +916,11 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
             }
         })
         .collect();
+    let dark_edged: Vec<u8> = boxed
+        .iter()
+        .enumerate()
+        .map(|(i, &g)| if (90..230).contains(&(i % 320)) { g } else { 0 })
+        .collect();
     let blocky: Vec<u8> = (0..256 * 256)
         .map(|i| {
             let (x, y) = (i % 256, i / 256);
@@ -616,6 +931,7 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
         (detailed, 256, 256),
         (upscaled, 384, 384),
         (boxed, 320, 180),
+        (dark_edged, 320, 180),
         (blocky, 256, 256),
         (vec![90; 64 * 64], 64, 64),
     ]
@@ -625,8 +941,8 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/9",
-    "11ef60693c8bd1abcba85a59a6fcadd493748a64b33957b73c499758c4604879",
+    "quality/14",
+    "70e878c3c7d12fa9b6edb5efb0ea5d8db180c00f7bc4331e9c73fe1531405c9d",
 );
 
 #[test]

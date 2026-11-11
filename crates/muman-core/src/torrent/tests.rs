@@ -228,8 +228,6 @@ fn a_path_leaving_the_torrent_refuses_it() {
         &["."],
         &[".. ", "x.flac"],
         &["..."],
-        &["C:", "x.flac"],
-        &["c:x.flac"],
         &["Album\u{1b}]0;Lantern\u{7}", "x.flac"],
         &["x\u{9b}2J.flac"],
         &["x\0.flac"],
@@ -246,6 +244,50 @@ fn a_path_leaving_the_torrent_refuses_it() {
         let (bytes, _) = torrent(info, &[]);
         assert!(Metainfo::read(&bytes).is_err(), "{parts:?}");
     }
+}
+
+#[test]
+fn a_part_starting_as_a_drive_is_keyed_by_the_colon_s_lookalike() {
+    let info = B::D(vec![
+        ("name", s("C: The Remixes")),
+        ("piece length", B::I(16384)),
+        ("pieces", B::S(vec![0; 20])),
+        (
+            "files",
+            B::L(vec![
+                B::D(vec![("length", B::I(1)), ("path", path(&["a:b.flac"]))]),
+                B::D(vec![
+                    ("length", B::I(1)),
+                    ("path", path(&["D:", "Act 1: Intro.flac"])),
+                ]),
+            ]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    assert_eq!(meta.name, "C: The Remixes");
+    let keyed: Vec<&Path> = meta.files.iter().map(|f| f.path.as_path()).collect();
+    assert_eq!(
+        keyed,
+        [
+            PathBuf::from("a：b.flac"),
+            ["D：", "Act 1: Intro.flac"].iter().collect()
+        ]
+    );
+    assert_eq!(meta.files[0].named, ["a:b.flac"]);
+    assert_eq!(
+        meta.key(&meta.files[1]).to_string(),
+        format!("torrent:{}/D：/Act 1: Intro.flac", meta.hash())
+    );
+    assert_eq!(
+        stored(&meta.files[1].path),
+        Path::new("D：").join("Act 1： Intro.flac")
+    );
+    let root = Path::new("from");
+    assert_eq!(
+        meta.files[0].named_in(root),
+        cfg!(not(windows)).then(|| root.join("a:b.flac")),
+        "a folder another client left is read by the torrent's names, but on Windows"
+    );
 }
 
 #[test]
@@ -342,13 +384,33 @@ fn of_two_files_kept_at_one_place_the_first_is_taken() {
         taken,
         ["01 Lantern?.mp3", "02 Wren.flac", "03 Ash.mp3"].map(Path::new)
     );
+    let lost: Vec<(&Path, &Path)> = shadowed(&meta)
+        .iter()
+        .map(|(lost, kept)| (lost.path.as_path(), kept.path.as_path()))
+        .collect();
     assert_eq!(
-        shadowed(&meta),
+        lost,
         [
             (Path::new("01 Lantern？.mp3"), Path::new("01 Lantern?.mp3")),
             (Path::new("02 WREN.flac"), Path::new("02 Wren.flac")),
         ]
     );
+}
+
+#[test]
+fn of_two_files_keyed_alike_the_first_is_taken() {
+    let meta = Metainfo::read(&crate::testing::metainfo(
+        "Marlo Venn - Paper Comets",
+        &["a:b.flac", "a：b.flac"],
+    ))
+    .unwrap();
+    let taken: Vec<usize> = selected(&meta).iter().map(|f| f.index).collect();
+    assert_eq!(taken, [1]);
+    let lost: Vec<(usize, PathBuf)> = shadowed(&meta)
+        .iter()
+        .map(|(lost, kept)| (lost.index, kept.named_path()))
+        .collect();
+    assert_eq!(lost, [(2, PathBuf::from("a:b.flac"))]);
 }
 
 #[test]
@@ -553,4 +615,45 @@ fn a_piece_longer_than_a_read_is_checked_a_chunk_at_a_time() {
     damaged[CHECK_CHUNK + 7] ^= 1;
     std::fs::write(dir.path().join("1"), &damaged).unwrap();
     assert!(!checks(&meta, &meta.files[0], at));
+}
+
+#[test]
+fn a_folder_another_client_left_is_read_in_the_spelling_it_holds() {
+    let decomposed = "Lante\u{301}rn Weather";
+    let composed = "Lant\u{e9}rn Weather";
+    let info = B::D(vec![
+        ("name", s(decomposed)),
+        ("piece length", B::I(16384)),
+        ("pieces", B::S(vec![0; 20])),
+        (
+            "files",
+            B::L(vec![B::D(vec![
+                ("length", B::I(1)),
+                ("path", path(&["Pape\u{301}r Comets.flac"])),
+            ])]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    assert_eq!(meta.name, composed, "a name shown and keyed is in NFC");
+    assert_eq!(meta.files[0].path, Path::new("Pap\u{e9}r Comets.flac"));
+    assert_eq!(meta.files[0].named, ["Pape\u{301}r Comets.flac"]);
+    if cfg!(windows) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join(decomposed);
+    let file = folder.join("Pape\u{301}r Comets.flac");
+    std::fs::create_dir_all(&file).unwrap();
+    assert_eq!(meta.folder_in(dir.path()), Some(folder.clone()));
+    assert_eq!(meta.files[0].named_in(&folder), Some(file.clone()));
+    // Where a filesystem keeps names as given, the composed one is apart.
+    std::fs::create_dir_all(folder.join("Pap\u{e9}r Comets.flac")).unwrap();
+    assert_eq!(meta.files[0].named_in(&folder), Some(file));
+
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(other.path().join(composed).join("Pap\u{e9}r Comets.flac")).unwrap();
+    let found = meta.folder_in(other.path()).unwrap();
+    assert!(found.is_dir(), "{}", found.display());
+    let at = meta.files[0].named_in(&found).unwrap();
+    assert!(at.exists(), "a client that composed the names is read too");
 }

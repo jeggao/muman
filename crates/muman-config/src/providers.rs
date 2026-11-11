@@ -213,6 +213,29 @@ impl Config {
         self.settings(p).enabled && self.settings(p.yields()).enabled
     }
 
+    /// Refuse a `skip` query naming a field that is no tag muman knows and
+    /// that `had`, given its Vorbis name, says no song has, as `list`
+    /// refuses a query's; the setting is [`Invalid`](crate::errors::Invalid).
+    pub fn check_fields(&self, had: impl Fn(&str) -> bool) -> Result<()> {
+        let schemes = schemes();
+        let own = self.providers.iter().flat_map(|(p, s)| {
+            s.skip
+                .iter()
+                .map(move |text| (format!("[providers.{p}] skip"), text))
+        });
+        let all = (self.skip.iter())
+            .map(|text| ("[providers] skip".to_string(), text))
+            .chain(own);
+        for (what, text) in all {
+            let query = crate::terms::parse_text(text, &schemes)?;
+            if let Some(field) = query.unknown_field(&had) {
+                let why = format!("{what}: `{text}`: {}", crate::terms::no_field(field));
+                return Err(crate::errors::Invalid(why).into());
+            }
+        }
+        Ok(())
+    }
+
     /// The queries naming songs that ask `p` nothing: `[providers] skip`
     /// and the provider's own.
     pub fn skips(&self, p: Provider) -> impl Iterator<Item = &str> {
@@ -268,15 +291,20 @@ fn read_until(p: Provider, item: &Item, what: &str) -> Result<Vec<Closed>> {
     Ok(until)
 }
 
+/// The key schemes a `skip` query may name a song by.
+fn schemes() -> std::collections::BTreeSet<String> {
+    crate::source::schemes()
+        .chain(crate::sites::built_in().schemes())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The queries a `skip` lists, each checked to read as one.
 fn read_skip(item: &Item, what: &str) -> Result<Vec<String>> {
     let list = item
         .as_array()
         .with_context(|| format!("{what} must be a list of queries"))?;
-    let schemes: std::collections::BTreeSet<String> = ["manual".to_string()]
-        .into_iter()
-        .chain(crate::sites::built_in().schemes().map(str::to_string))
-        .collect();
+    let schemes = schemes();
     list.iter()
         .map(|v| {
             let text = v.as_str().with_context(|| {
@@ -315,7 +343,9 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
                     })?
                     .parse()
                     .map_err(|e| anyhow::anyhow!("{what}: `recheck`: {e}"))?;
-                s.recheck = t.duration();
+                s.recheck = t
+                    .wait()
+                    .map_err(|e| anyhow::anyhow!("{what}: `recheck`: {e}"))?;
             }
             "recheck_days" => {
                 let days = i64::try_from(number()?).unwrap_or(i64::MAX);
@@ -351,8 +381,13 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
     Ok(s)
 }
 
-/// The providers a song list sets; the defaults where it sets none.
+/// The providers a song list sets; the defaults where it sets none. A
+/// setting that does not read is [`Invalid`](crate::errors::Invalid).
 pub fn read(doc: &DocumentMut) -> Result<Config> {
+    tables(doc).map_err(crate::errors::invalid)
+}
+
+fn tables(doc: &DocumentMut) -> Result<Config> {
     let mut config = Config::default();
     if let Some(item) = doc.get("providers") {
         let table = item
@@ -483,6 +518,26 @@ mod tests {
             "the error names what lrclib takes: {e:#}"
         );
         assert!(config("[providers.musicbrainz]\nuntil = \"has:genre\"\n").is_err());
+        let e = config("[providers.musicbrainz]\nuntil = \"has:mood\"\n").unwrap_err();
+        let said = format!("{e:#}");
+        for name in [
+            "has:isrc",
+            "has:language",
+            "has:musicbrainz_trackid",
+            "has:label",
+        ] {
+            assert!(
+                said.contains(name),
+                "named as the docs name it, {name}: {said}"
+            );
+        }
+        for alias in ["tsrc", "tlan", "track id", "publisher", "has:upc"] {
+            assert!(!said.contains(alias), "no alias, {alias}: {said}");
+        }
+        for name in said.split("it takes ").nth(1).unwrap().split(", ") {
+            config(&format!("[providers.musicbrainz]\nuntil = \"{name}\"\n"))
+                .unwrap_or_else(|e| panic!("{name} as the message names it: {e:#}"));
+        }
         assert!(config("[providers.manual]\nuntil = \"from:manual\"\n").is_err());
         assert!(config("[providers]\nskip = [\"\"]\n").is_err());
         assert!(config("[providers.lrclib]\nskip = \"genre:ambient\"\n").is_err());

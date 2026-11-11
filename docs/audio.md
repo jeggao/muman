@@ -46,6 +46,10 @@ title, the track or the lyrics, goes there. Any other keeps its name in
 a `TXXX` frame or an iTunes freeform atom. A tag of several values, as
 two artists, is one MP4 atom holding each, as Picard writes it.
 
+A FLAC copied from one that states no length, as a FLAC encoded into a
+pipe or an Ogg FLAC (`.oga`) holds, is given the length its audio
+plays, so a player shows it and seeks in it.
+
 ### What each codec holds
 
 No codec holds every kind of audio, and muman never lets an encoder
@@ -54,7 +58,7 @@ remix the speakers to make audio fit:
 | Codec | Holds |
 |---|---|
 | `flac` | Up to 8 channels, in any layout; integer samples of up to 24 bits |
-| `alac` | As FLAC, but only in mono, stereo, 3.0, 4.0, 5.0, 5.1, 6.1 and 7.1 (wide) |
+| `alac` | As FLAC, but only in the layouts ffmpeg names `mono`, `stereo`, `3.0`, `4.0`, `5.0`, `5.1`, `6.1(back)` and `7.1(wide)`; any other, as `5.1(side)` or `6.1`, is FLAC |
 | `wavpack` | Any number of channels; integer samples of up to 32 bits, or 32-bit float |
 | `opus` | Any number of channels: Vorbis layouts as they are, side speakers named as back ones, any other layout with no speakers named |
 | `vorbis` | Any number of channels, its speakers named by their count; resampled to 44.1 or 48 kHz from a rate it cannot encode |
@@ -99,9 +103,13 @@ downmix = ["5.1", "stereo"]
 muman measures every song whole, as EBU R128 and ITU-R BS.1770 measure
 loudness, and levels it to `[loudness] target`. It measures an album's
 loudness over all of its songs in the list together, so the album keeps
-its songs' levels against each other. Songs share an album when they
-share its name and album artist; a single, named for its title, is an
-album of its own.
+its songs' levels against each other. Songs share an album as their
+tags [agree on one](metadata.md#tags); a single, named for its title,
+is an album of its own. A song whose file stays as it was made, as one
+`sync` leaves as built until `--accept` (see
+[the guide](guide.md#a-source-that-changes)), counts in its album's
+loudness as that file's audio measured, so its album's songs keep one
+album gain.
 
 `[loudness] mode` says where the gain goes:
 
@@ -199,5 +207,7 @@ would take; `info` shows what it takes against `max_size`.
 
 A song you changed since muman wrote it counts as it is and is never
 encoded again, unless `sync --force` writes it again, which fits it as
-any other song. muman does not count files in the library that it did
-not write.
+any other song. So does a song a sync leaves as built: one whose source
+was cut off since, until `sync --force`, or was fetched again holding
+something else, until `sync --accept`. muman does not count files in the
+library that it did not write.

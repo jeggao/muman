@@ -110,20 +110,23 @@ fn go(fake: &Fake, f: &Fixture, plan: &Plan) -> Result<Rendered> {
 fn retag_over(fake: &Fake, f: &Fixture, plan: &Plan, r: &Rendered, anew: bool) -> Result<Rendered> {
     let made = crate::artifact::parts(plan);
     let beside = names(r);
+    let library = f.dir.path().join("lib");
+    let claim = [Ledger::taken(&r.audio)];
     retag(
         fake,
         &Job {
             parts: &made,
             stem: Path::new("A/Record/Song"),
-            library: &f.dir.path().join("lib"),
+            library: &library,
             sources: &f.sources,
             scratch: &f.dir.path().join("scratch-retag"),
-            claim: &[Ledger::taken(&r.audio)],
+            claim: &claim,
             stale: &[],
         },
         (&r.audio, &beside),
         anew,
-    )
+    )?
+    .put(&library, &claim)
 }
 
 fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result<Rendered> {
@@ -224,7 +227,11 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     let lib = f.dir.path().join("lib");
     let lrc = lib.join("A/Record/Song.lrc");
     let whole = fs::read(&lrc).unwrap();
-    let claim = [Ledger::taken(Path::new("A/Record/Song.lrc"))];
+    // As a retag claims the song's file it puts once these are written.
+    let claim = [
+        Ledger::taken(&built.audio),
+        Ledger::taken(Path::new("A/Record/Song.lrc")),
+    ];
     let scratch = f.dir.path().join("scratch-beside");
     let job = |parts| Job {
         parts,
@@ -415,6 +422,7 @@ fn a_cover_file_written_alone_is_the_one_a_build_writes() {
     let built = go(&Fake::default(), &f, &p).unwrap();
     let lib = f.dir.path().join("lib");
     let claim = [
+        Ledger::taken(&built.audio),
         Ledger::taken(Path::new("A/Record/Song.png")),
         Ledger::taken(Path::new("A/Record/Song.j.jpg")),
     ];
@@ -772,6 +780,32 @@ fn lyrics_not_claimed_are_neither_written_over_nor_removed() {
     );
 }
 
+#[test]
+fn a_song_one_file_of_the_user_s_refuses_changes_none_of_its_files() {
+    let f = fixture();
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.cover.as_mut().unwrap().out = Some(vec![place(Some(""), ImageFormat::Png, true, None, None)]);
+    let built = go(&Fake::default(), &f, &p).unwrap();
+    let lib = f.dir.path().join("lib");
+    let audio = fs::read(lib.join(&built.audio)).unwrap();
+    let lrc = lib.join("A/Record/Song.lrc");
+    fs::write(&lrc, "as recorded").unwrap();
+    fs::write(lib.join("A/Record/Song.png"), "mine").unwrap();
+    let claim = [
+        Ledger::taken(&built.audio),
+        Ledger::taken(Path::new("A/Record/Song.lrc")),
+    ];
+    let e = go_claiming(&Fake::default(), &f, &p, &claim).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("Song.png is not muman's"),
+        "{e:#}"
+    );
+    assert_eq!(fs::read_to_string(&lrc).unwrap(), "as recorded");
+    assert_eq!(fs::read(lib.join("A/Record/Song.png")).unwrap(), b"mine");
+    assert_eq!(fs::read(lib.join(&built.audio)).unwrap(), audio);
+    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<PathBuf>::new());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_link_left_at_a_staged_name_is_not_written_through() {
@@ -870,6 +904,58 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
     assert_eq!(
         fs::read_to_string(f.dir.path().join("lib/A/Record/Song.lrc")).unwrap(),
         "[00:02.00]sung\n"
+    );
+}
+
+#[test]
+fn a_line_timed_past_the_song_s_end_is_left_out_and_said() {
+    let mut f = fixture();
+    let lrc = f.dir.path().join("store/x.lrc");
+    fs::write(
+        &lrc,
+        "[00:05.00]five\n[999999999:00.00]huge\n[00:20.50]tail\n",
+    )
+    .unwrap();
+    let key = SourceKey::Manual("x.lrc".into());
+    f.sources.insert(
+        key.clone(),
+        Located {
+            key: key.clone(),
+            path: lrc,
+            kind: Kind::Lyrics,
+            lyrics: None,
+            covers: Vec::new(),
+        },
+    );
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.cover = None;
+    p.lyrics = Some(LyricsRef {
+        key,
+        rev: "r".into(),
+        at: LyricsAt::File,
+        shift_ms: 0,
+        stretch_ppm: 0,
+        placement: LyricsPlacement::Sidecar,
+        files: None,
+        inside: None,
+        end_ms: Some(20_000),
+        language: None,
+        clean_off: Vec::new(),
+        cleaning: crate::clean::lyrics::EDITION,
+        writing: crate::lyrics::WRITING,
+    });
+    let rendered = go(&Fake::default(), &f, &p).unwrap();
+    assert_eq!(
+        fs::read_to_string(f.dir.path().join("lib/A/Record/Song.lrc")).unwrap(),
+        "[00:05.00]five\n[00:20.50]tail\n"
+    );
+    assert!(
+        rendered
+            .problems
+            .iter()
+            .any(|p| p.ends_with("1 line(s) left out, timed past the song's end")),
+        "{:?}",
+        rendered.problems
     );
 }
 
@@ -1162,6 +1248,35 @@ fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
         read["musicbrainz_trackid"],
         ["00000000-0000-0000-0000-000000000001"]
     );
+}
+
+#[test]
+fn an_m4a_s_tags_shrinking_by_any_length_are_written() {
+    let codec = Format::Copy { codec: Codec::Aac };
+    let album = |name: &str| vec![("ALBUM".to_string(), vec![name.to_string()])];
+    let long = "Lantern Weather Sampler";
+    for shrink in 1..=12 {
+        let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
+        write_tags(&path, codec, &album(long), None, None, &[]).unwrap();
+        let short = album(&long[..long.len() - shrink]);
+        write_tags(&path, codec, &short, None, None, &[])
+            .unwrap_or_else(|e| panic!("{shrink} bytes shorter: {e:#}"));
+        assert_eq!(verify(&path, &short, false), [] as [String; 0], "{shrink}");
+    }
+}
+
+#[test]
+fn a_tag_writer_that_panics_fails_the_write_alone() {
+    let codec = Format::Copy { codec: Codec::Aac };
+    let album = |name: &str| vec![("ALBUM".to_string(), vec![name.to_string()])];
+    // An atom after `moov` keeps its `ilst` in place, where `lofty` cannot
+    // write one exactly 8 bytes shorter.
+    let mut bytes = crate::testing::SILENCE_M4A.to_vec();
+    bytes.extend_from_slice(&[0, 0, 0, 8, b'f', b'r', b'e', b'e']);
+    let (_dir, path) = written(&bytes, "song.m4a");
+    write_tags(&path, codec, &album("Paper Comet Sampler"), None, None, &[]).unwrap();
+    let e = write_tags(&path, codec, &album("Paper Comet"), None, None, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("(a panic at "), "{e:#}");
 }
 
 #[test]
@@ -1667,7 +1782,7 @@ const RENDERED: [(Codec, &str, &str); 7] = [
     ),
     (
         Codec::Flac,
-        "3",
+        "4",
         "952b8c6d0e58c6a7397fb90c88876b2aa818f72ee456b59bed8cfaa0577a6b66",
     ),
     (

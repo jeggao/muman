@@ -3,7 +3,9 @@
 //! bitrates, and songs are lowered, the least audible loss for each byte
 //! saved first, until their total fits. `export --max-size` fits a zip
 //! this way, and [`crate::limit`] the library under `[library]
-//! max_size`.
+//! max_size`, both from the rungs [`crate::limit::rungs`] makes, so the
+//! two lower alike. A rung costs only the loss it adds: encoding a song
+//! again costs nothing of its own.
 //!
 //! **Ladder.** The first rung is the song as it stands. Below it come
 //! `[audio] lossy` at the bitrates of [`ladder`] under the one it would
@@ -25,13 +27,11 @@
 //! Vorbis, MP3 last; they rank choices and claim no absolute score.
 //!
 //! **Allocation.** Each song's rungs become points of bytes saved against
-//! loss added, plus its churn for leaving the first rung: the cost of
-//! encoding, which makes a song that moves at all move further rather
-//! than many songs move a little. Only the points on their lower convex
-//! hull are worth taking. Every song's next hull segment waits in a heap
-//! by its loss per byte saved, and the cheapest is taken until the total
-//! fits: a Lagrangian sweep, `O(n log n)` over every rung of `n` songs, with
-//! no encoding to estimate. Ties go by key, so the songs' order changes
+//! loss added. Only the points on their lower convex hull are worth
+//! taking. Every song's next hull segment waits in a heap by its loss per
+//! byte saved, and the cheapest is taken until the total fits: a
+//! Lagrangian sweep, `O(n log n)` over every rung of `n` songs, with no
+//! encoding to estimate. Ties go by key, so the songs' order changes
 //! nothing.
 //!
 //! **Raising.** The step that makes the total fit can free more than was
@@ -88,8 +88,6 @@ pub struct Item {
     /// Breaks ties between equal choices.
     pub key: String,
     pub rungs: Vec<Rung>,
-    /// What leaving the first rung costs, as loss.
-    pub churn: f64,
 }
 
 /// The rung each item is written at and what they take together.
@@ -324,8 +322,8 @@ struct Point {
 }
 
 /// The rungs worth lowering an item through from its first, in order:
-/// the lower convex hull of what each saves against the loss and churn it
-/// adds, the first rung included.
+/// the lower convex hull of what each saves against the loss it adds, the
+/// first rung included.
 fn hull(item: &Item) -> Vec<Point> {
     let first = item.rungs[0].bytes;
     let mut points: Vec<Point> = item
@@ -337,7 +335,7 @@ fn hull(item: &Item) -> Vec<Point> {
         .map(|(n, r)| Point {
             rung: n,
             saved: (first - r.bytes) as f64,
-            cost: r.loss + item.churn,
+            cost: r.loss,
         })
         .collect();
     points.sort_by(|a, b| a.saved.total_cmp(&b.saved).then(a.cost.total_cmp(&b.cost)));
@@ -647,7 +645,6 @@ mod tests {
         Item {
             key: key.to_string(),
             rungs,
-            churn: 0.1,
         }
     }
 

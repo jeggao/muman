@@ -174,7 +174,18 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(format!("{e:#}").contains("exists already"), "{e:#}");
+    assert!(format!("{e:#}").contains("is a source already"), "{e:#}");
+    std::fs::write(&song, "other bytes").unwrap();
+    let e = run_with(
+        &s.job(&["add", &song]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("exists already; rename"), "{e:#}");
 }
 
 #[test]
@@ -841,6 +852,179 @@ fn a_folder_s_own_cover_is_left_alone_and_blocks_no_song() {
 }
 
 #[test]
+fn a_folder_s_cover_the_user_changed_stays_in_its_folder_when_its_song_moves() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "mine").unwrap();
+    let before = library_of(&s);
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", &holder.to_string(), "album=Copper Moth"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved:"), "{text}");
+    assert_eq!(std::fs::read_to_string(&cover).unwrap(), "mine", "{text}");
+    let moved = s.dir.path().join("lib/Artist/Copper Moth/cover.jpg");
+    assert_eq!(
+        std::fs::read(&moved).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "the song's new folder has muman's: {text}"
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+    let (_, report) = s.report(&flacs(), &["check"]);
+    assert!(report.contains("cover.jpg"), "{report}");
+}
+
+#[test]
+fn a_folder_s_cover_the_user_changed_stays_with_a_song_held_back_from_its_move() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "mine").unwrap();
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    assert_eq!(holder.to_string(), "manual:b.flac");
+    let lib = s.dir.path().join("lib");
+    let mine = lib.join("Record/Song.flac");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "my own rip").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Moved:"), "{text}");
+    assert!(
+        text.contains("Left at Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&cover).unwrap(), "mine", "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my own rip");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
+fn a_song_left_where_it_is_for_lyrics_the_user_changed_leaves_its_new_folder_a_cover() {
+    let s = Setup::new();
+    // Song, the folder's first, holds its cover; Wren goes with the album.
+    let wren = FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Wren\"");
+    let fake = Fake::default().probe("b.flac", &wren).probe(".flac", FLAC);
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = (library_of(&s).into_keys())
+        .find(|p| p.extension().is_some_and(|e| e == "lrc"))
+        .expect(&text);
+    std::fs::write(
+        s.dir.path().join("lib").join(lrc),
+        "[00:01.00]Paper comets, mine\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&fake, &["set", "-y", "manual:a.flac", "title=Tidewater"]);
+    assert!(ok && text.contains("Left at Artist/Record/"), "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Moved:"), "{text}");
+    let lib = s.dir.path().join("lib");
+    assert_eq!(
+        std::fs::read(lib.join("Record/cover.jpg")).ok().as_deref(),
+        Some(crate::testing::PIXEL_JPEG),
+        "the song that moves holds its folder's cover: {text}"
+    );
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
+fn a_song_a_file_of_the_user_s_keeps_unwritten_leaves_its_folder_a_cover() {
+    let s = Setup::new();
+    let wren = FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Wren\"");
+    let fake = Fake::default().probe("b.flac", &wren).probe(".flac", FLAC);
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    // Song, the folder's first, would hold its cover.
+    s.written("lib/Artist/Record/02 Song.lrc", "[00:01.00]My own words\n");
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+    assert_eq!(
+        std::fs::read(s.dir.path().join("lib/Artist/Record/cover.jpg"))
+            .ok()
+            .as_deref(),
+        Some(crate::testing::PIXEL_JPEG),
+        "the song written holds its folder's cover: {text}"
+    );
+}
+
+#[test]
+fn a_folder_s_cover_the_user_changed_moves_with_its_whole_album() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::write(s.dir.path().join("lib/Artist/Record/cover.jpg"), "mine").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    assert_eq!(
+        std::fs::read_to_string(lib.join("Record/cover.jpg")).unwrap(),
+        "mine",
+        "{text}"
+    );
+    assert!(!lib.join("Artist").exists(), "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
 fn undo_takes_a_folder_s_cover_back_out() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -890,6 +1074,79 @@ fn a_folder_s_cover_moves_with_its_album() {
     assert!(!fake.ran("-c:a"), "moved, not written: {text}");
     let (_, text) = s.run(&flacs(), &["sync"]);
     assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
+fn songs_of_two_folders_moved_into_the_library_folder_move_and_take_no_cover() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let other = FLAC
+        .replace("\"Artist\"", "\"Kiri Hoshino\"")
+        .replace("\"Record\"", "\"Shoals\"")
+        .replace("\"Song\"", "\"Two\"");
+    let fake = || Fake::default().probe("b.flac", &other).probe(".flac", FLAC);
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    assert!(lib.join("Artist/Record/cover.jpg").exists(), "{text}");
+    assert!(lib.join("Kiri Hoshino/Shoals/cover.jpg").exists(), "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let flat = listed.replace(&default, "template = \"{{ artist }} - {{ title }}\"");
+    std::fs::write(&list, flat).unwrap();
+    let fake = fake();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("Moved:").count(), 2, "{text}");
+    assert!(!text.contains("Added:"), "{text}");
+    assert!(!fake.ran("-c:a"), "moved, not written: {text}");
+    assert!(
+        text.contains("No folder cover in the library folder itself"),
+        "{text}"
+    );
+    assert!(!text.contains("share a folder"), "{text}");
+    assert!(!lib.join("cover.jpg").exists(), "{text}");
+    assert!(!lib.join("Artist").exists(), "{text}");
+    assert!(!lib.join("Kiri Hoshino").exists(), "{text}");
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
+fn a_folder_cover_the_user_changed_is_left_by_a_template_that_drops_its_folder() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "a cover of my own").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &list,
+        listed.replace(&default, "template = \"{{ artist }} - {{ title }}\""),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read(&cover).unwrap(),
+        b"a cover of my own",
+        "{text}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
 }
 
 #[test]
@@ -1172,6 +1429,700 @@ fn a_dropped_in_file_is_listed_and_a_moved_one_followed() {
     );
     assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
     assert!(!text.contains("Updated"), "a file that only moved: {text}");
+}
+
+/// Run `args` in `s`, a dropped-in file settling for an hour.
+fn run_settling(s: &Setup, fake: &Fake, args: &[&str]) -> (bool, String) {
+    let mut job = s.job(args);
+    job.settling = std::time::Duration::from_secs(3600);
+    let mut out = Vec::new();
+    let ok = run_with(
+        &job,
+        fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    (ok, String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn a_file_renamed_in_the_manual_folder_is_followed_without_settling() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    let from = s.dir.path().join("home/sources/manual/a.flac");
+    let to = s.dir.path().join("home/sources/manual/Artist/drop.flac");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::rename(&from, &to).unwrap();
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+    assert!(report.contains("followed by the next sync"), "{report}");
+    let (ok, text) = run_settling(&s, &flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/drop.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("Still being copied in"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("Artist/drop.flac".into())]]
+    );
+}
+
+#[test]
+fn a_listed_file_gone_while_another_is_copied_in_waits_rather_than_fails() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built: Vec<PathBuf> =
+        crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.flac")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/sources/manual/b.flac"),
+        b"half of a.flac",
+    )
+    .unwrap();
+    let (ok, text) = run_settling(&s, &flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Still being copied in"), "{text}");
+    assert!(text.contains("Made once its file is copied in"), "{text}");
+    assert!(!text.contains("Failed"), "{text}");
+    assert!(built[0].exists(), "its file is kept: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
+/// Move the manual file `from` of `s` to `to`.
+fn move_manual(s: &Setup, from: &str, to: &str) {
+    let manual = s.dir.path().join("home/sources/manual");
+    let to = manual.join(to);
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::rename(manual.join(from), to).unwrap();
+}
+
+#[test]
+fn a_moved_file_is_followed_by_every_command_that_syncs() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    move_manual(&s, "a.flac", "Artist/a.flac");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/a.flac"),
+        "{text}"
+    );
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+}
+
+#[test]
+fn undoing_the_sync_that_followed_a_move_keeps_it_followed() {
+    undoing_a_followed_move(false);
+}
+
+#[test]
+fn undoing_an_earlier_muman_s_sync_that_followed_a_move_follows_it_again() {
+    undoing_a_followed_move(true);
+}
+
+#[test]
+fn each_undo_back_from_a_followed_move_puts_back_the_list_with_it_followed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok, "{text}");
+    move_manual(&s, "a.flac", "x/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    move_manual(&s, "x/a.flac", "y/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let there = SourceKey::Manual("y/a.flac".into());
+    let b = SourceKey::Manual("b.flac".into());
+    for genre in [Some("Folk"), Some("Folk"), None] {
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "{text}");
+        assert!(
+            !text.contains("Moved: manual:"),
+            "put back followed: {text}"
+        );
+        assert_eq!(
+            genres(&s),
+            [
+                (vec![there.clone()], genre.map(ToString::to_string)),
+                (vec![b.clone()], None)
+            ],
+            "{text}"
+        );
+    }
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+/// A move followed by a sync, then undone, the sync's record as an earlier
+/// muman wrote it, keeping no moves, when `earlier`.
+fn undoing_a_followed_move(earlier: bool) {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built: Vec<PathBuf> =
+        crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+
+    move_manual(&s, "a.flac", "Artist/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (file, mut record) = latest_record(&s);
+    assert_eq!(
+        record["followed"],
+        serde_json::json!({"manual:a.flac": "manual:Artist/a.flac"})
+    );
+    if earlier {
+        record.as_object_mut().unwrap().remove("followed");
+        record["version"] = 2.into();
+        std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/a.flac"),
+        earlier,
+        "followed again only after an earlier muman's undo: {text}"
+    );
+    assert!(!text.contains("Removed"), "{text}");
+    assert!(built[0].exists(), "its file is kept: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "listed once: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+}
+
+/// A song of `in/a.flac` and a copy of it, `in/copy.flac`, synced, by
+/// `fake`; the library file built.
+fn copies_listed(s: &Setup, fake: &Fake) -> PathBuf {
+    s.written("home/sources/manual/in/a.flac", "one recording");
+    assert!(s.run(fake, &["sync"]).0);
+    s.written("home/sources/manual/in/copy.flac", "one recording");
+    let (ok, text) = s.run(fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![
+            SourceKey::Manual("in/a.flac".into()),
+            SourceKey::Manual("in/copy.flac".into())
+        ]],
+        "{text}"
+    );
+    let built = crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+    built[0].clone()
+}
+
+fn copies() -> Fake {
+    flacs()
+        .print("a.flac", words(1600, 1))
+        .print("copy.flac", words(1600, 1))
+}
+
+#[test]
+fn two_copies_of_one_song_moved_together_are_followed_and_undone() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    let moved = [vec![
+        SourceKey::Manual("x/p.flac".into()),
+        SourceKey::Manual("x/q.flac".into()),
+    ]];
+    let (ok, text) = s.run(&copies(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), moved, "{text}");
+
+    let (ok, text) = s.run(&copies(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Not followed"), "{text}");
+    assert!(!text.contains("Removed"), "{text}");
+    assert!(built.exists(), "{text}");
+    assert_eq!(s.songs(), moved, "{text}");
+    let (ok, report) = s.report(&copies(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+#[test]
+fn a_file_of_yours_deleted_beside_another_of_its_song_is_taken_out_of_it() {
+    let s = Setup::new();
+    let fake = || {
+        flacs()
+            .print("old.flac", words(1600, 1))
+            .print("new.flac", words(1600, 1))
+    };
+    let (old, new) = (
+        SourceKey::Manual("in/old.flac".into()),
+        SourceKey::Manual("in/new.flac".into()),
+    );
+    let gone = s.file("home/sources/manual/in/old.flac");
+    assert!(s.run(&fake(), &["sync"]).0);
+    s.file("home/sources/manual/in/new.flac");
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), [vec![old.clone(), new.clone()]], "{text}");
+
+    std::fs::remove_file(gone).unwrap();
+    let (_, report) = s.report(&fake(), &["status"]);
+    assert!(
+        report.contains(
+            "Deleted from sources/manual by hand, taken out of its song by the next sync: \
+             manual:in/old.flac"
+        ),
+        "{report}"
+    );
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Deleted from sources/manual by hand, so taken out of its song"),
+        "{text}"
+    );
+    assert_eq!(s.songs(), [vec![new.clone()]]);
+    let (ok, report) = s.report(&fake(), &["check"]);
+    assert!(ok, "{report}");
+
+    let (ok, text) = s.run(&fake(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), [vec![old, new]]);
+}
+
+/// `a.flac` and `b.flac` synced by `fake`, the song of `b.flac` removed,
+/// and `b.flac` written anew with other bytes.
+fn removed_and_written_over(s: &Setup, fake: &Fake) {
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(fake, &["sync"]).0);
+    let (ok, text) = s.run(fake, &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    s.written(
+        "home/sources/manual/b.flac",
+        "another recording at its name",
+    );
+}
+
+#[test]
+fn other_audio_at_a_removed_song_s_name_is_listed_as_a_new_file() {
+    let s = Setup::new();
+    removed_and_written_over(&s, &flacs());
+    let (_, report) = s.run(&flacs(), &["status"]);
+    assert!(
+        report.contains(
+            "Other audio than its removed song held, listed by the next sync as a new file: \
+             manual:b.flac"
+        ),
+        "{report}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Other audio than its removed song held, so listed as a new file"),
+        "{text}"
+    );
+    assert!(!text.contains("kept out"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn a_removed_song_s_file_retagged_in_place_stays_out() {
+    let s = Setup::new();
+    let fake = Fake {
+        hashes: vec![("b.flac".into(), 7)],
+        ..flacs()
+    };
+    removed_and_written_over(&s, &fake);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Other audio"), "{text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
+#[test]
+fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    let (ok, text) = s.run(
+        &copies(),
+        &["set", "-y", "manual:in/a.flac", "audio=manual:in/copy.flac"],
+    );
+    assert!(ok, "{text}");
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    assert!(s.run(&copies(), &["sync"]).0, "told apart by their stamps");
+    let moved = s.songs();
+    for args in [&["undo", "-y"][..], &["sync"]] {
+        let (ok, text) = s.run(&copies(), args);
+        assert!(ok, "put back followed, nothing is left to tell: {text}");
+        assert!(!text.contains("Not followed"), "{text}");
+        assert!(!text.contains("Removed"), "{text}");
+        assert!(built.exists(), "{text}");
+        assert_eq!(s.songs(), moved, "{text}");
+    }
+    let (ok, report) = s.report(&copies(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+#[test]
+fn a_song_whose_copies_cannot_be_told_apart_after_an_earlier_muman_s_undo_keeps_its_file() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    let (ok, text) = s.run(
+        &copies(),
+        &["set", "-y", "manual:in/a.flac", "audio=manual:in/copy.flac"],
+    );
+    assert!(ok, "{text}");
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    assert!(s.run(&copies(), &["sync"]).0, "told apart by their stamps");
+    let (file, mut record) = latest_record(&s);
+    record.as_object_mut().unwrap().remove("followed");
+    record["version"] = 2.into();
+    std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    for args in [&["undo", "-y"][..], &["sync"]] {
+        let (ok, text) = s.run(&copies(), args);
+        assert!(!ok, "which is pinned cannot be told: {text}");
+        assert!(text.contains("Not followed"), "{text}");
+        assert!(!text.contains("Removed"), "{text}");
+        assert!(built.exists(), "held as built: {text}");
+    }
+    let (_, report) = s.report(&copies(), &["check"]);
+    assert!(!report.contains("cannot be written"), "{report}");
+}
+
+#[test]
+fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
+    let s = Setup::new();
+    let fake = Fake {
+        hashes: vec![("a.flac".into(), 7), ("drop.flac".into(), 7)],
+        ..flacs()
+    };
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.flac")).unwrap();
+    s.written(
+        "home/sources/manual/Artist/drop.flac",
+        "a.flac, tagged anew",
+    );
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/drop.flac"),
+        "{text}"
+    );
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("Artist/drop.flac".into())]]
+    );
+}
+
+#[test]
+fn a_source_that_failed_to_read_is_read_again_once_muman_reads_it_otherwise() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let home = s.dir.path().join("home");
+    let key = SourceKey::Manual("a.flac".into());
+    let rev = State::load(&home).unwrap().facts[&key].rev.clone();
+    let fail = |reader: String| {
+        let mut state = State::load(&home).unwrap();
+        state.facts.remove(&key);
+        state.record_unread(&key, rev.clone(), reader, "unreadable".into());
+        state.save(&home).unwrap();
+    };
+    fail(crate::facts::reading(crate::store::Kind::Media));
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        text.contains("Not reading 1 source(s)"),
+        "read as before: {text}"
+    );
+    fail("an older reading".into());
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Measuring 1 source(s)"), "{text}");
+    assert!(State::load(&home).unwrap().failures.is_empty());
+}
+
+/// The two manual files `s` lists, `a.flac` and `b.flac`, synced; the
+/// first song given a genre by hand.
+fn two_listed(s: &Setup) {
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
+fn a_pin_to_a_source_that_holds_none_is_said_by_sync_status_and_check() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "lyrics=manual:a.flac"],
+    );
+    let said = "no lyrics: pinned to manual:a.flac, which holds none";
+    assert!(ok && text.contains(said), "the sync after set: {text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains(said), "every sync: {text}");
+    let (_, text) = s.run(&flacs(), &["status"]);
+    assert!(text.contains("1 problem(s) found"), "status: {text}");
+    let (_, report) = s.report(&flacs(), &["status", "--all"]);
+    assert!(report.contains(said), "status: {report}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(
+        !ok && report.contains("A pin leaves its song without a part"),
+        "{report}"
+    );
+}
+
+/// The genre each song of `s` was given by hand, by its sources.
+fn genres(s: &Setup) -> Vec<(Vec<SourceKey>, Option<String>)> {
+    let manifest = Manifest::load(&s.dir.path().join("home")).unwrap();
+    (manifest.songs.into_iter())
+        .map(|song| {
+            let genre = (song.tags.iter())
+                .find(|(k, _)| k == "genre")
+                .and_then(|(_, v)| v.first().cloned());
+            (song.sources, genre)
+        })
+        .collect()
+}
+
+#[test]
+fn two_files_that_trade_names_are_each_followed_to_the_other_s() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    move_manual(&s, "a.flac", "x.flac");
+    move_manual(&s, "b.flac", "a.flac");
+    move_manual(&s, "x.flac", "b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:b.flac"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:a.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("has changed since"), "{text}");
+    let (a, b) = (
+        SourceKey::Manual("a.flac".into()),
+        SourceKey::Manual("b.flac".into()),
+    );
+    assert_eq!(
+        genres(&s),
+        [(vec![b], Some("Folk".to_string())), (vec![a], None)],
+        "each song keeps its own tags"
+    );
+}
+
+#[test]
+fn undoing_the_sync_that_followed_a_round_of_names_keeps_it_followed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/c.flac");
+    two_listed(&s);
+
+    move_manual(&s, "c.flac", "x.flac");
+    move_manual(&s, "b.flac", "c.flac");
+    move_manual(&s, "a.flac", "b.flac");
+    move_manual(&s, "x.flac", "a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let followed = genres(&s);
+    assert_eq!(
+        followed[0],
+        (
+            vec![SourceKey::Manual("b.flac".into())],
+            Some("Folk".to_string())
+        ),
+        "{text}"
+    );
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("Moved: manual:"),
+        "put back followed: {text}"
+    );
+    assert!(!text.contains("has changed since"), "{text}");
+    assert_eq!(genres(&s), followed, "each song keeps its own tags");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Up to date: 3 song(s)"), "{text}");
+}
+
+#[test]
+fn a_file_moved_over_another_listed_one_takes_its_song_there() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    move_manual(&s, "b.flac", "a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "the song of the file replaced has none: {text}");
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:a.flac"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Replaced by manual:b.flac, moved over it: manual:a.flac"),
+        "{text}"
+    );
+    let (a, b) = (
+        SourceKey::Manual("a.flac".into()),
+        SourceKey::Manual("b.flac".into()),
+    );
+    assert_eq!(
+        genres(&s),
+        [(vec![b], Some("Folk".to_string())), (vec![a], None)],
+        "the Folk song waits for its own file"
+    );
+}
+
+#[test]
+fn files_edited_in_place_are_followed_as_changed_not_as_moved() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    s.written("home/sources/manual/a.flac", "other audio of a");
+    s.written("home/sources/manual/b.flac", "other audio of b");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Moved"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn a_gone_file_two_files_could_be_is_not_guessed_at() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    let manual = s.dir.path().join("home/sources/manual");
+    for copy in ["x", "y"] {
+        std::fs::create_dir_all(manual.join(copy)).unwrap();
+        std::fs::copy(manual.join("a.flac"), manual.join(copy).join("a.flac")).unwrap();
+    }
+    std::fs::remove_file(manual.join("a.flac")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(
+            "Not followed, as which file is which cannot be told: manual:a.flac held what \
+             manual:x/a.flac, manual:y/a.flac hold"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Added"), "neither is listed anew: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
+#[test]
+fn a_removed_song_s_file_moved_stays_out_and_is_restored_where_it_is() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    move_manual(&s, "b.flac", "sorted/b.flac");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:sorted/b.flac"),
+        "{text}"
+    );
+    let removed = |s: &Setup| {
+        (Manifest::load(&s.dir.path().join("home")).unwrap().removed)
+            .into_iter()
+            .flat_map(|r| r.sources)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(removed(&s), [SourceKey::Manual("sorted/b.flac".into())]);
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "{text}");
+
+    move_manual(&s, "sorted/b.flac", "kept/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("Added"),
+        "a file moved after its removal: {text}"
+    );
+    assert_eq!(removed(&s), [SourceKey::Manual("kept/b.flac".into())]);
+
+    move_manual(&s, "kept/b.flac", "b.flac");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:kept/b.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn undoing_an_add_whose_copy_was_moved_takes_the_copy_out() {
+    let s = Setup::new();
+    let a = s.file("rips/a.flac");
+    let b = s.file("rips/b.flac");
+    assert!(s.run(&flacs(), &["add", &a]).0);
+    assert!(s.run(&flacs(), &["add", &b]).0);
+
+    move_manual(&s, "b.flac", "sorted/b.flac");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Deleted the copy the run made"), "{text}");
+    assert!(!text.contains("gone already"), "{text}");
+    let moved = s.dir.path().join("home/sources/manual/sorted/b.flac");
+    assert!(!moved.exists(), "{text}");
+    assert!(
+        s.dir.path().join("rips/b.flac").exists(),
+        "the user's own stays"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "{text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
 }
 
 #[test]
@@ -1584,6 +2535,30 @@ fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
 }
 
 #[test]
+fn a_torrents_file_keyed_as_another_is_left_and_the_other_written() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["a:b.flac", "a：b.flac"]);
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("a：b.flac is not fetched: its key is spelled as that of a:b.flac"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/a：b.flac")).unwrap();
+    assert_eq!(s.songs(), [vec![key]]);
+    let built = crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+    let (ok, text) = s.run(&fake, &["sync", "--offline"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["01 Paper Comets.flac", "cover.jpg"]);
@@ -1616,6 +2591,27 @@ fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
     assert!(torrents.join(&hash).join("cover.jpg").is_file(), "{text}");
     let (ok, text) = s.run(&fake, &["sync"]);
     assert!(ok, "{text}");
+}
+
+#[test]
+fn a_torrents_file_named_as_a_drive_is_kept_by_a_lookalike_not_refused() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("X: The Remixes", &["a:b.flac", "Plain.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::new(Mutex::new(Vec::new())));
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{hash}/{p}")).unwrap();
+    let mut songs = s.songs();
+    songs.sort();
+    assert_eq!(songs, [vec![key("Plain.flac")], vec![key("a：b.flac")]]);
+    let torrents = s.dir.path().join("home/sources/torrent");
+    assert!(torrents.join(&hash).join("a：b.flac").is_file());
 }
 
 #[test]
@@ -1734,7 +2730,7 @@ fn sync_fetches_a_torrents_file_gone_from_the_store_again() {
         key: SourceKey::parse(&format!("torrent:{hash}/02 Rooms of Salt.flac")).unwrap(),
         note: "Rooms of Salt".into(),
     });
-    manifest.save().unwrap();
+    manifest.save(&mut crate::manifest::Unrecorded).unwrap();
     let torrents = s.dir.path().join("home/sources/torrent");
     let comets = torrents.join(&hash).join("01 Paper Comets.flac");
     let salt = torrents.join(&hash).join("02 Rooms of Salt.flac");
@@ -2595,6 +3591,38 @@ fn a_damaged_torrent_file_its_torrent_holds_so_is_not_fetched_even_on_retry() {
 }
 
 #[test]
+fn a_torrent_file_measured_whole_since_it_was_not_mended_is_no_problem() {
+    let s = Setup::new();
+    let (key, file, fake) = damaged_at_source(&s, &[("Paper Comets.flac", b"a copy with holes")]);
+    let (_, text) = s.run(&fake, &["sync"]);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Mend),
+        "{text}"
+    );
+    let (ok, report) = s.report(&fake, &["check"]);
+    assert!(!ok && report.contains("to mend"), "{report}");
+
+    // Measured anew, as by a measure that judges it whole since.
+    let home = s.dir.path().join("home");
+    let mut state = crate::state::State::load(&home).unwrap();
+    let audio = state.facts.get_mut(&key).unwrap().audio.as_mut().unwrap();
+    audio.analysis.integrity = None;
+    state.save(&home).unwrap();
+    let whole = Fake {
+        hashes: vec![("Paper Comets".into(), 1)],
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (_, text) = s.run(&whole, &["sync"]);
+    assert!(file.exists());
+    let (_, report) = s.report(&whole, &["check"]);
+    assert!(!report.contains("to mend"), "{text}\n{report}");
+    assert!(!report.contains("Damaged audio"), "{report}");
+}
+
+#[test]
 fn a_damaged_torrent_file_fetched_back_as_it_was_is_not_fetched_again() {
     let s = Setup::new();
     // The piece reaches into the notes, which no song brings, so the
@@ -2905,7 +3933,7 @@ fn edit_shows_where_each_tag_comes_from_and_hides_what_was_held() {
         false,
         Some(&mut p),
         &mut editor,
-        &mut || Ok(()),
+        &mut crate::history::Later::new(&dirs.home).unwrap(),
         &mut Vec::new(),
     )
     .unwrap();
@@ -3063,6 +4091,49 @@ fn set_step_by_step_tags_an_album_types_an_offset_and_names_another_tag() {
     let after = std::fs::read_to_string(&list).unwrap();
     let album_table = &after[after.find("[[album]]").unwrap()..];
     assert!(album_table.contains("genre = \"Folk\""), "{after}\n{text}");
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Save 1 change to 2 songs?"),
+        "one field, on the album: {text}"
+    );
+}
+
+#[test]
+fn set_step_by_step_counts_and_marks_only_what_differs() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (title, audio, offset, review) = (0, 7, 10, 12);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(offset)).push_text(Some(""));
+    p.push_select(Some(audio)).push_select(Some(0));
+    p.push_select(Some(title)).push_select(Some(1));
+    p.push_text(Some("Tide"));
+    p.push_select(Some(review));
+    let text = s
+        .trusting(&flacs(), &["set", "manual:a.flac"], Some(&mut p))
+        .unwrap();
+    let menus: Vec<&String> = (p.asked.iter())
+        .filter(|a| a.starts_with("What to change?"))
+        .collect();
+    assert_eq!(menus.len(), 4, "{:?}", p.asked);
+    for menu in &menus[..3] {
+        assert!(menu.starts_with("What to change?\n"), "{menu}");
+        assert!(!menu.contains('✎'), "nothing to be: {menu}");
+    }
+    assert!(
+        menus[3].starts_with("What to change? (1 change chosen)"),
+        "{}",
+        menus[3]
+    );
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Save 1 change to Song — Artist?"),
+        "{text}"
+    );
+    assert!(!text.contains("lyrics offset"), "{text}");
+    assert!(!text.contains("audio: picked by measure"), "{text}");
 }
 
 #[test]
@@ -3164,6 +4235,131 @@ fn an_add_stopped_at_any_step_leaves_no_copy_undo_cannot_take_out() {
         );
         let m = Manifest::load(&s.dir.path().join("home")).unwrap();
         assert!(m.songs.is_empty(), "step {at}: {undone:?}");
+    }
+}
+
+#[test]
+fn an_add_stopped_at_any_step_is_undone_at_once() {
+    let whole = Setup::new();
+    let given = whole.file("rips/a.flac");
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["add", &given]);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let s = Setup::new();
+        let given = s.file("rips/a.flac");
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["add", &given]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let undone = s.trusting(&flacs(), &["undo", "-y"], None);
+        if let Err(e) = &undone {
+            assert!(
+                format!("{e:#}").contains("no run to undo"),
+                "step {at}: {e:#}"
+            );
+        }
+        let m = Manifest::load(&s.dir.path().join("home")).map(|m| m.songs.len());
+        assert!(m.is_err() || m.unwrap() == 0, "step {at}: {undone:?}");
+        assert!(library_of(&s).is_empty(), "step {at}: {undone:?}");
+    }
+}
+
+#[test]
+fn a_set_stopped_at_any_step_is_undone_at_once() {
+    let prepare = |s: &Setup| {
+        s.file("home/sources/manual/a.flac");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+    };
+    let args = ["set", "-y", "manual:a.flac", "title=Rooms of Salt"];
+    let whole = Setup::new();
+    prepare(&whole);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &args);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let songs = s.dir.path().join("home/songs.toml");
+        let (listed, library) = (std::fs::read_to_string(&songs).unwrap(), library_of(&s));
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&args),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        // Stopped before it changed anything, the run before is the last.
+        if std::fs::read_to_string(&songs).unwrap() == listed && library_of(&s) == library {
+            continue;
+        }
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "step {at}: {text}");
+        assert_eq!(
+            std::fs::read_to_string(&songs).unwrap(),
+            listed,
+            "step {at}"
+        );
+        assert_eq!(library_of(&s), library, "step {at}: {text}");
+    }
+}
+
+#[test]
+fn undo_is_refused_where_a_file_of_your_own_holds_where_a_song_moves_back() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    edit_list(&s, &default, "template = \"{{ title }}\"");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Moved"), "{text}");
+    let old = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "a file of my own").unwrap();
+    let library = library_of(&s);
+    let e = s.refused(&["undo", "-y"]);
+    assert!(e.contains("is taken"), "{e}");
+    assert_eq!(library_of(&s), library);
+}
+
+#[test]
+fn a_change_with_no_run_kept_before_it_is_undone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::remove_dir_all(s.dir.path().join("home/history")).unwrap();
+    let songs = s.dir.path().join("home/songs.toml");
+    let (listed, library) = (std::fs::read_to_string(&songs).unwrap(), library_of(&s));
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+    ] {
+        let (ok, text) = s.run(&flacs(), args);
+        assert!(ok, "{args:?}: {text}");
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "{args:?}: {text}");
+        assert_eq!(std::fs::read_to_string(&songs).unwrap(), listed, "{args:?}");
+        assert_eq!(library_of(&s), library, "{args:?}: {text}");
     }
 }
 
@@ -3666,6 +4862,55 @@ fn lyrics_muman_wrote_and_the_user_changed_are_said_to_be_so() {
 }
 
 #[test]
+fn a_song_renamed_beside_lyrics_the_user_changed_stays_where_it_is_and_undoes() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let lrc = song.with_extension("lrc");
+    std::fs::write(&lrc, "[00:01.00]Paper comets, by hand\n").unwrap();
+    let built = std::fs::read(&song).unwrap();
+
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "title=Lantern"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(
+            "Left at Artist/Record/02 Song.flac: Artist/Record/02 Song.lrc changed since muman \
+             wrote it"
+        ),
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets, by hand\n"
+    );
+    assert!(
+        !s.dir
+            .path()
+            .join("lib/Artist/Record/02 Lantern.flac")
+            .exists()
+    );
+    let (_, report) = s.report(&flacs(), &["check"]);
+    assert!(!report.contains(".flac (`sync --force"), "{report}");
+
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    let renamed = s.dir.path().join("lib/Artist/Record/02 Lantern.flac");
+    assert!(renamed.exists(), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets, by hand\n",
+        "{text}"
+    );
+}
+
+#[test]
 fn a_song_whose_source_is_gone_says_which() {
     let s = Setup::new();
     let a = s.file("home/sources/manual/a.flac");
@@ -3965,7 +5210,10 @@ fn check_reports_a_song_no_sync_can_build() {
     let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
     std::fs::write(
         &songs,
-        listed.replace(&default, "template = \"{{ title | truncate('x') }}\""),
+        listed.replace(
+            &default,
+            "template = \"{% if title not in ['', 'Title'] %}{{ 1 + title }}{% endif %}x\"",
+        ),
     )
     .unwrap();
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -3995,9 +5243,111 @@ fn a_template_naming_no_field_is_refused_before_the_sync_while_songs_still_list(
     assert!(e.contains("names albm"), "{e}");
     assert_eq!(library_of(&s), before);
     assert!(!std::fs::read_to_string(&songs).unwrap().contains("b.flac"));
+    let edited = std::fs::read_to_string(&songs).unwrap();
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+    ] {
+        let e = s.refused(args);
+        assert!(e.contains("names albm"), "{args:?}: {e}");
+        assert_eq!(std::fs::read_to_string(&songs).unwrap(), edited, "{args:?}");
+    }
     assert!(s.listed(&["list"]).contains("manual:a.flac"));
     let (ok, report) = s.report(&flacs(), &["check"]);
     assert!(!ok && report.contains("names albm"), "{report}");
+}
+
+#[test]
+fn a_template_that_cannot_name_every_song_is_refused_before_anything_is_written() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    for template in [
+        "{{ title",
+        "{{ title | nofilter }}",
+        "{{ track | pad(65536) }}/{{ title }}",
+        "{{ title | truncate(-1) }}",
+    ] {
+        std::fs::write(
+            &songs,
+            listed.replace(&default, &format!("template = \"{template}\"")),
+        )
+        .unwrap();
+        for args in [&["sync"][..], &["status"]] {
+            let e = s.refused(args);
+            assert!(e.contains("the library template"), "{template}: {e}");
+        }
+        assert_eq!(library_of(&s), before, "{template}");
+        assert!(s.listed(&["list"]).contains("manual:a.flac"), "{template}");
+    }
+}
+
+#[test]
+fn a_song_list_that_is_no_toml_is_worded_alike_by_every_command() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home").join("songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(&songs, format!("{listed}\n[[song\n")).unwrap();
+    for args in [&["status"][..], &["sync"], &["list"], &["info"]] {
+        let e = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        let said = format!("{e:#}");
+        assert!(
+            said.starts_with(&format!("{} is not valid TOML", songs.display())),
+            "{args:?}: {said}"
+        );
+    }
+}
+
+#[test]
+fn a_setting_that_does_not_read_is_invalid_and_a_song_that_does_not_is_a_failure() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let error = |text: &str| {
+        std::fs::write(&songs, text).unwrap();
+        run_with(
+            &s.job(&["status"]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+    };
+    for setting in [
+        listed.replace("restrict = \"windows\"", "restrict = \"bogus\""),
+        listed.replacen("skip = []", "skip = [\"artst:Marlo\"]", 1),
+        listed.replace("recheck = \"7 days\"", "recheck = \"a while\""),
+        listed.replace("max_name_bytes = 200", "max_name_bytes = 3"),
+    ] {
+        let e = error(&setting);
+        assert!(e.downcast_ref::<crate::cli::Invalid>().is_some(), "{e:#}");
+    }
+    for list in [
+        format!("{listed}\n[[song]\n"),
+        format!("{listed}\n[[song]]\nsources = [\"manual:b.flac\"]\nlyrics_offset = \"soon\"\n"),
+    ] {
+        let e = error(&list);
+        assert!(e.downcast_ref::<crate::cli::Invalid>().is_none(), "{e:#}");
+        assert!(e.downcast_ref::<change::Refused>().is_none(), "{e:#}");
+    }
 }
 
 #[test]
@@ -4238,6 +5588,44 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
 }
 
 #[test]
+fn a_source_cut_off_since_its_song_was_built_is_not_followed_though_its_file_is_gone() {
+    let s = Setup::new();
+    let source = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let held = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    std::fs::write(&source, "a copy stopped short").unwrap();
+    let mut cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..flacs()
+    };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
+    for run in ["the sync that finds it", "the sync after"] {
+        let (ok, text) = s.run(&cut, &["sync"]);
+        assert!(!ok, "{run} fails: {text}");
+        assert!(
+            text.contains("no file built before is left"),
+            "{run}: {text}"
+        );
+        assert!(!text.contains("Removed"), "{run}: {text}");
+        assert!(!file.exists(), "{run} writes nothing: {text}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap(),
+        held,
+        "the record keeps naming the audio the song was built from"
+    );
+    let (_, text) = s.run(&cut, &["sync", "--force"]);
+    assert!(file.exists(), "{text}");
+}
+
+#[test]
 fn check_decode_measures_each_source_afresh_and_names_its_damage() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -4345,6 +5733,60 @@ fn one_undo_takes_back_a_sync_killed_as_it_kept_files_it_writes_over() {
     );
 }
 
+#[test]
+fn one_undo_takes_back_a_sync_killed_as_it_moved_and_retagged_a_song() {
+    one_undo_takes_back_a_sync_killed_at_any_step(
+        &|s| {
+            s.file("home/sources/manual/a.flac");
+            s.file("home/sources/manual/b.flac");
+        },
+        &|s| edit_list(s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\""),
+    );
+}
+
+#[test]
+fn undo_of_a_run_that_moved_a_song_and_wrote_beside_it_takes_that_file_out() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let library = library_of(&s);
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    edit_list(&s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\"");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved"), "{text}");
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.lrc")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), library, "{text}");
+}
+
+#[test]
+fn undo_of_a_forced_sync_that_wrote_a_held_song_anew_leaves_it_held() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let mut retagged = std::fs::read(&file).unwrap();
+    retagged.extend_from_slice(b"a comment of my own");
+    std::fs::write(&file, &retagged).unwrap();
+    edit_list(&s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\"");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    let held = library_of(&s);
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert_ne!(library_of(&s), held, "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), held, "{text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    assert_eq!(library_of(&s), held, "{text}");
+}
+
 /// A sync after `edit`, of a home `prepare` fills and a sync builds,
 /// killed at each step, then synced to its end: one undo puts back the
 /// song list and the library as they were before it.
@@ -4442,6 +5884,29 @@ fn undo_puts_a_removed_song_back() {
     );
 }
 
+#[test]
+fn the_lyrics_beside_a_song_are_said_added_and_counted_by_undo() {
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    s.file("rips/Song.lrc");
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.lrc"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:Song.flac"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:Song.flac"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.flac"), "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.lrc"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-n"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Remove 2 files the run added:"), "{text}");
+    assert!(text.contains("    Artist/Record/02 Song.lrc\n"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("Removed: ").count(), 2, "{text}");
+}
+
 /// The record of the latest run, as `run.json` holds it, and its path.
 fn latest_record(s: &Setup) -> (PathBuf, serde_json::Value) {
     let history = s.dir.path().join("home/history");
@@ -4471,7 +5936,7 @@ fn a_run_records_the_songs_it_changed_alone_and_undoes_them() {
     );
     assert!(ok, "{text}");
     let (_, record) = latest_record(&s);
-    assert_eq!(record["version"], 2);
+    assert_eq!(record["version"], 3);
     assert!(record.get("outputs").is_none(), "{record}");
     let before = record["before"].as_object().unwrap();
     assert_eq!(
@@ -4611,12 +6076,32 @@ fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
     for (term, said) in [
         ("track=abc", "no number"),
         ("disc=2/x", "no number"),
+        ("track=0", "tracks and discs count from 1"),
+        ("track=-1", "tracks and discs count from 1"),
+        ("disc=2/0", "tracks and discs count from 1"),
         ("date=yesterday", "no date"),
         ("replaygain_track_gain=loud", "[loudness]"),
+        ("from=x", "from is no tag"),
+        ("has=x", "has is no tag"),
+        ("format=opus", "format is no tag"),
+        ("release=abc", "no MusicBrainz release ID"),
     ] {
         let e = s.refused(&["set", "-y", "manual:a.flac", term]);
         assert!(e.contains(said), "{term}: {e}");
     }
+    let id = "00000000-0000-4000-8000-00000000000b";
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", &format!("release={id}")],
+    );
+    assert!(ok, "{text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(m.songs[0].release.as_deref(), Some(id), "the pin, no tag");
+    assert!(m.songs[0].tags.is_empty(), "{:?}", m.songs[0].tags);
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "release!"]);
+    assert!(ok, "{text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(m.songs[0].release, None);
     let (ok, text) = s.run(
         &flacs(),
         &["set", "-y", "manual:a.flac", "track=3/12", "date=2024-05"],
@@ -4655,6 +6140,48 @@ fn set_shows_and_stores_each_value_as_it_takes_effect() {
     assert!(ok, "{text}");
     assert!(text.contains("→ what the sources offer"), "{text}");
     assert!(!tags().contains_key("date"), "{:?}", tags());
+}
+
+#[test]
+fn a_line_break_set_by_hand_reads_as_a_space_stored_shown_and_matched() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "title=Paper\nComets\t"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ Paper Comets\n"), "{text}");
+    let songs = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(songs.contains("title = \"Paper Comets\""), "{songs}");
+    let listed = s.listed(&["list", "title:=Paper Comets"]);
+    assert!(listed.contains("Paper Comets"), "{listed}");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        songs.replace("Paper Comets", "Paper\\nComets"),
+    )
+    .unwrap();
+    let listed = s.listed(&["list", "title:=Paper Comets"]);
+    assert!(
+        listed.contains("Paper Comets"),
+        "a hand edit reads alike: {listed}"
+    );
+
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "comment=one\ntwo"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ one\\ntwo\n"), "shown escaped: {text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    let kept: BTreeMap<String, Vec<String>> = m.songs[0].tags.iter().cloned().collect();
+    assert_eq!(kept["comment"], ["one\ntwo"], "kept over lines");
+    assert_eq!(
+        s.listed(&["list", "-f", "{comment}", "comment:=one two"]),
+        "one\\ntwo\n",
+        "matched with the break as a space, listed escaped"
+    );
 }
 
 #[test]
@@ -4861,6 +6388,33 @@ fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
         s.dir.path().join("home/sources/lrclib/7.lrc").exists(),
         "the other song still lists it: {text}"
     );
+}
+
+#[test]
+fn a_song_purged_keeps_its_title_and_artist_as_fields() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    assert!(!s.dir.path().join("home/sources/manual/a.flac").exists());
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        list.contains("title = \"Song\"\nartist = \"Artist\""),
+        "{list}"
+    );
+    assert_eq!(
+        s.listed(&["list", "--removed", "-f", "{artist}|{title}"]),
+        "Artist|Song\n"
+    );
+    for term in ["artist:artist", "title:=Song"] {
+        assert_eq!(
+            s.listed(&["list", "--removed", "--keys", term]),
+            "manual:a.flac\n",
+            "{term}"
+        );
+    }
 }
 
 #[test]
@@ -5704,6 +7258,8 @@ fn a_song_list_s_hook_runs_only_once_trusted_and_y_trusts_nothing() {
         &["sync"][..],
         &["set", "-y", "manual:a.flac", "genre=Folk"],
         &["info"],
+        &["undo", "-y"],
+        &["undo", "-n"],
     ] {
         let fake = flacs();
         let e = s.trusting(&fake, args, None).unwrap_err();
@@ -5996,6 +7552,7 @@ fn export_writes_the_song_list_and_the_library_into_a_zip() {
     )
     .unwrap_err();
     assert!(format!("{e}").contains("is no folder"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert!(!zip.exists(), "no folder made for a typo");
     std::fs::create_dir_all(&zip).unwrap();
     let (ok, text) = s.run(&fake, &["export", "-o", &zip.to_string_lossy()]);
@@ -6243,6 +7800,52 @@ fn export_keeps_a_song_whose_sources_are_gone_as_the_library_holds_it() {
 }
 
 #[test]
+fn an_export_makes_no_song_from_a_source_cut_off_since_it_was_built() {
+    let s = Setup::new();
+    let source = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built = std::fs::read(s.dir.path().join("lib/Artist/Record/02 Song.flac")).unwrap();
+    std::fs::write(&source, "a copy stopped short").unwrap();
+    let mut cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..flacs()
+    };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
+    let (ok, text) = s.run(&cut, &["sync"]);
+    assert!(!ok && text.contains("cut off"), "{text}");
+    let whole = s.dir.path().join("whole.zip");
+    let (ok, text) = s.run(&cut, &["export", "-o", &whole.to_string_lossy()]);
+    assert!(
+        ok,
+        "a copy of the library asks nothing of the source: {text}"
+    );
+    for (n, ask) in [["--codec", "opus"], ["--max-size", "1GiB"]]
+        .iter()
+        .enumerate()
+    {
+        let zip = s.dir.path().join(format!("out{n}.zip"));
+        let named = zip.to_string_lossy();
+        let args = [&["export", "-o", &*named][..], ask].concat();
+        let (ok, text) = s.run(&cut, &args);
+        assert!(
+            !ok && text.contains("a sync leaves as built"),
+            "{ask:?}: {text}"
+        );
+        assert!(!cut.ran("libopus"), "{ask:?}: {text}");
+        assert_eq!(
+            unzip(&zip).get("library/Artist/Record/02 Song.flac"),
+            Some(&built),
+            "{ask:?}: {text}"
+        );
+    }
+}
+
+#[test]
 fn export_fits_songs_made_anew_into_its_size() {
     let (s, fake) = exported_home("0.05");
     let zip = s.dir.path().join("out.zip");
@@ -6260,6 +7863,239 @@ fn export_fits_songs_made_anew_into_its_size() {
     );
     assert!(ok, "{text}");
     assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.opus"));
+}
+
+/// Every file under `dir`, by its path there with `/`.
+fn paths_under(dir: &Path) -> std::collections::BTreeSet<String> {
+    files_under(dir).into_keys().collect()
+}
+
+/// Each song `fake` encoded in Opus, by its file's name, with each
+/// bitrate it was encoded at.
+fn opus_encodes(fake: &Fake) -> std::collections::BTreeSet<(String, String)> {
+    (fake.calls().iter())
+        .filter(|c| c.iter().any(|a| a == "libopus"))
+        .filter_map(|c| {
+            let kbps = c.iter().skip_while(|a| *a != "-b:a").nth(1)?;
+            let name = Path::new(c.last()?).file_name()?.to_string_lossy();
+            Some((name.into_owned(), kbps.clone()))
+        })
+        .collect()
+}
+
+#[test]
+fn an_export_and_a_library_fitted_into_one_size_lower_the_same_songs() {
+    let s = Setup::new();
+    let songs = [
+        ("song-a", "Alder", 6_000, "0.4"),
+        ("song-b", "Birch", 9_000, "0.3"),
+        ("song-c", "Cedar", 12_000, "0.2"),
+        ("song-d", "Dogwood", 40_000, "0.6"),
+    ];
+    for (file, ..) in songs {
+        s.file(&format!("home/sources/manual/{file}.flac"));
+    }
+    let fake = || {
+        let mut fake = Fake::default();
+        for (n, (file, title, packets, seconds)) in songs.into_iter().enumerate() {
+            let probe = format!(
+                r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "flac",
+                "channels": 2, "sample_rate": "44100"}}], "format": {{"format_name": "flac", "duration": "{seconds}",
+                "tags": {{"TITLE": "{title}", "ARTIST": "Marlo Venn", "ALBUM": "Kites",
+                "track": "{}"}}}}}}"#,
+                n + 1
+            );
+            fake = fake.probe(&format!("{file}.flac"), &probe);
+            fake.packets.push((format!("{file}.flac"), packets));
+        }
+        fake
+    };
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let edit = |from: &str, to: &str| {
+        let text = std::fs::read_to_string(&list).unwrap();
+        assert!(text.contains(from), "{from}");
+        s.written("home/songs.toml", &text.replacen(from, to, 1));
+    };
+    edit(r#"block_size = "4 KiB""#, "block_size = 1");
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let whole: u64 = files_under(&s.dir.path().join("lib"))
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .sum();
+    let max = whole - 12_000;
+
+    let folder = s.dir.path().join("out");
+    let cap = max + std::fs::metadata(&list).unwrap().len();
+    let exporting = fake();
+    let (ok, text) = s.run(
+        &exporting,
+        &[
+            "export",
+            "--folder",
+            "-o",
+            &folder.to_string_lossy(),
+            "--max-size",
+            &cap.to_string(),
+        ],
+    );
+    assert!(ok, "{text}");
+    edit(
+        "block_size = 1",
+        &format!("block_size = 1\nmax_size = {max}"),
+    );
+    let syncing = fake();
+    let (ok, text) = s.run(&syncing, &["sync"]);
+    assert!(ok, "{text}");
+
+    let fitted = paths_under(&s.dir.path().join("lib"));
+    let lowered = fitted
+        .iter()
+        .filter(|p| Path::new(p).extension().is_some_and(|e| e == "opus"))
+        .count();
+    assert!(
+        0 < lowered && lowered < songs.len(),
+        "the size lowers some songs and not all: {fitted:?}"
+    );
+    assert_eq!(paths_under(&folder.join("library")), fitted, "{text}");
+    assert_eq!(
+        opus_encodes(&exporting),
+        opus_encodes(&syncing),
+        "each tries the same rungs: {text}"
+    );
+}
+
+/// A home holding one 5.1 FLAC song, `seconds` long, synced once each
+/// `(line, replacement)` of `settings` is made in its song list, and a
+/// fake whose stereo mix of it is far quieter than its six channels.
+fn surround_home(seconds: &str, settings: &[(&str, &str)]) -> (Setup, Fake) {
+    let s = Setup::new();
+    let tone = |amplitude| {
+        crate::testing::wav(
+            8000,
+            2,
+            Some(0x3),
+            &crate::testing::sine(8000, 2, 1000.0, amplitude, 2.0),
+        )
+    };
+    let surround = FLAC.replace("200.0", seconds).replace(
+        r#""channels": 2, "sample_rate": "44100""#,
+        r#""channels": 6, "channel_layout": "5.1", "sample_rate": "48000""#,
+    );
+    let fake = Fake {
+        wavs: vec![("Song.flac".into(), tone(0.4))],
+        mixed: vec![("Song.flac".into(), tone(0.05))],
+        ..Fake::default()
+    }
+    .probe(".flac", &surround);
+    let song = s.file("rips/Song.flac");
+    let (ok, text) = s.run(&fake, &["add", &song]);
+    assert!(ok, "{text}");
+    if !settings.is_empty() {
+        let list = s.dir.path().join("home/songs.toml");
+        let mut text = std::fs::read_to_string(&list).unwrap();
+        for (line, replacement) in settings {
+            assert!(text.contains(line), "{line}");
+            text = text.replacen(line, replacement, 1);
+        }
+        s.written("home/songs.toml", &text);
+        let (ok, text) = s.run(&fake, &["sync"]);
+        assert!(ok, "{text}");
+    }
+    (s, fake)
+}
+
+/// The gain the last MP3 `fake` encoded was given in its samples.
+fn mp3_volume(fake: &Fake) -> Option<String> {
+    let calls = fake.calls();
+    let encode = calls
+        .iter()
+        .rfind(|c| c.iter().any(|a| a == "libmp3lame"))?;
+    encode.iter().find_map(|a| {
+        let at = a.find("volume=")?;
+        a[at..].split([',', ' ', ';']).next().map(str::to_owned)
+    })
+}
+
+/// The mixes into stereo `fake` was asked to measure.
+fn stereo_mixes(fake: &Fake) -> usize {
+    (fake.calls().iter())
+        .filter(|c| {
+            c.iter().any(|a| a == crate::ffmpeg::PIPE)
+                && c.iter().any(|a| a.starts_with("aresample=ochl=stereo"))
+        })
+        .count()
+}
+
+/// The settings a sync writes the song of [`surround_home`] in MP3 under,
+/// levelled in its samples.
+const IN_MP3: [(&str, &str); 4] = [
+    (
+        r#"codecs = ["opus", "vorbis", "aac", "mp3", "flac"]"#,
+        r#"codecs = ["mp3"]"#,
+    ),
+    (r#"lossy = "opus""#, r#"lossy = "mp3""#),
+    (r#"lossless = "flac""#, r#"lossless = "mp3""#),
+    (r#"mode = "tags""#, r#"mode = "audio""#),
+];
+
+#[test]
+fn an_export_mixing_a_song_levels_it_by_its_mix_as_a_sync_would() {
+    let (_synced, by_sync) = surround_home("200.0", &IN_MP3);
+    let written = mp3_volume(&by_sync);
+    assert!(written.is_some(), "{:?}", by_sync.calls());
+
+    let (s, fake) = surround_home("200.0", &[]);
+    let before = stereo_mixes(&fake);
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--codec",
+            "mp3",
+            "--set",
+            "loudness.mode=audio",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(stereo_mixes(&fake) > before, "the mix is measured: {text}");
+    assert_eq!(mp3_volume(&fake), written, "{text}");
+}
+
+#[test]
+fn an_export_mixing_a_song_to_fit_levels_it_by_its_mix_as_a_sync_would() {
+    let (_synced, by_sync) = surround_home("0.05", &IN_MP3);
+    let written = mp3_volume(&by_sync);
+    assert!(written.is_some(), "{:?}", by_sync.calls());
+
+    let (s, fake) = surround_home("0.05", &[]);
+    let whole = s.dir.path().join("whole.zip");
+    let (ok, text) = s.run(&fake, &["export", "-o", &whole.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let max = std::fs::metadata(&whole).unwrap().len() - 2000;
+    let fitted = s.dir.path().join("fitted.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &fitted.to_string_lossy(),
+            "--max-size",
+            &max.to_string(),
+            "--set",
+            "audio.lossy=\"mp3\"",
+            "--set",
+            "loudness.mode=audio",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("at a lower bitrate to fit"), "{text}");
+    assert_eq!(mp3_volume(&fake), written, "{text}");
 }
 
 /// Every file under `dir`, by its path there with `/`, with its bytes.
@@ -6329,7 +8165,22 @@ fn export_fills_an_empty_folder_and_refuses_one_holding_anything() {
     )
     .unwrap_err();
     assert!(format!("{e:#}").contains("is not empty"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert_eq!(files_under(&folder), before);
+
+    let file = s.written("notes.txt", "a file of my own");
+    let e = run_with(
+        &s.job(&[&args[..], &[file.as_str()]].concat()),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("no folder"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "a file of my own");
 }
 
 #[test]
@@ -6730,6 +8581,372 @@ fn a_dry_run_or_a_refused_change_keeps_no_run_to_undo() {
 }
 
 #[test]
+fn has_holds_for_tags_a_source_gives_and_not_for_loudness_muman_measured() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let has = s.listed(&["list", "-f", "{has}"]);
+    assert!(has.contains("title"), "{has}");
+    assert!(!has.contains("replaygain"), "{has}");
+    assert_eq!(s.listed(&["list", "has:replaygain_track_gain"]), "");
+}
+
+#[test]
+fn has_holds_for_a_gain_a_source_gives_though_muman_writes_its_own() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let gained = crate::testing::FLAC.replace(
+        r#""track": "2"}"#,
+        r#""track": "2", "REPLAYGAIN_TRACK_GAIN": "-3.21 dB"}"#,
+    );
+    let fake = Fake::default().probe(".flac", &gained);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let mut data = Vec::new();
+    run_with(
+        &s.job(&["list", "has:replaygain_track_gain"]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut data,
+    )
+    .unwrap();
+    assert_ne!(data, b"");
+}
+
+#[test]
+fn a_command_stopped_on_a_song_list_that_does_not_read_keeps_no_run() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let history = s.dir.path().join("home/history");
+    let runs = || std::fs::read_dir(&history).unwrap().count();
+    let before = runs();
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let version = listed.lines().find(|l| l.starts_with("version")).unwrap();
+    let broken = listed.replacen(version, "", 1);
+    std::fs::write(&songs, &broken).unwrap();
+    let e = run_with(
+        &s.job(&["set", "-y", "manual:a.flac", "genre=Folk"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    assert!(e.is_err());
+    assert_eq!(runs(), before);
+    assert_eq!(std::fs::read_to_string(&songs).unwrap(), broken);
+}
+
+#[test]
+fn a_sync_whose_library_cannot_be_locked_writes_nothing() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let blocker = s.file("not-a-folder");
+    let mut job = s.job(&["sync"]);
+    job.dirs.locks = Some(Path::new(&blocker).join("locks"));
+    let e = run_with(
+        &job,
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    assert!(e.is_err());
+    assert!(library_of(&s).is_empty());
+}
+
+/// Answers yes, noting whether a run held the home as it was asked.
+struct Asked {
+    home: PathBuf,
+    held: bool,
+}
+
+impl crate::ui::Prompter for Asked {
+    fn ask(&mut self, _: &str) -> std::io::Result<bool> {
+        self.held |= Lock::busy(&self.home);
+        Ok(true)
+    }
+
+    fn choose(&mut self, _: &str, _: &[String], picked: &[usize]) -> std::io::Result<Vec<usize>> {
+        Ok(picked.to_vec())
+    }
+
+    fn select(&mut self, _: &str, _: &[String]) -> std::io::Result<Option<usize>> {
+        Ok(None)
+    }
+
+    fn text(&mut self, _: &str, _: &str) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn text_with(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: crate::ui::Check,
+    ) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn a_change_asking_its_question_holds_no_other_run_back() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    for args in [
+        &["set", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "manual:a.flac"],
+        &["restore", "manual:a.flac"],
+    ] {
+        let mut asked = Asked {
+            home: s.dir.path().join("home"),
+            held: false,
+        };
+        let mut out = Vec::new();
+        let ok = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            Some(&mut asked),
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(ok, "{args:?}: {}", String::from_utf8_lossy(&out));
+        assert!(!asked.held, "{args:?} held the home as it asked");
+    }
+    assert!(s.listed(&["list"]).contains("manual:a.flac"));
+}
+
+/// A [`crate::ui::MockPrompter`], noting whether a run held the home at
+/// any question.
+struct Watched {
+    home: PathBuf,
+    p: crate::ui::MockPrompter,
+    held: bool,
+    /// Text replaced in the song list as the first yes or no is asked,
+    /// as a hand edit made while the question waits.
+    edit: Option<(&'static str, &'static str)>,
+}
+
+impl Watched {
+    fn new(s: &Setup, p: crate::ui::MockPrompter) -> Self {
+        Self {
+            home: s.dir.path().join("home"),
+            p,
+            held: false,
+            edit: None,
+        }
+    }
+
+    fn noted(&mut self) {
+        self.held |= Lock::busy(&self.home);
+    }
+}
+
+impl crate::ui::Prompter for Watched {
+    fn ask(&mut self, question: &str) -> std::io::Result<bool> {
+        self.noted();
+        if let Some((from, to)) = self.edit.take() {
+            let list = self.home.join("songs.toml");
+            let text = std::fs::read_to_string(&list)?;
+            std::fs::write(&list, text.replace(from, to))?;
+        }
+        self.p.ask(question)
+    }
+
+    fn choose(
+        &mut self,
+        question: &str,
+        items: &[String],
+        picked: &[usize],
+    ) -> std::io::Result<Vec<usize>> {
+        self.noted();
+        self.p.choose(question, items, picked)
+    }
+
+    fn select(&mut self, question: &str, items: &[String]) -> std::io::Result<Option<usize>> {
+        self.noted();
+        self.p.select(question, items)
+    }
+
+    fn text(&mut self, question: &str, help: &str) -> std::io::Result<Option<String>> {
+        self.noted();
+        self.p.text(question, help)
+    }
+
+    fn text_with(
+        &mut self,
+        question: &str,
+        help: &str,
+        initial: &str,
+        check: crate::ui::Check,
+    ) -> std::io::Result<Option<String>> {
+        self.noted();
+        self.p.text_with(question, help, initial, check)
+    }
+}
+
+/// Two songs, each of two files of the user's whose titles contest, so
+/// `review` asks about both, synced; and the runner that reads them so.
+fn contested(s: &Setup) -> Fake {
+    for n in [1, 2] {
+        s.file(&format!("home/sources/manual/a{n}.flac"));
+        s.file(&format!("home/sources/manual/b{n}.flac"));
+    }
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\n[[song]]\nsources = [\"manual:a1.flac\", \"manual:b1.flac\"]\n\n\
+         [[song]]\nsources = [\"manual:a2.flac\", \"manual:b2.flac\"]\n",
+    );
+    let other = FLAC.replace("\"Song\"", "\"Paper Comets\"");
+    let fake = Fake::default()
+        .probe("b1.flac", &other)
+        .probe("b2.flac", &other)
+        .probe(".flac", FLAC);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    fake
+}
+
+/// `review` run with `p`'s answers, stopped where they run out as a kill
+/// stops it; whether it ended.
+fn reviewed(s: &Setup, fake: &Fake, p: &mut Watched) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_with(
+            &s.job(&["review"]),
+            fake,
+            &Server::default(),
+            Some(p),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap()
+    }))
+    .is_ok()
+}
+
+/// Answers to one song `review` asks about that retitle it `title`,
+/// through the menu `set` with a query opens.
+fn retitled(p: &mut crate::ui::MockPrompter, title: &str) {
+    p.push_select(Some(0));
+    p.push_select(Some(0)).push_select(Some(2));
+    p.push_text(Some(title));
+    p.push_select(Some(REVIEW_ROW));
+}
+
+const REVIEW_ROW: usize = 12;
+
+#[test]
+fn set_step_by_step_asks_again_holding_no_run_back_once_its_save_is_refused() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let mut p = crate::ui::MockPrompter::answering([true, true]);
+    p.push_select(Some(0)).push_select(Some(1));
+    p.push_text(Some("Tide"));
+    p.push_select(Some(REVIEW_ROW));
+    let mut p = Watched::new(&s, p);
+    p.edit = Some(("tags.genre = \"\"", "tags.genre = \"Folk\""));
+    run_with(
+        &s.job(&["set", "song"]),
+        &flacs(),
+        &Server::default(),
+        Some(&mut p),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let asked: Vec<&String> = (p.p.asked.iter())
+        .filter(|a| a.starts_with("Save "))
+        .collect();
+    assert_eq!(asked.len(), 2, "{:?}", p.p.asked);
+    assert!(
+        !p.held,
+        "a run held the home as it asked again: {:?}",
+        p.p.asked
+    );
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        list.contains("\"Tide\"") && list.contains("\"Folk\""),
+        "{list}"
+    );
+}
+
+#[test]
+fn a_review_stopped_at_a_question_is_undone_with_each_answer_it_saved() {
+    let s = Setup::new();
+    let fake = contested(&s);
+    let list = s.dir.path().join("home/songs.toml");
+    let before = std::fs::read_to_string(&list).unwrap();
+    let synced = library_of(&s);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    retitled(&mut p, "Tide");
+    let mut p = Watched::new(&s, p);
+    assert!(!reviewed(&s, &fake, &mut p), "{:?}", p.p.asked);
+    assert!(
+        std::fs::read_to_string(&list).unwrap().contains("Tide"),
+        "{:?}",
+        p.p.asked
+    );
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), before, "{text}");
+    assert_eq!(library_of(&s), synced, "{text}");
+}
+
+#[test]
+fn a_review_holds_no_run_back_while_it_asks_and_is_undone_whole() {
+    let s = Setup::new();
+    let fake = contested(&s);
+    let list = s.dir.path().join("home/songs.toml");
+    let before = std::fs::read_to_string(&list).unwrap();
+    let synced = library_of(&s);
+    let mut p = crate::ui::MockPrompter::answering([true, true]);
+    retitled(&mut p, "Tide");
+    retitled(&mut p, "Ember");
+    let mut p = Watched::new(&s, p);
+    assert!(reviewed(&s, &fake, &mut p), "{:?}", p.p.asked);
+    assert!(
+        !p.held,
+        "a run held the home as review asked: {:?}",
+        p.p.asked
+    );
+    let after = std::fs::read_to_string(&list).unwrap();
+    assert!(after.contains("Tide") && after.contains("Ember"), "{after}");
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), before, "{text}");
+    assert_eq!(library_of(&s), synced, "{text}");
+}
+
+#[test]
+fn a_change_to_a_home_not_there_is_refused_and_makes_nothing() {
+    let s = Setup::new();
+    for args in [
+        &["undo", "-n"][..],
+        &["set", "-n", "title:x", "genre=Folk"],
+        &["remove", "-y", "title:x"],
+        &["purge", "-n"],
+    ] {
+        let e = s.refused(args);
+        assert!(e.contains("nothing listed yet"), "{args:?}: {e}");
+        assert!(!s.dir.path().join("home").exists(), "{args:?}");
+    }
+}
+
+#[test]
 fn a_source_touched_but_not_changed_is_not_measured_again() {
     let s = Setup::new();
     let song = s.file("home/sources/manual/Song.flac");
@@ -6949,6 +9166,29 @@ fn a_library_in_the_home_s_sources_is_refused() {
 }
 
 #[test]
+fn a_library_in_a_folder_muman_keeps_in_the_home_is_refused() {
+    let s = Setup::new();
+    for kept in ["history", "partial"] {
+        let mut job = s.job(&["sync"]);
+        job.dirs.library = s.dir.path().join("home").join(kept).join("music");
+        let e = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains(&format!("in the home's {kept}")),
+            "{e:#}"
+        );
+        assert!(!job.dirs.library.exists());
+    }
+}
+
+#[test]
 fn undo_and_purge_refuse_a_library_in_the_home_s_sources() {
     let s = Setup::new();
     for args in [["undo", "-y"], ["purge", "-y"]] {
@@ -7001,7 +9241,7 @@ fn each_command_is_classified_as_it_runs() {
         (&["set", "a", "title=b"], is(true, true, true, true, CHANGE)),
         (&["edit"], is(true, true, true, true, CHANGE)),
         (&["review"], is(true, true, true, true, CHANGE)),
-        (&["undo"], is(true, false, false, true, CHANGE)),
+        (&["undo"], is(true, false, true, true, CHANGE)),
         (&["purge"], is(true, false, false, false, &[])),
         (&["check"], is(false, false, false, false, &["Decoding"])),
         (
@@ -7127,12 +9367,14 @@ fn a_hooked_run_is_read_from_its_variables_alone() {
     assert_eq!(
         hooked_from(&vars(&[
             ("MUMAN_HOOK_HOME", "home"),
-            ("MUMAN_LIBRARY", "lib")
+            ("MUMAN_HOOK_LIBRARY", "lib"),
+            ("MUMAN_LIBRARY", "other-lib")
         ])),
         Some(Hooked {
             home: "home".into(),
             library: Some("lib".into()),
-        })
+        }),
+        "a hook's muman given another library in MUMAN_LIBRARY reads its run's apart"
     );
 }
 
@@ -7234,7 +9476,11 @@ fn a_link_in_a_folder_added_is_followed_only_to_a_place_inside_it() {
     assert!(!manual.join("extras").exists());
     assert_eq!(
         s.songs(),
-        [vec![SourceKey::Manual("Album/Song.flac".into())]]
+        [vec![
+            SourceKey::Manual("Album/Song.flac".into()),
+            SourceKey::Manual("added/front.jpg".into())
+        ]],
+        "art/front.jpg, which no song file beside it brings, given as a named picture is"
     );
     assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
     assert!(!s.dir.path().join("lib/Artist/Record/02 Song.lrc").exists());
@@ -7786,6 +10032,46 @@ fn a_change_waits_for_an_undo_stopped_before_it_put_the_library_back() {
     assert_eq!(library_of(&s), synced);
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
+}
+
+#[test]
+fn an_undo_stopped_after_its_sync_followed_a_moved_file_is_finished_with_it() {
+    let s = Setup::new();
+    two_songs(&s);
+    s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+    );
+    let manual = s.dir.path().join("home/sources/manual");
+    moved(&manual.join("a.flac"), &manual.join("c.flac"));
+    let dirs = s.job(&["undo"]).dirs;
+    let planned = crate::history::plan(&dirs).unwrap();
+    let mut undone = crate::history::undo(&dirs, planned, &mut Vec::new()).unwrap();
+    let mut said = Vec::new();
+    crate::reconcile_now(
+        &s.job(&["undo"]),
+        &flacs(),
+        Options::default(),
+        crate::history::Recording::Undo(&mut undone),
+        &mut crate::hooks::Due::default(),
+        &mut said,
+    )
+    .unwrap();
+    // Stopped before it let go of the record.
+    drop(undone);
+    let list = s.dir.path().join("home/songs.toml");
+    let followed = std::fs::read_to_string(&list).unwrap();
+    assert!(
+        followed.contains("manual:c.flac"),
+        "{followed}\n{}",
+        String::from_utf8_lossy(&said)
+    );
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), followed, "{text}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(crate::history::songs_as_last_left(&dirs.home), Some(true));
 }
 
 #[test]

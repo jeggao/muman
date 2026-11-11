@@ -191,6 +191,11 @@ fn purge_deletes_the_lyrics_add_copied_once_no_song_lists_them() {
     assert!(listed.contains(key), "{listed}");
     std::fs::write(&songs, listed.replace(key, "")).unwrap();
     s.run(&fake, &["sync"]);
+    let (_, said) = s.report(&fake, &["status"]);
+    assert!(
+        said.contains("Unused:") && said.contains("Lantern Weather.lrc"),
+        "{said}"
+    );
     let (ok, text) = s.run(&fake, &["purge", "-y"]);
     assert!(ok, "{text}");
     assert!(s.added().is_empty(), "{:?}: {text}", s.added());
@@ -217,6 +222,7 @@ fn lyrics_tags_name_their_song_and_a_length_far_off_keeps_them_out() {
     );
     let said = s.not_added(&fake, &["add", &far]);
     assert!(said.contains("1 file(s) were not added"), "{said}");
+    assert!(!said.contains("-y"), "-y would not add it: {said}");
     assert!(said.contains("far.lrc matches no song"), "{said}");
     assert_eq!(s.added(), ["words.lrc"]);
 }
@@ -332,6 +338,46 @@ fn yes_takes_a_song_that_leads_and_to_names_one() {
         format!("{e}").starts_with("`moth` is no file or URL"),
         "{e:#}"
     );
+}
+
+#[test]
+fn an_album_folder_s_cover_goes_with_the_songs_of_its_discs() {
+    let s = Setup::new();
+    s.file("rip/Album/CD1/Lantern Weather.flac");
+    s.file("rip/Album/CD2/Copper Moth.flac");
+    s.file("rip/Album/folder.png");
+    let album = s.dir.path().join("rip").join("Album");
+    let (ok, text) = s.run(&library(), &["add", album.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("matches no song"), "{text}");
+    let store = crate::store::Store::scan(&s.job(&["sync"]).dirs).unwrap();
+    let cover = Path::new("Album").join("folder.png");
+    for song in [
+        "Album/CD1/Lantern Weather.flac",
+        "Album/CD2/Copper Moth.flac",
+    ] {
+        let at = store.locate(&manual(song)).unwrap();
+        assert!(
+            at.covers.iter().any(|c| c.ends_with(&cover)),
+            "{song}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_picture_that_came_with_songs_of_no_cover_is_not_called_alike() {
+    let s = Setup::new();
+    s.file("rip/Album/Lantern Weather.flac");
+    s.file("rip/Album/Copper Moth.flac");
+    s.file("rip/Album/art.png");
+    let album = s.dir.path().join("rip").join("Album");
+    let (ok, text) = s.run(&library(), &["add", album.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("art.png: matches 2 songs of The Glass Orchards"),
+        "{text}"
+    );
+    assert!(!text.contains("alike to the covers"), "{text}");
 }
 
 #[test]
@@ -505,6 +551,107 @@ fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     );
 }
 
+/// Whether the library holds a file of lyrics.
+fn library_has_lyrics(s: &Setup) -> bool {
+    crate::store::files_below(&s.dir.path().join("lib"), usize::MAX, |_| true)
+        .unwrap()
+        .iter()
+        .any(|f| f.extension().is_some_and(|e| e == "lrc"))
+}
+
+#[test]
+fn a_control_character_costs_lyrics_only_itself() {
+    let s = Setup::new();
+    let fake = library();
+    let song = s.file("rips/Lantern Weather.flac");
+    let lrc = s.written(
+        "rips/Lantern Weather.lrc",
+        "[00:01.00]first \u{1b}[31mlight\r\n[01:00.00]second\r\n\u{1a}",
+    );
+    let (ok, text) = s.run(&fake, &["add", &song, &lrc]);
+    assert!(ok, "{text}");
+    assert!(library_has_lyrics(&s), "{text}");
+    s.songs_named(&fake, &["Copper Moth"]);
+    let alone = s.written("dl/Copper Moth.lrc", "[00:01.00]wings\u{7}\n\0");
+    let (ok, text) = s.run(&fake, &["add", &alone]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Copper Moth")
+            .has(&manual("added/Copper Moth.lrc")),
+        "{text}"
+    );
+}
+
+#[test]
+fn lyrics_beside_a_song_that_read_as_no_text_are_said() {
+    let s = Setup::new();
+    let fake = library();
+    let song = s.file("rips/Lantern Weather.flac");
+    let lrc = s.written("rips/Lantern Weather.lrc", &"\0\u{1}\u{2}".repeat(100));
+    let (ok, text) = s.run(&fake, &["add", &song, &lrc]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("the lyrics beside it read as no text"),
+        "{text}"
+    );
+    assert!(!library_has_lyrics(&s), "{text}");
+}
+
+#[test]
+fn lyrics_of_a_song_s_own_words_find_it_by_its_lyrics_tag() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let s = Setup::new();
+    let fake = library();
+    let words = [
+        (
+            "Lantern Weather",
+            "[00:05.00]the lanterns hang along the quay\n\
+             [00:10.00]and every ferry waits for me\n\
+             [00:15.00]a paper light on harbour stone\n\
+             [00:20.00]we walk the long way home alone\n",
+        ),
+        (
+            "Copper Moth",
+            "[00:05.00]a copper moth against the glass\n\
+             [00:10.00]counts the hours as they pass\n\
+             [00:15.00]its wings are dust its wings are flame\n\
+             [00:20.00]it never learned the window's name\n",
+        ),
+    ];
+    let mut songs = Vec::new();
+    for (title, lrc) in words {
+        let song = s.file(&format!("rips/{title}.flac"));
+        std::fs::write(&song, crate::testing::SILENCE_FLAC).unwrap();
+        let mut tag = Tag::new(TagType::VorbisComments);
+        tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+        tag.save_to_path(Path::new(&song), WriteOptions::default())
+            .unwrap();
+        songs.push(song);
+    }
+    let (ok, text) = s.run(&fake, &["add", "--new", &songs[0], &songs[1]]);
+    assert!(ok, "{text}");
+    let same = s.written("dl/same.lrc", words[0].1);
+    let (ok, text) = s.run(&fake, &["add", &same]);
+    assert!(
+        ok && text.contains("Lantern Weather.flac already holds it"),
+        "{text}"
+    );
+    let lrc = s.written(
+        "dl/anyname.lrc",
+        &words[0].1.replace("[00:05.00]", "[00:06.00]"),
+    );
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok, "{text}");
+    assert!(text.contains("its words are the song's"), "{text}");
+    assert!(
+        s.song_with("Lantern Weather")
+            .has(&manual("added/anyname.lrc")),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_mistyped_loose_file_is_no_file() {
     let s = Setup::new();
@@ -568,6 +715,41 @@ fn a_shared_picture_moved_in_the_manual_folder_is_followed_by_each_song() {
     assert!(s.song_with("Copper Moth").has(&moved));
 }
 
+#[test]
+fn undoing_the_sync_that_followed_moved_lyrics_and_a_picture_keeps_them_followed() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Night Ferry"]);
+    let lrc = s.written("dl/Night Ferry.lrc", "[00:01.00]boats go out\n");
+    let png = s.file("dl/front.png");
+    assert!(s.run(&fake, &["add", &lrc]).0);
+    assert!(s.run(&fake, &["add", &png, "--to", "ferry"]).0);
+    let home = s.dir.path().join("home/sources/manual");
+    for dir in ["words", "art"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    moved(
+        &home.join("added/Night Ferry.lrc"),
+        &home.join("words/nf.lrc"),
+    );
+    moved(&home.join("added/front.png"), &home.join("art/nf.png"));
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("is now manual:words/nf.lrc"), "{text}");
+
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("Moved: manual:"),
+        "put back followed: {text}"
+    );
+    let song = s.song_with("Night Ferry");
+    assert!(song.has(&manual("words/nf.lrc")), "{:?}", song.sources);
+    assert!(song.has(&manual("art/nf.png")), "{:?}", song.sources);
+    let (ok, text) = s.run(&fake, &["check"]);
+    assert!(ok, "{text}");
+}
+
 fn library_has(s: &Setup, name: &str) -> bool {
     crate::store::files_below(&s.dir.path().join("lib"), usize::MAX, |_| true)
         .unwrap()
@@ -604,7 +786,10 @@ fn a_loose_file_left_out_still_lets_the_songs_added_with_it_be_written() {
     let said = s.not_added(&fake, &["add", &song, &lrc, "--to", "nothing-like-it"]);
     assert!(said.contains("No song matches"), "{said}");
     assert!(library_has(&s, "Paper Kite.flac"), "{said}");
-    let binary = s.written("dl/broken.lrc", "\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}");
+    let binary = s.written(
+        "dl/broken.lrc",
+        &"\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}".repeat(8),
+    );
     let e = run_with(
         &s.job(&["add", &binary]),
         &fake,
@@ -684,6 +869,87 @@ fn a_cue_of_one_file_holding_a_whole_album_sets_nothing() {
             .iter()
             .any(|(k, v)| k == "title" && v == &["Salt Road"])
     );
+}
+
+#[test]
+fn a_cue_sheet_and_a_tag_file_in_a_folder_given_go_to_its_songs() {
+    let s = Setup::new();
+    let fake = library();
+    s.file("rips/Album/Lantern Weather.flac");
+    s.file("rips/Album/Copper Moth.flac");
+    s.written(
+        "rips/Album/album.cue",
+        "REM GENRE \"Chamber Pop\"\nPERFORMER \"Marlo Venn\"\nTITLE \"The Glass Orchards\"\n\
+         FILE \"Lantern Weather.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         FILE \"Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Copper Moth\"\n    INDEX 01 00:00:00\n",
+    );
+    s.written(
+        "rips/Album/tags.txt",
+        "TITLE=Copper Moth\nARTIST=Marlo Venn\nTRACKNUMBER=2\nDATE=2011\n",
+    );
+    s.written("rips/Album/notes.txt", "Ripped on a quiet evening.\n");
+    let album = s.dir.path().join("rips").join("Album");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let plain = crate::ui::plain(&text);
+    let left_out = plain.lines().find(|l| l.contains("Left out of")).unwrap();
+    assert!(left_out.ends_with(": notes.txt"), "{text}");
+    let tags_of = |file: &str| {
+        Manifest::load(&s.dir.path().join("home"))
+            .unwrap()
+            .songs
+            .into_iter()
+            .find(|song| song.has(&manual(&format!("Album/{file}.flac"))))
+            .unwrap()
+            .tags
+    };
+    for song in ["Lantern Weather", "Copper Moth"] {
+        let tags = tags_of(song);
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k == "genre" && v == &["Chamber Pop"]),
+            "{song}: {tags:?}: {text}"
+        );
+    }
+    let tags = tags_of("Copper Moth");
+    assert!(
+        tags.iter().any(|(k, v)| k == "date" && v == &["2011"]),
+        "{tags:?}: {text}"
+    );
+}
+
+#[test]
+fn a_folder_holding_a_cue_of_one_file_is_added_as_that_cue_named_is() {
+    let s = Setup::new();
+    let fake = library().probe(
+        "The Glass Orchards.flac",
+        &flac(
+            "The Glass Orchards",
+            "Marlo Venn",
+            "The Glass Orchards",
+            1,
+            600,
+            "",
+        ),
+    );
+    s.file("rips/Image/The Glass Orchards.flac");
+    s.written(
+        "rips/Image/image.cue",
+        "FILE \"The Glass Orchards.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         \x20 TRACK 02 AUDIO\n    TITLE \"Salt Road\"\n    INDEX 01 03:00:00\n",
+    );
+    let folder = s.dir.path().join("rips").join("Image");
+    let e = run_with(
+        &s.job(&["add", "--new", &folder.to_string_lossy()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
+    assert_eq!(s.songs(), [vec![manual("Image/The Glass Orchards.flac")]]);
 }
 
 #[test]
@@ -800,4 +1066,38 @@ fn a_picture_that_does_not_decode_is_not_added() {
     .unwrap_err();
     assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
     assert_eq!(s.added(), [] as [String; 0]);
+}
+
+#[test]
+fn lyrics_in_a_folder_given_go_to_their_songs_unless_a_song_there_brings_them() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    s.written("words/Lantern Weather.lrc", "[00:01.00]first light\n");
+    s.written("words/Copper Moth.lrc", "[00:01.00]moth wings\n");
+    let words = s.dir.path().join("words");
+    let (ok, text) = s.run(&fake, &["add", &words.to_string_lossy()]);
+    assert!(ok, "a folder of lyrics alone: {text}");
+    let lantern = manual("added/Lantern Weather.lrc");
+    assert!(s.song_with("Lantern Weather").has(&lantern), "{text}");
+    let moth = manual("added/Copper Moth.lrc");
+    assert!(s.song_with("Copper Moth").has(&moth), "{text}");
+    let manual_dir = s.dir.path().join("home/sources/manual");
+    assert!(
+        !manual_dir.join("words").exists(),
+        "no copy no song brings: {text}"
+    );
+
+    s.file("rip/Night Ferry.flac");
+    s.written("rip/Night Ferry.lrc", "[00:01.00]ferry\n");
+    s.written("rip/Copper Moth.lrc", "[00:01.00]other wings\n");
+    let rip = s.dir.path().join("rip");
+    let (ok, text) = s.run(&fake, &["add", "--new", &rip.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(manual_dir.join("rip/Night Ferry.lrc").exists(), "{text}");
+    assert!(!manual_dir.join("rip/Copper Moth.lrc").exists(), "{text}");
+    assert!(
+        crate::ui::plain(&text).contains("the lyrics of Copper Moth — Marlo Venn"),
+        "given to its song, not dropped: {text}"
+    );
 }

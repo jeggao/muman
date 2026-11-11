@@ -12,13 +12,23 @@
 //! source with any sound is never judged to have none.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
-//!   highest band standing 20 dB above all bands past a short guard, the
-//!   band under it as high even at its quietest bin, in each excerpt's
-//!   mean spectrum, its channels' powers summed, taken low across the
-//!   excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz; a
-//!   recording whose treble fades into its noise floor shows no wall and
-//!   measures full, and so does one whose notes' partials end low over a
-//!   noise floor that runs on to the top.
+//!   lowest wall of bands standing 20 dB above all bands past a short
+//!   guard, the band under each as high even at its quietest bin, in each
+//!   excerpt's mean spectrum, its channels' powers summed, taken low across
+//!   the excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz,
+//!   and an Opus made from an MP3 its MP3's lowpass, under the noise Opus
+//!   fills past it, where that stands 20 dB down; a recording whose treble
+//!   fades into its noise floor shows no wall and measures full, and so
+//!   does one whose notes' partials end low over a noise floor that runs
+//!   on to the top. Where the audio clips, only frames holding no sample
+//!   at its clip level count, while any excerpt holds one: clipping
+//!   splatters harmonics past the lowpass the audio was made with. Of 10
+//!   pieces cut 40 s long as FLAC, copies raised by 3 to 20 dB into
+//!   clipping measured a 500 Hz step or more wider than their source in
+//!   39 of 50 copies counting every frame, and in 20 counting those, the
+//!   loudest frames left out; a copy that clips in nearly every frame
+//!   still measures its splatter, which ranking sources does not count
+//!   against a lossless copy of its recording that clips less.
 //! - **Real stereo.** One minus the first two channels' squared
 //!   correlation at the lag within 1 ms that best aligns them: mono copied
 //!   into two channels, at two levels or a few samples apart, has next to
@@ -66,7 +76,18 @@
 //!   bars, and the content is what they enclose: a pillarboxed video frame
 //!   yields its square art, which the cover is cropped to. Square art is
 //!   never trimmed: bands across it are its design, and a solid edge on
-//!   one side only is part of any picture.
+//!   one side only is part of any picture. Art with an edge the color of
+//!   its bars is the exception: a dark cover with a black field, padded
+//!   into a 16:9 frame with black bars, ran its bars 40 px into the art on
+//!   each side, and was written 640 × 720 for 720 × 720. So where the
+//!   bars enclose no square, but every line from each end of the long
+//!   side up to the frame's centred square is bar, within the same 2%,
+//!   the content is that square: the bars pad square art out to the
+//!   frame. Art enclosed on all four sides, as a 4:3 frame boxes a square
+//!   one, is trimmed as before, its bars enclosing a square; a portrait
+//!   picture pillarboxed in a landscape frame is taken as the square too,
+//!   keeping some of its bars, since a cover cut out of square art is
+//!   worse than a cover with a margin.
 //! - **Effective resolution.** Detail at a size is the mean squared
 //!   Laplacian over the variance, once the picture is averaged down to
 //!   that size. Stepping up from 256 px by half an octave, each size must
@@ -91,10 +112,36 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/9";
+pub const METHOD: &str = "quality/14";
+/// The method before a picture that is a source of its own, as a cover a
+/// lookup kept, was no cover when it did not decode whole: what it
+/// measured holds, unless a picture did not decode.
+pub const BEFORE_WHOLE_FILES: &str = "quality/13";
+/// The method before a TIFF was read as ffmpeg can read one
+/// ([`read_whole`]): what it measured holds, unless a picture did not
+/// decode.
+pub const BEFORE_TIFF: &str = "quality/12";
+/// The method before bandwidth was read where the audio does not clip:
+/// what it measured holds for audio that does not clip, or as
+/// [`BEFORE_TIFF`]'s does not hold.
+pub const BEFORE_UNCLIPPED: &str = "quality/11";
+/// The method before bandwidth was read at the lowest wall: what it
+/// measured holds for lossless audio, and lossy audio is measured again.
+/// A lossless encoder fills no band, so only a lossless file made from a
+/// lossy one that did stands two walls, and it keeps its higher until its
+/// source is measured again.
+pub const BEFORE_LOWEST: &str = "quality/10";
+/// The method before bars that run into square art were stopped at the
+/// frame's centred square: what it measured holds, unless a picture's
+/// content was trimmed to no square, or as [`BEFORE_LOWEST`]'s does not
+/// hold. A frame whose art's edge ran into
+/// bars of another width on each side was not trimmed at all, and keeps
+/// its whole frame until its source is measured again.
+pub const BEFORE_SQUARE: &str = "quality/9";
 /// The method before transparent pictures were laid over mid-gray: what
 /// it measured holds, unless a picture had no detail or was larger than
-/// [`MOST_PIXELS`], which it measured.
+/// [`MOST_PIXELS`], which it measured, or as [`BEFORE_SQUARE`]'s does not
+/// hold.
 pub const BEFORE_ALPHA: &str = "quality/8";
 /// The method before excerpts that all fell silent were placed again in
 /// what sounds: what it measured holds, unless it found no sound, or a
@@ -389,15 +436,34 @@ pub fn segment_output(input: usize, index: u32) -> Vec<OsString> {
 /// decoded.
 #[must_use]
 pub fn whole_pictures() -> Vec<OsString> {
-    [
+    whole_pictures_but(&[])
+}
+
+/// [`whole_pictures`], but the streams `lenient` names, as ffmpeg
+/// specifies them (`v:0`, `3`), are read as ffmpeg reads any picture:
+/// those of a format [`read_whole`] says ffmpeg cannot read whole.
+#[must_use]
+pub fn whole_pictures_but(lenient: &[String]) -> Vec<OsString> {
+    let mut args = vec![
         "-err_detect:v".to_string(),
         "explode".to_string(),
         "-max_pixels:v".to_string(),
         MOST_PIXELS.to_string(),
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+    ];
+    for stream in lenient {
+        args.extend([format!("-err_detect:{stream}"), "careful".to_string()]);
+    }
+    args.into_iter().map(OsString::from).collect()
+}
+
+/// Whether ffmpeg can read a picture of `mimetype` whole or not at all.
+/// Its TIFF decoder fails on every tag it does not know, as the
+/// orientation every TIFF `ImageMagick` writes holds, when told to fail on
+/// any error, and on every TIFF ffmpeg writes itself; one cut short fails
+/// either way, its directory or its strips past the end of its bytes.
+#[must_use]
+pub fn read_whole(mimetype: &str) -> bool {
+    mimetype != "image/tiff"
 }
 
 /// The most pixels a picture measured may hold, as the module says.
@@ -513,19 +579,27 @@ pub fn audio(segments: &[Segment], sample_rate: u32, headroom: bool) -> Option<A
     } else {
         CLIP_LEVEL.min(peak * CLIP_OF_PEAK)
     };
-    let mut bandwidth: Option<f64> = None;
+    let lowest = |bandwidth: Option<f64>, spectrum: Option<Vec<f64>>| {
+        let Some(hz) = spectrum.map(|s| wall(&s, sample_rate)) else {
+            return bandwidth;
+        };
+        Some(bandwidth.map_or(hz, |b: f64| b.min(hz)))
+    };
     let (mut clipped, mut total) = (0_usize, 0_usize);
     for segment in segments {
         for channel in 0..segment.channels {
             clipped += clipped_samples(segment.channel(channel), level);
         }
         total += segment.samples.len();
-        if let Some(spectrum) = mean_spectrum(segment, &window) {
-            let hz = wall(&spectrum, sample_rate);
-            bandwidth = Some(bandwidth.map_or(hz, |b| b.min(hz)));
-        }
     }
-    let bandwidth_hz = bandwidth?;
+    let clips = (clipped > 0).then_some(level);
+    let (mut unclipped, mut any) = (None, None);
+    for segment in segments {
+        let spectra = mean_spectra(segment, &window, clips);
+        unclipped = lowest(unclipped, spectra.unclipped);
+        any = lowest(any, spectra.all);
+    }
+    let bandwidth_hz = unclipped.or(any)?;
     if peak == 0.0 {
         return None;
     }
@@ -681,20 +755,34 @@ fn clipped_samples(channel: impl Iterator<Item = f32>, level: f32) -> usize {
     }
 }
 
-/// The mean power spectrum of a segment's sounding frames, by FFT bin,
-/// each channel's power summed: channels in opposite phase cancel in a
-/// mix, and measured as silence.
-fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
+/// A segment's mean power spectra, by FFT bin: of its sounding frames
+/// that hold no clipped sample, and of all its sounding frames; `None`
+/// where there are none.
+#[derive(Debug, Default)]
+struct Spectra {
+    unclipped: Option<Vec<f64>>,
+    all: Option<Vec<f64>>,
+}
+
+/// The mean power spectra of a segment's sounding frames, each channel's
+/// power summed: channels in opposite phase cancel in a mix, and measured
+/// as silence. Where the audio clips at `clips`, a frame holding a sample
+/// at that level is told apart.
+fn mean_spectra(segment: &Segment, window: &[f64], clips: Option<f32>) -> Spectra {
     let mut sum = vec![0.0; FFT / 2];
-    let mut frames = 0_usize;
+    let mut clean_sum = vec![0.0; FFT / 2];
+    let (mut frames, mut clean_frames) = (0_usize, 0_usize);
     let width = FFT * segment.channels;
     let twiddles = Twiddles::new(FFT);
     let (mut re, mut im) = (Vec::with_capacity(FFT), vec![0.0; FFT]);
+    let mut power = vec![0.0; FFT / 2];
     for frame in segment.samples.chunks_exact(width) {
         let energy: f64 = frame.iter().map(|x| f64::from(*x).powi(2)).sum();
         if (energy / real(width)).sqrt() < SILENT_RMS {
             continue;
         }
+        let clipping = clips.is_some_and(|level| frame.iter().any(|x| x.abs() >= level));
+        power.fill(0.0);
         for channel in 0..segment.channels {
             re.clear();
             re.extend(
@@ -707,18 +795,51 @@ fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
             );
             im.fill(0.0);
             fft(&mut re, &mut im, &twiddles);
-            for (k, power) in sum.iter_mut().enumerate() {
-                *power += re[k] * re[k] + im[k] * im[k];
+            for (k, p) in power.iter_mut().enumerate() {
+                *p += re[k] * re[k] + im[k] * im[k];
             }
         }
+        for (total, p) in sum.iter_mut().zip(&power) {
+            *total += p;
+        }
         frames += 1;
+        if !clipping {
+            for (total, p) in clean_sum.iter_mut().zip(&power) {
+                *total += p;
+            }
+            clean_frames += 1;
+        }
     }
-    (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
+    let mean = |sum: Vec<f64>, frames: usize| {
+        (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
+    };
+    Spectra {
+        unclipped: mean(clean_sum, clean_frames),
+        all: mean(sum, frames),
+    }
 }
 
-/// The top of the highest band above [`WALL_MIN_HZ`] that stands
-/// [`WALL_DB`] above every band past [`WALL_GUARD`], the band under it
-/// standing as high at its floor; half the sample rate when none does.
+/// The top of the lowest wall above [`WALL_MIN_HZ`]: of a run of bands
+/// that each stand [`WALL_DB`] above every band past [`WALL_GUARD`], the
+/// band under each standing as high at its floor, the highest band; half
+/// the sample rate when none stands.
+///
+/// Bands stand in runs at each wall, and a second run stands only where
+/// what lies between the two walls is itself a plateau [`WALL_DB`] below
+/// the sound under the lower: what an encoder filled in above a lowpass
+/// it was given. Opus fills the bands past its source's lowpass up to its
+/// own, at 20 kHz, with folded noise, and the highest wall measured the
+/// fill. Of five 60 s pieces made 128 kbit/s MP3 and then 160 kbit/s Opus,
+/// the highest wall put each Opus 2.2 to 4.1 kHz above its MP3, which
+/// measured 9.82 and 16.19 to 16.88 kHz; the lowest put four at or under
+/// their MP3, at 9.75 and 16.13 to 16.5 kHz, and one, whose fill stood
+/// 19 dB under the sound below it, at 20.25 kHz as before. Opus
+/// from 128 kbit/s AAC fills within a few dB of the sound below, which no
+/// level tells apart from treble, and measures as before. An AAC copy of a
+/// piece whose own lowpass was at 16.7 kHz stood its walls at 17.2 and
+/// 16.7 kHz, and measures the source's. Opus copies of the full-band
+/// pieces, and the pieces themselves, stood one wall or none, and measure
+/// as before.
 ///
 /// A lowpass leaves next to nothing past it, while a tone's partial stands
 /// as high over a noise floor that runs on past it. A band's floor is its
@@ -750,14 +871,23 @@ fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
     for b in (0..levels.len()).rev() {
         above[b] = above[b + 1].max(levels[b]);
     }
-    (0..levels.len().saturating_sub(WALL_GUARD + 1))
+    let stands = |b: usize| {
+        let past = above[b + WALL_GUARD + 1];
+        levels[b] - past >= WALL_DB && floors[b.saturating_sub(1)] - past >= WALL_DB
+    };
+    let mut lowest = None;
+    let mut inside = false;
+    for b in (0..levels.len().saturating_sub(WALL_GUARD + 1))
         .rev()
         .take_while(|b| hz(b + 1) >= WALL_MIN_HZ)
-        .find(|b| {
-            let past = above[b + WALL_GUARD + 1];
-            levels[*b] - past >= WALL_DB && floors[b.saturating_sub(1)] - past >= WALL_DB
-        })
-        .map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
+    {
+        let standing = stands(b);
+        if standing && !inside {
+            lowest = Some(b);
+        }
+        inside = standing;
+    }
+    lowest.map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
 }
 
 /// The twiddle factors of each stage of [`fft`], as `(cos, sin)`, each
@@ -878,24 +1008,49 @@ pub fn image(pixels: &[u8], width: u32, height: u32) -> Option<ImageQuality> {
 
 /// The picture inside uniform bars that match on opposite sides, as a
 /// pillarboxed video frame holds its square art. A solid edge on one
-/// side only is part of the picture.
+/// side only is part of the picture. Where every line outside the
+/// frame's centred square is bar but what the bars enclose is no square,
+/// the art's own edge ran on into them, and the content is that square.
 fn content_box(gray: &Gray<'_>, w: usize, h: usize) -> Rect {
     let col = |x: usize| gray.line_stats((0..h).map(move |y| (x, y)));
     let row = |y: usize| gray.line_stats((0..w).map(move |x| (x, y)));
-    let (left, right) = bars(w, col);
-    let (top, bottom) = bars(h, row);
+    let (across, down) = (edges(w, col), edges(h, row));
+    let (left, right) = bars(w, across);
+    let (top, bottom) = bars(h, down);
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    let (cw, ch) = (w - left - right, h - top - bottom);
+    if (real(cw) / real(ch)).ln().abs() > SQUARE_TOLERANCE {
+        let (long, short, sides) = if w > h { (w, h, across) } else { (h, w, down) };
+        if padded(long, short, sides) {
+            let margin = (long - short) / 2;
+            let at = if w > h { (margin, 0) } else { (0, margin) };
+            return Rect {
+                x: n(at.0),
+                y: n(at.1),
+                width: n(short),
+                height: n(short),
+            };
+        }
+    }
     Rect {
         x: n(left),
         y: n(top),
-        width: n(w - left - right),
-        height: n(h - top - bottom),
+        width: n(cw),
+        height: n(ch),
     }
 }
 
-/// The widths of the bars at each end of a side `len` long, from each
-/// line's mean and spread; zero both when they are no matched pair.
-fn bars(len: usize, line: impl Fn(usize) -> (f64, f64)) -> (usize, usize) {
+/// The uniform lines at each end of a side `len` long, from each line's
+/// mean and spread: how many run from each end matching its edge line, at
+/// most half the side, and whether the two edge lines match each other.
+#[derive(Debug, Clone, Copy)]
+struct Edges {
+    start: usize,
+    end: usize,
+    alike: bool,
+}
+
+fn edges(len: usize, line: impl Fn(usize) -> (f64, f64)) -> Edges {
     let uniform =
         |l: (f64, f64), edge: f64| l.1 < BORDER_STDDEV && (l.0 - edge).abs() < BORDER_MATCH;
     let (first, last) = (line(0), line(len - 1));
@@ -907,12 +1062,34 @@ fn bars(len: usize, line: impl Fn(usize) -> (f64, f64)) -> (usize, usize) {
     while end < len / 2 && uniform(line(len - 1 - end), last.0) {
         end += 1;
     }
+    Edges {
+        start,
+        end,
+        alike: (first.0 - last.0).abs() < BORDER_MATCH,
+    }
+}
+
+/// The widths of the bars at each end of a side `len` long; zero both
+/// when its uniform `edges` are no matched pair.
+fn bars(len: usize, edges: Edges) -> (usize, usize) {
+    let Edges { start, end, alike } = edges;
     let matched = start > 0
         && end > 0
-        && (first.0 - last.0).abs() < BORDER_MATCH
+        && alike
         && real(start.abs_diff(end)) <= real(len) * BAR_SYMMETRY
         && real(len - start - end) >= real(len) * MIN_CONTENT;
     if matched { (start, end) } else { (0, 0) }
+}
+
+/// Whether the uniform `edges` of a frame's long side, `long` against its
+/// `short` one, reach the margins of its centred square on both sides,
+/// within [`BAR_SYMMETRY`] of the long side, in one color: bars that pad
+/// square art out to the frame.
+fn padded(long: usize, short: usize, edges: Edges) -> bool {
+    let margin = (long - short) / 2;
+    let slack = (real(long) * BAR_SYMMETRY) as usize;
+    let reach = margin.saturating_sub(slack);
+    edges.alike && reach > 0 && edges.start >= reach && edges.end >= reach
 }
 
 fn crop(gray: &Gray<'_>, r: Rect) -> Vec<f64> {
@@ -1174,6 +1351,32 @@ mod tests {
     }
 
     #[test]
+    fn noise_an_encoder_filled_past_a_lowpass_is_no_bandwidth() {
+        let rate = 48_000.0;
+        // A lowpass at 16 kHz, then noise 25 dB down to the encoder's own
+        // lowpass at 20 kHz, as Opus fills past an MP3's.
+        let filled = |fill_db: f64| {
+            move |f: f64| match f {
+                _ if f <= 16_000.0 => 1.0,
+                _ if f <= 20_000.0 => 10_f64.powf(-fill_db / 20.0),
+                _ => 0.0,
+            }
+        };
+        let left = shaped(FFT * 40, rate, filled(25.0));
+        let q = audio(&[stereo(&left, &left)], 48_000, false).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+        let near = shaped(FFT * 40, rate, filled(10.0));
+        let q = audio(&[stereo(&near, &near)], 48_000, false).unwrap();
+        assert!(
+            (q.bandwidth_hz - 20_000.0).abs() <= 500.0,
+            "a step of 10 dB is the music's own: {q:?}"
+        );
+        let one = shaped(FFT * 40, rate, filled(200.0));
+        let q = audio(&[stereo(&one, &one)], 48_000, false).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+    }
+
+    #[test]
     fn treble_fading_into_the_noise_floor_is_no_lowpass() {
         let rate = 48_000.0;
         // 6 dB per kHz above 2 kHz, down to a floor 80 dB below.
@@ -1249,6 +1452,29 @@ mod tests {
             audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
+        );
+    }
+
+    #[test]
+    fn bandwidth_is_read_where_the_audio_does_not_clip() {
+        let rate = 48_000.0;
+        let mut low = lowpassed(FFT * 40, 16_000.0, rate);
+        for frame in low.chunks_mut(FFT).step_by(4) {
+            for v in frame {
+                *v = (*v * 8.0).clamp(-1.0, 1.0);
+            }
+        }
+        let segment = stereo(&low, &low);
+        let q = audio(std::slice::from_ref(&segment), 48_000, false).unwrap();
+        assert!(q.clipping > 1e-3, "{q:?}");
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+        let window: Vec<f64> = (0..FFT)
+            .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * real(i) / real(FFT)).cos())
+            .collect();
+        let every = mean_spectra(&segment, &window, None).all.unwrap();
+        assert!(
+            wall(&every, 48_000) > 17_000.0,
+            "clipping splatters past it"
         );
     }
 
@@ -1449,6 +1675,55 @@ mod tests {
         assert!(!full.is_square(SQUARE_TOLERANCE) && !full.is_cropped());
     }
 
+    /// A black frame `w` × `h` holding a picture over `art`, its other
+    /// pixels black.
+    fn framed(w: usize, h: usize, art: Rect) -> Vec<u8> {
+        let detail = gray(&picture(256));
+        let mut frame = vec![0_u8; w * h];
+        let (x0, y0) = (art.x as usize, art.y as usize);
+        for y in y0..y0 + art.height as usize {
+            for x in x0..x0 + art.width as usize {
+                frame[y * w + x] = detail[(y % 256) * 256 + x % 256].max(40);
+            }
+        }
+        frame
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn square_art_with_a_black_field_in_black_bars_is_cut_at_its_square() {
+        let square = rect(70, 0, 180, 180);
+        // The art, 180 px square at x = 70, is black for 20 px at each side.
+        let q = image(&framed(320, 180, rect(90, 0, 140, 180)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "not 140 × 180");
+        let q = image(&framed(320, 180, rect(90, 0, 155, 180)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "black edges of two widths");
+        let q = image(&framed(320, 180, rect(90, 60, 140, 60)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "a black field on four sides");
+        let q = image(&framed(180, 320, rect(0, 90, 180, 140)), 180, 320).unwrap();
+        assert_eq!(q.content, rect(0, 70, 180, 180), "letterboxed");
+    }
+
+    #[test]
+    fn art_boxed_on_four_sides_or_wider_than_square_keeps_its_own_box() {
+        let boxed = rect(100, 30, 120, 120);
+        let q = image(&framed(320, 180, boxed), 320, 180).unwrap();
+        assert_eq!(q.content, boxed, "a square boxed as a 4:3 frame boxes it");
+        let wide = rect(40, 0, 240, 180);
+        let q = image(&framed(320, 180, wide), 320, 180).unwrap();
+        assert_eq!(q.content, wide, "4:3 art pillarboxed");
+        let one_side = image(&framed(320, 180, rect(0, 0, 200, 180)), 320, 180).unwrap();
+        assert!(!one_side.is_cropped(), "a solid edge on one side only");
+    }
+
     #[test]
     fn square_art_keeps_its_bands() {
         let side = 256;
@@ -1489,6 +1764,27 @@ mod tests {
         assert_eq!(q.effective, 256, "{q:?}");
         let opaque: Vec<u8> = art.iter().flat_map(|&g| [g, 255]).collect();
         assert_eq!(flatten(&opaque), art);
+    }
+
+    #[test]
+    fn a_tiff_is_read_as_ffmpeg_can_read_one_and_every_other_picture_whole() {
+        assert!(!read_whole("image/tiff"));
+        assert!(
+            ["image/jpeg", "image/png", "image/bmp", "image/unknown"]
+                .iter()
+                .all(|m| read_whole(m))
+        );
+        let args: Vec<String> = whole_pictures_but(&["3".to_string()])
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let at = |arg: &str| args.iter().position(|a| a == arg).unwrap();
+        assert!(
+            at("-err_detect:3") > at("-err_detect:v"),
+            "the later one holds"
+        );
+        assert_eq!(args[at("-err_detect:3") + 1], "careful");
+        assert_eq!(whole_pictures(), whole_pictures_but(&[]));
     }
 
     #[test]

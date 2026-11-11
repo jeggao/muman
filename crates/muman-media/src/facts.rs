@@ -51,6 +51,17 @@
 //! against the audio; records read before muman kept it are read again
 //! by [`retag`], as [`tags_method`] names, which opens no media file.
 //!
+//! A picture of a file's own tags is known by its bytes: ffmpeg takes its
+//! codec from the media type it is labelled with, so it shows a JPEG
+//! labelled `image/png` as a PNG it cannot decode, and none labelled
+//! `image/x-png` or `application/octet-stream`. Where ffprobe's pictures
+//! are not the tags' one for one, each in the format its bytes are, they
+//! are read as `lofty` reads them ([`picture::tag_pictures`]) and decoded
+//! as their bytes say. A picture that does not decode is no cover, and
+//! said when its source is measured ([`Unkept::Picture`]): one rule for a
+//! picture in a file, beside it, or a source of its own, as a cover a
+//! lookup kept or a picture in the manual folder.
+//!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the gray pixels its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
@@ -91,14 +102,48 @@ fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
 }
 
+/// [`method`] before a picture that is a source of its own was no cover
+/// when it did not decode whole: facts it made hold, unless a picture did
+/// not decode.
+fn before_whole_files() -> String {
+    measured_by(quality::BEFORE_WHOLE_FILES)
+}
+
+/// [`method`] before a TIFF was read as ffmpeg can read one: facts it
+/// made hold, unless a picture did not decode.
+fn before_tiff() -> String {
+    measured_by(quality::BEFORE_TIFF)
+}
+
+/// [`method`] before bandwidth was read where the audio does not clip:
+/// facts it made hold, unless their audio clips, or as [`before_tiff`]'s
+/// do not.
+fn before_unclipped() -> String {
+    measured_by(quality::BEFORE_UNCLIPPED)
+}
+
+/// [`method`] before bandwidth was read at the lowest wall: facts it made
+/// hold, unless their audio is lossy, or as [`before_unclipped`]'s do not.
+fn before_lowest() -> String {
+    measured_by(quality::BEFORE_LOWEST)
+}
+
+/// [`method`] before bars running into square art stopped at the frame's
+/// centred square: facts it made hold, unless a picture's content was
+/// trimmed to no square, or as [`before_lowest`]'s do not.
+fn before_square() -> String {
+    measured_by(quality::BEFORE_SQUARE)
+}
+
 /// [`method`] before transparent pictures were laid over mid-gray: facts
-/// it made hold, unless a picture had no detail.
+/// it made hold, unless a picture had no detail, or as [`before_square`]'s
+/// do not.
 fn before_alpha() -> String {
     measured_by(quality::BEFORE_ALPHA)
 }
 
 /// [`method`] before excerpts that fell silent were taken again: facts it
-/// made hold, unless they found no sound, or a picture no detail.
+/// made hold, unless they found no sound, or as [`before_alpha`]'s do not.
 fn before_sound() -> String {
     measured_by(quality::BEFORE_SOUND)
 }
@@ -172,8 +217,9 @@ pub const HASH_METHOD: &str = "hash/2";
 pub const RECORD_METHOD: &str = "record/3";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
-/// it sings are Latin alone.
-pub const LYRICS_METHOD: &str = "lyrics/1";
+/// it sings are Latin alone; since lyrics/2, its lines as
+/// [`crate::lyrics::read`] reads them, a control character dropped.
+pub const LYRICS_METHOD: &str = "lyrics/2";
 
 /// How the tags of a source of `kind` are read: `tags::METHOD`, and for
 /// a record [`RECORD_METHOD`] too, or for a lyrics file [`LYRICS_METHOD`],
@@ -186,6 +232,14 @@ pub fn tags_method(kind: Kind) -> String {
         Kind::Lyrics => format!("{}+{LYRICS_METHOD}", tags::METHOD),
         Kind::Media | Kind::Image => tags::METHOD.to_string(),
     }
+}
+
+/// How a source of `kind` is read and measured: [`method`] and
+/// [`tags_method`]. A measure that failed is recorded with it, and tried
+/// again once muman reads that kind of source otherwise.
+#[must_use]
+pub fn reading(kind: Kind) -> String {
+    format!("{}+{}", method(), tags_method(kind))
 }
 
 /// The format a site served a source in, by yt-dlp's info.
@@ -235,12 +289,28 @@ impl Facts {
     /// Whether they were measured as muman measures now, or by an earlier
     /// method whose results stand for these.
     fn method_holds(&self) -> bool {
+        let lossy = self.audio.as_ref().is_some_and(|a| !a.is_lossless());
+        let clips = self.clips();
+        let before = |method: String| self.method == method && !self.undecoded();
         self.method == method()
-            || self.method == before_alpha() && !self.detailless() && !self.oversized()
-            || self.method == before_sound()
+            || before(before_whole_files())
+            || before(before_tiff())
+            || before(before_unclipped()) && !clips
+            || before(before_lowest()) && !lossy && !clips
+            || before(before_square()) && !self.unsquare() && !lossy && !clips
+            || before(before_alpha())
+                && !self.detailless()
+                && !self.oversized()
+                && !self.unsquare()
+                && !lossy
+                && !clips
+            || before(before_sound())
                 && !self.soundless()
                 && !self.detailless()
                 && !self.oversized()
+                && !self.unsquare()
+                && !lossy
+                && !clips
     }
 
     /// These facts at revision `rev`, for files whose revision changed
@@ -284,6 +354,29 @@ impl Facts {
         self.covers
             .iter()
             .any(|c| c.quality.is_some_and(|q| q.effective == 0))
+    }
+
+    /// Whether a picture's content was trimmed to no square, as bars that
+    /// ran into its art's edge left it before [`quality::METHOD`].
+    fn unsquare(&self) -> bool {
+        self.covers.iter().any(|c| {
+            c.quality
+                .is_some_and(|q| q.is_cropped() && !q.is_square(quality::SQUARE_TOLERANCE))
+        })
+    }
+
+    /// Whether a picture did not decode, as a TIFF did not before
+    /// [`quality::read_whole`].
+    fn undecoded(&self) -> bool {
+        self.covers.iter().any(|c| c.quality.is_none())
+    }
+
+    /// Whether its audio measured any clipping.
+    fn clips(&self) -> bool {
+        self.audio
+            .as_ref()
+            .and_then(|a| a.quality)
+            .is_some_and(|q| q.clipping > 0.0)
     }
 
     /// Whether its audio measured no sound to judge.
@@ -355,17 +448,20 @@ impl Facts {
 
     /// Seconds its audio plays: to where a cut-off file's packets end,
     /// else its audio stream's own length, else the file's, which counts
-    /// its other streams too, else its packets' span.
+    /// its other streams too, else its packets' span. Where the file
+    /// states no length ([`integrity::Measure::guessed`]), ffprobe's are
+    /// guesses, and its packets' span comes before the file's.
     #[must_use]
     pub fn length(&self) -> Option<f64> {
         let measure = self.integrity();
         if let Some(Damage::Cut { ends, .. }) = self.damage() {
             return Some(ends);
         }
-        measure
-            .and_then(|m| m.said)
-            .or(self.duration)
-            .or_else(|| measure.and_then(|m| m.span).map(|(_, end)| end))
+        let span = measure.and_then(|m| m.span).map(|(_, end)| end);
+        let file = self
+            .duration
+            .filter(|_| !measure.is_some_and(|m| m.guessed));
+        measure.and_then(|m| m.said).or(file).or(span)
     }
 
     /// The analyses of `wanted` the audio lacks; none for no audio.
@@ -391,6 +487,19 @@ impl Facts {
             }
         }
         self.picture_method = picture::METHOD.to_string();
+    }
+
+    /// Whether these hold no word of the lyrics beside `located`, read or
+    /// not: a media file measured while lyrics with a control character
+    /// in them read as no text ([`crate::lyrics::is_text`]), which is
+    /// measured again.
+    #[must_use]
+    pub fn missed_sidecar(&self, located: &Located) -> bool {
+        located.kind == Kind::Media
+            && located.lyrics.is_some()
+            && self.audio.is_some()
+            && !self.lyrics.iter().any(|l| l.at == LyricsAt::Sidecar)
+            && !self.unkept.contains(&Unkept::Lyrics)
     }
 
     /// Whether the tags of a source of `kind` were read the way they are
@@ -501,6 +610,10 @@ pub enum Unkept {
     /// A cue sheet of its name beside it, which splits an album image
     /// into its tracks; the image is one song.
     CueSheet,
+    /// A picture in it that does not decode, which is no cover.
+    Picture,
+    /// Lyrics beside it that read as no text, which give it none.
+    Lyrics,
 }
 
 /// Where a picture sits.
@@ -514,8 +627,10 @@ pub enum CoverAt {
     Sidecar(usize),
     /// The source is the picture.
     File,
-    /// The `index`th picture of an MP4's `covr` atom, which ffprobe does
-    /// not show ([`picture::mp4_covers`]).
+    /// The `index`th picture of the file's own tags, as `lofty` reads
+    /// them by their bytes ([`picture::tag_pictures`]), where ffprobe
+    /// shows them otherwise: an MP4's of implicit type, or one labelled
+    /// with another media type than its bytes are.
     Atom { index: usize },
 }
 
@@ -667,17 +782,17 @@ pub fn gather<R: Runner>(
             });
             facts.tags_method = tags_method(Kind::Lyrics);
         }
-        Kind::Image => {
-            let (quality, look) = image_file(runner, located, scratch);
-            facts.covers.push(CoverFacts {
+        Kind::Image => match image_file(runner, located, scratch) {
+            Some((quality, look)) => facts.covers.push(CoverFacts {
                 at: CoverAt::File,
                 mimetype: mimetype_of(&located.path),
                 quality,
                 digest: digest_file(&located.path),
                 look,
                 other: named_other(&located.path),
-            });
-        }
+            }),
+            None => facts.unkept.push(Unkept::Picture),
+        },
         Kind::Tags => {
             let record = crate::record::read(&located.path)?;
             facts.tags = tags::from_record(&record);
@@ -837,11 +952,7 @@ fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
 
 fn read_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let text = crate::lyrics::decode(&bytes);
-    if !crate::lyrics::is_text(&text) {
-        anyhow::bail!("{} holds no text", path.display());
-    }
-    Ok(text)
+    crate::lyrics::read(&bytes).with_context(|| format!("{} holds no text", path.display()))
 }
 
 /// The lyrics a media file's own tags hold, measured as any lyrics are,
@@ -912,26 +1023,40 @@ fn measure_image(pam: &Path) -> (Option<ImageQuality>, Option<Look>) {
     (quality, look)
 }
 
-/// The measures of the picture `located` is.
+/// The picture file at `path`, of `mimetype` by its bytes, read whole or
+/// not at all where ffmpeg can ([`quality::read_whole`]).
+fn picture_input(path: &Path, mimetype: Option<&str>) -> Input {
+    let lenient = mimetype.is_some_and(|m| !quality::read_whole(m));
+    let streams = if lenient {
+        vec!["v:0".to_string()]
+    } else {
+        Vec::new()
+    };
+    Input::new(quality::whole_pictures_but(&streams), path)
+}
+
+/// The measures of the picture `located` is; none when it does not
+/// decode whole, as a picture in or beside a media file is none.
 fn image_file<R: Runner>(
     runner: &R,
     located: &Located,
     scratch: &Path,
-) -> (Option<ImageQuality>, Option<Look>) {
+) -> Option<(Option<ImageQuality>, Option<Look>)> {
     let out = scratch.join("file.pam");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
-    let input = Input::new(quality::whole_pictures(), &located.path);
+    let input = picture_input(&located.path, picture::sniff_file(&located.path));
     let ok = ffmpeg::run(runner, &[input], &outputs);
     match ok.into_iter().next() {
-        Some(Ok(())) => measure_image(&out),
-        _ => (None, None),
+        Some(Ok(())) => Some(measure_image(&out)),
+        _ => None,
     }
 }
 
 /// The outputs writing each picture `probed` holds, and those dumped
 /// from its attachments into `scratch`, in gray, each input it
-/// needs added to `inputs`; where ffprobe found no picture in `path`,
-/// those of its MP4 `covr` atom.
+/// needs added to `inputs`; where ffprobe shows the pictures of `path`'s
+/// own tags otherwise than their bytes are ([`streams_agree`]), those
+/// pictures as `lofty` reads them, each decoded as its bytes say.
 fn cover_outputs(
     probed: &Probed,
     path: &Path,
@@ -939,7 +1064,11 @@ fn cover_outputs(
     inputs: &mut Vec<Input>,
 ) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
-    for p in &probed.pictures {
+    let tagged = picture::tag_pictures(path);
+    let streams = tagged
+        .as_deref()
+        .is_none_or(|t| streams_agree(&probed.pictures, t));
+    for p in probed.pictures.iter().filter(|_| streams) {
         outputs.push((
             Output::new(
                 quality::gray_output(0, &p.index.to_string()),
@@ -955,7 +1084,7 @@ fn cover_outputs(
         if !dumped.exists() {
             continue;
         }
-        inputs.push(Input::new(quality::whole_pictures(), &dumped));
+        inputs.push(picture_input(&dumped, picture::sniff_file(&dumped)));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
@@ -972,12 +1101,12 @@ fn cover_outputs(
             ),
         ));
     }
-    let atoms = if probed.pictures.is_empty() {
-        picture::mp4_covers(path)
-    } else {
+    let atoms = if streams {
         Vec::new()
+    } else {
+        tagged.unwrap_or_default()
     };
-    for (index, bytes) in atoms.into_iter().enumerate() {
+    for (index, (bytes, other)) in atoms.into_iter().enumerate() {
         let Ok(name) = crate::atomic::Name::new(format!("atom{index}")) else {
             continue;
         };
@@ -985,18 +1114,30 @@ fn cover_outputs(
             continue;
         }
         let file = scratch.join(name.as_str());
-        inputs.push(Input::new(quality::whole_pictures(), &file));
+        inputs.push(picture_input(&file, picture::sniff(&bytes)));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
                 &scratch.join(format!("atom{index}.pam")),
             ),
             CoverAt::Atom { index },
-            picture::sniff(&bytes).unwrap_or("image/jpeg").to_string(),
-            false,
+            picture::sniff(&bytes)
+                .unwrap_or("image/unknown")
+                .to_string(),
+            other,
         ));
     }
     outputs
+}
+
+/// Whether ffprobe's picture `streams` are the pictures a file's tags
+/// hold, `tagged`, one for one, each of the format its bytes are.
+fn streams_agree(streams: &[probe::Picture], tagged: &[(Vec<u8>, bool)]) -> bool {
+    let format = picture::ImageFormat::of_mimetype;
+    streams.len() == tagged.len()
+        && streams.iter().zip(tagged).all(|(stream, (bytes, _))| {
+            picture::sniff(bytes).is_none_or(|is| format(is) == format(&stream.mimetype))
+        })
 }
 
 /// The run writing the `n`th picture beside a manual file in gray;
@@ -1012,7 +1153,7 @@ fn sidecar_cover<R: Runner>(
         quality::gray_output(0, "v:0"),
         &scratch.join(format!("side{n}.pam")),
     );
-    let input = Input::new(quality::whole_pictures(), cover);
+    let input = picture_input(cover, picture::sniff_file(cover));
     let result = ffmpeg::run(runner, &[input], std::slice::from_ref(&output))
         .into_iter()
         .next()
@@ -1033,7 +1174,7 @@ pub fn look<R: Runner>(
     match located.kind {
         Kind::Image => Ok(vec![(
             CoverAt::File,
-            image_file(runner, located, scratch).1,
+            image_file(runner, located, scratch).and_then(|(_, look)| look),
         )]),
         Kind::Media => {
             let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
@@ -1222,8 +1363,8 @@ fn media<R: Runner>(
     wanted: &[analysis::Kind],
     facts: &mut Facts,
 ) -> Result<()> {
-    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
-    facts.duration = probed.duration;
+    let probed = probe::read(runner, &located.path)?;
+    facts.duration = probed.duration.filter(|_| !probed.guessed);
     let info = dump_attachments(runner, located, &probed, scratch, true);
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
@@ -1232,7 +1373,16 @@ fn media<R: Runner>(
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
-    let mut inputs = vec![Input::new(quality::whole_pictures(), &located.path)];
+    let lenient: Vec<String> = probed
+        .pictures
+        .iter()
+        .filter(|p| !quality::read_whole(&p.mimetype))
+        .map(|p| p.index.to_string())
+        .collect();
+    let mut inputs = vec![Input::new(
+        quality::whole_pictures_but(&lenient),
+        &located.path,
+    )];
     let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
         .into_iter()
         .map(|(o, part)| (o, Measured::Hash(part)))
@@ -1314,8 +1464,10 @@ fn media<R: Runner>(
     let mut timeline = None;
     let mut digests = Digests::default();
     let mut opus_gain = 0;
+    let mut undecoded = false;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
+            undecoded |= matches!(measured, Measured::Cover(..));
             continue;
         }
         match measured {
@@ -1358,6 +1510,7 @@ fn media<R: Runner>(
     }
     let found = Found {
         said: probed.audio.as_ref().and_then(|a| a.duration),
+        guessed: probed.guessed,
         timeline,
     };
     let sounding = pass.sounding();
@@ -1365,8 +1518,9 @@ fn media<R: Runner>(
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
     // Lyrics beside a song that do not read cost the song only them.
-    if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
-        facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
+    let sidecar = located.lyrics.as_deref().map(read_text);
+    if let Some(Ok(text)) = &sidecar {
+        facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, text));
     }
     if let Some(l) = tag_lyrics(located) {
         digests
@@ -1374,12 +1528,21 @@ fn media<R: Runner>(
             .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));
         facts.lyrics.push(l);
     }
-    // Segments placed by a length the packets fall short of read nothing.
+    // Segments placed by a length the packets fall short of read nothing;
+    // placed by a guessed one, they miss the shares of the audio there is.
+    let misplaced = timeline.map(|t| t.end).filter(|ends| {
+        probed.guessed
+            && probed
+                .duration
+                .is_some_and(|d| (d - ends).abs() > integrity::SLACK_S)
+    });
     if let (Some(Damage::Cut { ends, .. }), Some(a)) = (
         analysis.integrity().and_then(integrity::Measure::damage),
         &probed.audio,
     ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
     {
+        segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+    } else if let (Some(ends), Some(a)) = (misplaced, &probed.audio) {
         segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
     }
     // Excerpts that all fell in silence are taken again where it sounds.
@@ -1390,6 +1553,12 @@ fn media<R: Runner>(
         segments = measure_segments(runner, located, a, &starts, scratch);
     }
     facts.unkept = unkept(&located.path);
+    if undecoded {
+        facts.unkept.push(Unkept::Picture);
+    }
+    if sidecar.is_some_and(|r| r.is_err()) {
+        facts.unkept.push(Unkept::Lyrics);
+    }
     facts.audio = probed.audio.map(|a| AudioFacts {
         quality: quality::audio(&segments, a.sample_rate, headroom),
         index: a.index,
@@ -1611,10 +1780,9 @@ pub fn analyze<R: Runner>(
         0
     };
     let found = if integrity {
-        let said = runner
-            .output(&probe::ffprobe_command(&located.path))
-            .ok()
-            .and_then(|json| probe::parse(&json).ok())
+        let probed = probe::read(runner, &located.path).ok();
+        let guessed = probed.as_ref().is_some_and(|p| p.guessed);
+        let said = probed
             .and_then(|p| p.audio)
             .filter(|a| a.index == audio.index)
             .and_then(|a| a.duration);
@@ -1622,7 +1790,11 @@ pub fn analyze<R: Runner>(
             .then(|| std::fs::read_to_string(&packets).ok())
             .flatten()
             .and_then(|text| Timeline::parse(&text));
-        Found { said, timeline }
+        Found {
+            said,
+            guessed,
+            timeline,
+        }
     } else {
         Found::default()
     };
@@ -1637,7 +1809,7 @@ pub fn integrity<R: Runner>(
     scratch: &Path,
 ) -> Result<Option<integrity::Measure>> {
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
-    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
+    let probed = probe::read(runner, &located.path)?;
     let Some(audio) = probed.audio else {
         return Ok(None);
     };
@@ -1660,6 +1832,7 @@ pub fn integrity<R: Runner>(
         .and_then(|text| Timeline::parse(&text));
     let found = Found {
         said: audio.duration,
+        guessed: probed.guessed,
         timeline,
     };
     Ok(pass.finish(&found).integrity().copied())

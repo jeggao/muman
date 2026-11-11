@@ -172,7 +172,7 @@ pub fn minutes(ms: i64) -> String {
 /// multi-select's box, or as wide as they come when `width` is `None`.
 #[must_use]
 pub fn fit(songs: &[Cells], width: Option<usize>) -> Rows {
-    let clean = |s: &str| crate::ui::printable(s).replace(['\t', '\n'], " ");
+    let clean = |s: &str| crate::tags::escaped(&crate::ui::printable(s));
     let shorts_collide = songs
         .iter()
         .enumerate()

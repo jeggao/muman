@@ -3,16 +3,19 @@
 //! delete only its own files and rebuild only what changed, and caches
 //! of what it measured, which are safe to lose. A `state.json` an
 //! earlier muman kept is read once and brought into the store,
-//! then kept as `state.json.bak`; a stub of a newer format takes its
-//! place, so an earlier muman refuses the home rather than take every
-//! library file for the user's. Moving the `.bak` back, the store aside,
-//! goes back to the earlier muman, losing what ran since.
+//! then kept as `state.json.bak`, numbered beside one kept already; a
+//! stub of a newer format takes its place, so an earlier muman refuses
+//! the home rather than take every library file for the user's. The stub
+//! is known by what it says, so a line end an editor changed keeps it
+//! one. Moving the `.bak` back, the store aside, goes back to the earlier
+//! muman, losing what ran since.
 //!
 //! | Table | Safe to lose |
 //! |---|---|
 //! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
 //! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
+//! | `built` | Yes: a song left as built, its source holding other audio since, is levelled without its file until accepted |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //! | `song_failures` | Yes: `check` names a song the last sync could not write only after the next sync fails it again |
@@ -146,7 +149,7 @@ pub fn written_at(home: &Path) -> Option<SystemTime> {
 fn bring_over(home: &Path) -> Result<Option<State>> {
     let file = home.join(crate::dirs::STATE);
     let text = match std::fs::read(&file) {
-        Ok(text) if text != STUB => text,
+        Ok(text) if !is_stub(&text) => text,
         Ok(_) => return Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Set aside by a run stopped before its stub.
@@ -201,13 +204,27 @@ fn clear_import(home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Keep `state.json` as `state.json.bak`, a stub in its place.
+/// Whether `text` is the stub, by what it says rather than its bytes: a
+/// line end an editor or git changed leaves it the stub, never a state
+/// to set aside over the one kept.
+fn is_stub(text: &[u8]) -> bool {
+    text == STUB
+        || serde_json::from_slice::<serde_json::Value>(text)
+            .is_ok_and(|v| v.get("moved_to").and_then(serde_json::Value::as_str) == Some(db::FILE))
+}
+
+/// Keep `state.json` as `state.json.bak`, a stub in its place; one kept
+/// already stays, and this one is kept beside it, numbered.
 // Keeps state.json as state.json.bak.
 #[expect(clippy::disallowed_methods)]
 fn set_aside(home: &Path) -> Result<()> {
     let file = home.join(crate::dirs::STATE);
-    atomic::rename(&file, &home.join(BACKUP))
-        .with_context(|| format!("setting {} aside", file.display()))?;
+    let backup = std::iter::once(BACKUP.to_string())
+        .chain((2..=u16::MAX).map(|n| format!("{BACKUP}.{n}")))
+        .map(|name| home.join(name))
+        .find(|p| !p.exists())
+        .context("every name to keep the old state under is taken")?;
+    atomic::rename(&file, &backup).with_context(|| format!("setting {} aside", file.display()))?;
     stub(home)
 }
 
@@ -259,6 +276,16 @@ pub struct State {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub mixes: Vec<Mix>,
+    /// The loudness of the audio each library file was made from, found
+    /// by that audio and the layout it was mixed into, so a song left as
+    /// built is levelled as its file was made once its source holds other
+    /// audio ([`crate::levels::keep_built`]).
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub built: Vec<Built>,
     /// What could not be done for a source, so it is not tried again at
     /// once.
     #[serde(default, deserialize_with = "json::lenient_map")]
@@ -593,6 +620,11 @@ pub struct Failure {
     pub count: u32,
     /// Seconds since the Unix epoch.
     pub last: u64,
+    /// How the source was read when a measure failed
+    /// ([`crate::facts::reading`]); empty for any other step, and for a
+    /// measure that failed before muman kept it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reader: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,14 +659,19 @@ impl Failure {
     /// Whether the failure still stands, for a source the store holds
     /// as `located`, none when it holds none, with `facts` as measured: a
     /// measure failed while no facts hold for the file as it is, a fetch
-    /// while the store lacks it. A copy fetched again, or mended, stands
-    /// until its own step says otherwise.
+    /// while the store lacks it. A copy fetched again stands until its own
+    /// step says otherwise; a mend while the file, as it is, still measures
+    /// damaged, since one measured anew whole, as by a measure that judges
+    /// otherwise since, needs none.
     #[must_use]
     pub fn applies(&self, located: Option<&crate::store::Located>, facts: Option<&Facts>) -> bool {
         match self.step {
             Step::Measure => located.is_some_and(|l| !facts.is_some_and(|f| f.holds_for(&l.rev()))),
             Step::Fetch => located.is_none(),
-            Step::Refetch | Step::Mend => true,
+            Step::Refetch => true,
+            Step::Mend => located.is_some_and(|l| {
+                facts.is_none_or(|f| !f.holds_for(&l.rev()) || f.damage().is_some())
+            }),
         }
     }
 
@@ -660,6 +697,16 @@ impl Failure {
             Step::Mend => false,
         }
     }
+
+    /// Whether a source at revision `rev`, which muman reads as `reader`
+    /// says ([`crate::facts::reading`]), is due to be read again: as
+    /// [`Self::due`] says, or, for a measure that failed, once muman reads
+    /// it otherwise than the way that failed, so a reading mended reads
+    /// what it failed on.
+    #[must_use]
+    pub fn due_to_read(&self, rev: &str, reader: &str, now: u64) -> bool {
+        self.due(Some(rev), now) || self.step == Step::Measure && self.reader != reader
+    }
 }
 
 /// Seconds since the Unix epoch.
@@ -680,6 +727,16 @@ pub struct Mix {
     /// The [`crate::codec::MIXING`] it was mixed by.
     #[serde(default = "first_mixing")]
     pub filter: u32,
+    pub analysis: Analysis,
+}
+
+/// What the audio `audio` a library file was made from measured, mixed
+/// into `layout` where it was written mixed: its loudness alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Built {
+    pub audio: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
     pub analysis: Analysis,
 }
 
@@ -725,6 +782,7 @@ impl Aligned {
         align::Alignment {
             offset_ms: self.offset_ms,
             stretch_ppm: self.stretch_ppm,
+            stepped_ms: 0,
             score: self.score,
             coverage: self.coverage,
         }
@@ -777,6 +835,17 @@ impl Caches {
     }
 }
 
+/// The store in `home`, opened for reading: read only when it will not
+/// open for writing, as on a read-only home (`db.rs`); `None` when one
+/// opened so holds no state yet.
+fn opened(home: &Path) -> Result<Option<db::Db>> {
+    match db::Db::open(home, BUSY_WAIT) {
+        Ok(db) => Ok(Some(db)),
+        Err(e) if db::unwritable(&e) => db::Db::open_read_only(&home.join(db::FILE)).map_err(|_| e),
+        Err(e) => Err(e),
+    }
+}
+
 impl State {
     /// The state in `home`; an empty one when there is none yet. A
     /// `state.json` an earlier muman left is brought into `state.db`
@@ -800,7 +869,13 @@ impl State {
                 file.display()
             );
         }
-        let (mut state, loaded) = db::Db::open(home, BUSY_WAIT)?.snapshot()?;
+        let Some(mut db) = opened(home)? else {
+            return Ok(Self {
+                version: VERSION,
+                ..Self::default()
+            });
+        };
+        let (mut state, loaded) = db.snapshot()?;
         state.held = Held::new(loaded);
         Ok(state)
     }
@@ -830,8 +905,14 @@ impl State {
     pub fn dump(home: &Path, out: &mut impl std::io::Write) -> Result<()> {
         let file = home.join(crate::dirs::STATE);
         let state = match std::fs::read(&file) {
-            Ok(text) if !exists(home) && text != STUB => json::read(&file, &text)?,
-            _ if exists(home) => db::Db::open(home, BUSY_WAIT)?.snapshot()?.0,
+            Ok(text) if !exists(home) && !is_stub(&text) => json::read(&file, &text)?,
+            _ if exists(home) => match opened(home)? {
+                Some(mut db) => db.snapshot()?.0,
+                None => Self {
+                    version: VERSION,
+                    ..Self::default()
+                },
+            },
             _ => Self {
                 version: VERSION,
                 ..Self::default()
@@ -938,8 +1019,18 @@ impl State {
                 error,
                 count: count + 1,
                 last: now_secs(),
+                reader: String::new(),
             },
         );
+    }
+
+    /// Record that measuring `key` at revision `rev`, read as `reader`
+    /// says ([`crate::facts::reading`]), failed as `error` says.
+    pub fn record_unread(&mut self, key: &SourceKey, rev: String, reader: String, error: String) {
+        self.record_failure(key, Step::Measure, Some(rev), error);
+        if let Some(f) = self.failures.get_mut(key) {
+            f.reader = reader;
+        }
     }
 
     /// The songs this sync could not write, each by its id with why: the
@@ -1198,11 +1289,16 @@ impl State {
     /// caller already holding its lock, by `merge_measured`, in
     /// one transaction that writes the caches alone: what the library
     /// holds is left to the run that holds its lock, which writes the
-    /// names a fact gives its source's parts anew into the plans.
+    /// names a fact gives its source's parts anew into the plans. On a
+    /// home muman may not write, nothing is kept: a cache only saves
+    /// measuring again, and `status` there still reports.
     pub fn keep_caches(home: &Path, measured: &Caches, _lock: &atomic::Lock) -> Result<()> {
         bring_over(home)?;
         std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
-        db::Db::open(home, BUSY_WAIT)?.keep(measured)?;
+        match db::Db::open(home, BUSY_WAIT) {
+            Err(e) if db::unwritable(&e) => return Ok(()),
+            db => db?.keep(measured)?,
+        }
         stub(home)
     }
 
@@ -1238,6 +1334,7 @@ mod tests {
             error: String::new(),
             count,
             last: 1_000_000,
+            reader: String::new(),
         };
         let hour = 3600;
         assert!(failure(1).due(None, 1_000_000), "the first at once");
@@ -1249,6 +1346,28 @@ mod tests {
         assert!(
             !failure(REFETCH_TRIES + 1).due(None, 1_000_000 + 30 * 24 * hour),
             "given up on until `--retry`"
+        );
+    }
+
+    #[test]
+    fn a_measure_that_failed_is_due_once_the_file_or_its_reading_changes() {
+        let mut state = State::default();
+        let key = SourceKey::Manual("a.lrc".into());
+        state.record_unread(&key, "1".into(), "read/1".into(), "no text".into());
+        let failed = &state.failures[&key];
+        assert!(!failed.due_to_read("1", "read/1", 0), "not again as it was");
+        assert!(failed.due_to_read("2", "read/1", 0), "the file changed");
+        assert!(
+            failed.due_to_read("1", "read/2", 0),
+            "muman reads it otherwise"
+        );
+        let before = Failure {
+            reader: String::new(),
+            ..failed.clone()
+        };
+        assert!(
+            before.due_to_read("1", "read/1", 0),
+            "kept before readers were"
         );
     }
 
@@ -1730,6 +1849,29 @@ mod tests {
             text,
             "brought over once"
         );
+    }
+
+    #[test]
+    fn a_stub_with_other_line_ends_or_a_second_state_json_keeps_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        old_home(home);
+        let text = std::fs::read(home.join(STATE)).unwrap();
+        State::load(home).unwrap();
+        let crlf = String::from_utf8(STUB.to_vec())
+            .unwrap()
+            .replace('\n', "\r\n");
+        std::fs::write(home.join(STATE), &crlf).unwrap();
+        State::load(home).unwrap();
+        assert_eq!(std::fs::read(home.join(BACKUP)).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(home.join(STATE)).unwrap(), crlf);
+
+        std::fs::write(home.join(STATE), b"{\"version\": 3}").unwrap();
+        State::load(home).unwrap();
+        assert_eq!(std::fs::read(home.join(BACKUP)).unwrap(), text);
+        let second = home.join(format!("{BACKUP}.2"));
+        assert_eq!(std::fs::read(second).unwrap(), b"{\"version\": 3}");
+        assert_eq!(std::fs::read(home.join(STATE)).unwrap(), STUB);
     }
 
     #[test]

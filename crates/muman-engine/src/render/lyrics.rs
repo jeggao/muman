@@ -30,7 +30,8 @@ pub(super) fn rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
 pub(super) fn contents(made: &Parts<'_>, text: &str) -> Vec<Option<Vec<u8>>> {
     made.lyric_files()
         .map(|f| {
-            crate::cues::write(text, f.file.format, f.file.words, f.end_ms).map(String::into_bytes)
+            crate::cues::write(text, f.file.format, f.file.words, f.text.end_ms)
+                .map(String::into_bytes)
         })
         .collect()
 }
@@ -69,8 +70,9 @@ pub(super) fn text<R: Runner>(
     Ok(text.filter(|t| t.lines().any(|l| !l.trim().is_empty())))
 }
 
-/// `text` cleaned as `lyrics` say, then moved to the audio; the damaged
-/// lines left out are named in `problems`.
+/// `text` cleaned as `lyrics` say, then moved to the audio, without the
+/// lines it times past the song's end; the damaged lines left out, and
+/// those past the end, are named in `problems`.
 pub(super) fn cleaned(text: &str, lyrics: &LyricText<'_>, problems: &mut Vec<String>) -> String {
     let cleaned = crate::clean::lyrics::clean(text, &lyrics.context(), lyrics.clean_off);
     if cleaned.damaged > 0 {
@@ -79,7 +81,18 @@ pub(super) fn cleaned(text: &str, lyrics: &LyricText<'_>, problems: &mut Vec<Str
             lyrics.key, cleaned.damaged
         ));
     }
-    crate::lyrics::shift_lrc(&cleaned.text, lyrics.shift_ms, lyrics.stretch_ppm)
+    let moved = crate::lyrics::shift_lrc(&cleaned.text, lyrics.shift_ms, lyrics.stretch_ppm);
+    let Some(end_ms) = lyrics.end_ms else {
+        return moved;
+    };
+    let (kept, past) = crate::lyrics::until(&moved, end_ms);
+    if past > 0 {
+        problems.push(format!(
+            "lyrics of {}: {past} line(s) left out, timed past the song's end",
+            lyrics.key
+        ));
+    }
+    kept
 }
 
 /// Plan the lyrics: a file's text now, or a subtitle stream the run

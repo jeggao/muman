@@ -6,7 +6,10 @@
 //! hold the same packets, one audio digest, are one recording, and so is
 //! every source a chain of such pairs joins. The sources are taken in
 //! sorted order and a recording is named by its first, so the order of
-//! `sources` changes none.
+//! `sources` changes none. A source too short to compare with any other
+//! ([`crate::align::comparable`]), and holding no other's packets, is of
+//! no recording known: it is set aside, neither the song's recording nor
+//! another, and ranks as the song's.
 //!
 //! With one recording nothing is decided. With several, the song's is:
 //!
@@ -24,8 +27,14 @@
 //!    the song's only audio. A record counts only for a recording holding
 //!    none of them, or where a file names its recording ID, and records
 //!    that count for two recordings decide nothing.
-//! 2. Else the one with the most sources, where one holds more than every
-//!    other.
+//! 2. Else the one with the most whole sources, then the most sources,
+//!    where one holds more than every other. A damaged source
+//!    ([`crate::integrity`]) is counted last: a hole can part it from its
+//!    own recording where comparing cannot step past it
+//!    ([`crate::align::align_lacking`]), and two copies of one damaged
+//!    file are one recording by their digest, so damaged copies would
+//!    otherwise outvote the one whole copy and rank it as another
+//!    recording.
 //! 3. Else none: every recording ranks alike, and the song is picked as
 //!    though it held one.
 //!
@@ -63,6 +72,8 @@ pub struct Audible<'a> {
     /// Whether its measures alone rank it first, ties included: the
     /// audio a lookup asked with.
     pub first: bool,
+    /// Whether its audio is all there ([`crate::integrity`]).
+    pub whole: bool,
 }
 
 /// A record vetting believes, as a length to hold the recordings to.
@@ -101,6 +112,8 @@ pub struct Recordings {
     /// Each recording's sources, sorted, in the order of their first.
     groups: Vec<Vec<SourceKey>>,
     of: BTreeMap<SourceKey, Place>,
+    /// The sources too short to compare with any other.
+    short: BTreeSet<SourceKey>,
     /// The song's recording, and what decided it.
     song: Option<(usize, By)>,
 }
@@ -116,11 +129,27 @@ impl Recordings {
         let mut sorted: Vec<&Audible<'_>> = audible.iter().collect();
         sorted.sort_by_key(|a| a.key);
         sorted.dedup_by_key(|a| a.key);
+        let same = |a: &Audible<'_>, b: &Audible<'_>| a.digest.is_some() && a.digest == b.digest;
+        // How long a source played when it was compared, which is what
+        // decided whether it could be.
+        let compared_ms = |a: &Audible<'_>| {
+            sorted.iter().find_map(|b| {
+                (aligned(a.key, b.key).map(|x| x.a_ms))
+                    .or_else(|| aligned(b.key, a.key).map(|x| x.b_ms))
+            })
+        };
+        let short: BTreeSet<SourceKey> = sorted
+            .iter()
+            .filter(|a| {
+                compared_ms(a).is_some_and(|ms| !crate::align::comparable(ms, ms))
+                    && !sorted.iter().any(|b| b.key != a.key && same(a, b))
+            })
+            .map(|a| a.key.clone())
+            .collect();
+        sorted.retain(|a| !short.contains(a.key));
         let fits = |a: &SourceKey, b: &SourceKey| aligned(a, b).filter(|x| x.fits());
         let joined = |a: &Audible<'_>, b: &Audible<'_>| {
-            (a.digest.is_some() && a.digest == b.digest)
-                || fits(a.key, b.key).is_some()
-                || fits(b.key, a.key).is_some()
+            same(a, b) || fits(a.key, b.key).is_some() || fits(b.key, a.key).is_some()
         };
         let mut root: Vec<usize> = (0..sorted.len()).collect();
         for i in 0..sorted.len() {
@@ -177,7 +206,12 @@ impl Recordings {
         let song = (groups.len() > 1)
             .then(|| song_of(&groups, &of, &sorted, records))
             .flatten();
-        Self { groups, of, song }
+        Self {
+            groups,
+            of,
+            short,
+            song,
+        }
     }
 
     /// Whether `key` holds another recording than the song's: 1 if so,
@@ -238,11 +272,20 @@ impl Recordings {
 
     fn lead(&self, key: &SourceKey) -> String {
         let Some(place) = self.of.get(key) else {
-            return "not compared".to_string();
+            return if self.short.contains(key) {
+                "too short to compare with the others".to_string()
+            } else {
+                "not compared".to_string()
+            };
         };
         let size = self.groups[place.group].len();
         match self.song {
-            _ if !self.several() && size == 1 => "the only audio".to_string(),
+            _ if !self.several() && size == 1 && self.short.is_empty() => {
+                "the only audio".to_string()
+            }
+            _ if !self.several() && size == 1 => {
+                "the only audio long enough to compare".to_string()
+            }
             _ if !self.several() => {
                 format!("the same recording as the song's {}", others(size - 1))
             }
@@ -314,7 +357,8 @@ fn top(root: &[usize], mut i: usize) -> usize {
 }
 
 /// The song's recording among `groups`, and what decided it: a record
-/// fitting it alone that no source of it led to, else the most sources.
+/// fitting it alone that no source of it led to, else the most whole
+/// sources, then the most sources.
 fn song_of(
     groups: &[Vec<SourceKey>],
     of: &BTreeMap<SourceKey, Place>,
@@ -344,11 +388,13 @@ fn song_of(
     if let [(group, ms)] = decided.into_iter().collect::<Vec<_>>()[..] {
         return Some((group, By::Record(ms)));
     }
-    let most = groups.iter().map(Vec::len).max()?;
+    let whole: BTreeSet<&SourceKey> = sorted.iter().filter(|a| a.whole).map(|a| a.key).collect();
+    let count = |g: &Vec<SourceKey>| (g.iter().filter(|k| whole.contains(k)).count(), g.len());
+    let most = groups.iter().map(count).max()?;
     match groups
         .iter()
         .enumerate()
-        .filter(|(_, g)| g.len() == most)
+        .filter(|(_, g)| count(g) == most)
         .collect::<Vec<_>>()[..]
     {
         [(group, _)] => Some((group, By::Most)),
@@ -390,6 +436,7 @@ mod tests {
             ms: Some(ms),
             digest: None,
             first: false,
+            whole: true,
         }
     }
 
@@ -469,6 +516,60 @@ mod tests {
         assert_eq!((r.rank(&a), r.rank(&c)), (0, 1), "its lookup's own audio");
         let r = recordings(&all, &[record(true)], &alignments);
         assert_eq!((r.rank(&a), r.rank(&c)), (1, 0), "a file names it");
+    }
+
+    #[test]
+    fn a_source_too_short_to_compare_is_of_no_recording() {
+        let (a, b, c) = (key("a"), key("b"), key("c"));
+        let mut alignments = pair(&a, &b, 0).to_vec();
+        let short = |mut x: Aligned| {
+            (x.score, x.coverage) = (0.0, 0.0);
+            if x.a == c {
+                x.a_ms = 3_000;
+            } else {
+                x.b_ms = 3_000;
+            }
+            x
+        };
+        for other in [&a, &b] {
+            alignments.extend(pair(&c, other, 0).map(short));
+        }
+        let all = [
+            audible(&a, 200_000),
+            audible(&b, 200_000),
+            audible(&c, 3_000),
+        ];
+        let r = recordings(&all, &[], &alignments);
+        assert!(!r.several());
+        assert_eq!((r.rank(&a), r.rank(&c)), (0, 0));
+        assert_eq!(r.describe(&c), "too short to compare with the others");
+        assert_eq!(r.others(&a), []);
+        let r = recordings(&all[1..], &[], &alignments);
+        assert_eq!(r.describe(&b), "the only audio long enough to compare");
+        assert_eq!(r.aside(&b), None);
+    }
+
+    #[test]
+    fn copies_of_one_damaged_file_outvote_no_whole_copy() {
+        let (a, b, c) = (key("a"), key("b"), key("c"));
+        let mut all = vec![
+            audible(&a, 200_000),
+            audible(&b, 198_000),
+            audible(&c, 198_000),
+        ];
+        for damaged in &mut all[1..] {
+            damaged.digest = Some("x");
+            damaged.whole = false;
+        }
+        let r = recordings(&all, &[], &[]);
+        assert_eq!((r.rank(&a), r.rank(&b), r.rank(&c)), (0, 1, 1));
+        all[0].whole = false;
+        let r = recordings(&all, &[], &[]);
+        assert_eq!(
+            (r.rank(&a), r.rank(&b)),
+            (1, 0),
+            "all damaged: the most sources"
+        );
     }
 
     #[test]

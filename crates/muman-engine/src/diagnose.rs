@@ -219,8 +219,28 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                  or a magnet link of it is given to `add` again"
         ))?;
     }
+    let mut unlisted = crate::reconcile::Unlisted::of(&manifest, &state, &store, store::SETTLING);
+    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, |_| None);
+    for line in moves.unsure_lines() {
+        said.problem(line)?;
+    }
+    let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
+    let unsure: BTreeSet<&SourceKey> = moves.unsure.iter().flat_map(|(gone, _)| gone).collect();
+    let deleted = crate::reconcile::deleted(&manifest, &store, &moves, &unlisted);
     for key in &listed {
-        if !store.has(key) {
+        if let Some(line) = moves.line(key, true) {
+            said.info(line)?;
+        } else if arriving.contains(key) {
+            said.info(format!(
+                "Missing from sources while a file is still being copied in, its song \
+                 waiting for it: {key}"
+            ))?;
+        } else if deleted.contains(key) {
+            said.info(format!(
+                "Deleted from sources/manual by hand, taken out of its song by the next \
+                 sync: {key}"
+            ))?;
+        } else if !store.has(key) && !unsure.contains(key) {
             let page = manifest
                 .song_with(key)
                 .and_then(|s| s.held.get(key))
@@ -235,7 +255,8 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             let how = if fetchable {
                 "`sync` fetches it again"
             } else if others {
-                "its song is made from its other sources"
+                "its song is made from its other sources until `muman edit` takes it out \
+                 of the song's `sources`"
             } else {
                 "its song cannot be written"
             };
@@ -280,8 +301,8 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         &manifest.settings,
         &state,
         library,
-        Some(&on_disk),
-        &waiting,
+        (Some(&on_disk), &waiting),
+        (false, false),
     );
     match resolution {
         Ok(r) => {
@@ -310,6 +331,10 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                         ))?,
                         Doubt::Reading { key, why } => said.warning(format!(
                             "A title read more than one way: {song}: {key}: {why}"
+                        ))?,
+                        Doubt::Pin { .. } => said.problem(format!(
+                            "A pin leaves its song without a part: {song}: {}",
+                            doubt.pinned_to_nothing().unwrap_or_default()
                         ))?,
                         Doubt::SetAside { .. } => {}
                     }

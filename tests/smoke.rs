@@ -638,6 +638,56 @@ fn a_subtitle_past_the_audio_is_no_cut_and_damaged_audio_is_found() {
     );
 }
 
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_length_is_held_against_the_audio_only_where_the_file_states_it() {
+    let h = Home::new();
+    // A FLAC encoded into a pipe, its STREAMINFO counting no samples:
+    // ffmpeg gives it no length, and guesses none.
+    let made = h.song("Made.flac", 21, "Kite Season");
+    let piped = h.root.join("in").join("Piped.flac");
+    let ok = Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-i"])
+        .arg(&made)
+        .args(["-c:a", "flac", "-f", "flac", "pipe:1"])
+        .stdout(std::fs::File::create(&piped).unwrap())
+        .status()
+        .expect("ffmpeg runs")
+        .success();
+    assert!(ok, "ffmpeg piped a FLAC");
+    std::fs::remove_file(&made).unwrap();
+    let probed = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(&piped)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&probed.stdout).trim(), "N/A");
+    // A WavPack cut short, whose header states the whole length.
+    let cut = h.song("Cut.wv", 22, "Glass Weather");
+    let bytes = std::fs::read(&cut).unwrap();
+    std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+
+    let added = h.muman(&[
+        "add",
+        "--new",
+        piped.to_str().unwrap(),
+        cut.to_str().unwrap(),
+    ]);
+    let said = text(&added);
+    assert_eq!(said.matches("cut off").count(), 1, "{said}");
+    assert!(said.contains("Cut.wv"), "{said}");
+    let checked = text(&h.muman(&["check"]));
+    assert_eq!(checked.matches("Damaged audio").count(), 1, "{checked}");
+    assert!(!checked.contains("Piped.flac"), "{checked}");
+}
+
 /// A listener on 127.0.0.1, its port and how many connections it has
 /// been offered; each is closed unanswered.
 fn listener() -> (u16, Arc<AtomicUsize>) {

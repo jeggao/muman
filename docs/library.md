@@ -16,35 +16,36 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | The song's recording; least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping; peaks highest over its loudness, where that counts |
+| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
 
-Audio and covers are scored. muman counts each measure in whole steps,
-so noise never decides between near-equals, and multiplies each step
-by its measure's weight. The lowest sum wins. A source missing a
-measure ranks after those missing fewer. The weights a song list starts
-with rank by each measure in turn, each outweighing all after it.
-`[audio.pick]` and `[cover.pick]` change a measure's weight and steps
-or switch it off ([how sources are
-ranked](configuration.md#how-sources-are-ranked)).
+Audio and covers are scored: each measure in whole steps, so noise
+never decides between near-equals, times its weight; the lowest sum
+wins. A source missing a measure ranks after those missing fewer. The
+weights a song list starts with rank by each measure in turn, each
+outweighing all after it, but dynamics, off until set.
+`[audio.pick]` and `[cover.pick]` change a measure's weight and steps or
+switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)).
 
 ### Audio
 
 - **The song's recording** comes first, ahead of every measure. Sources
-  whose audio aligns, or that hold the same audio, are one recording.
+  whose audio aligns, or that hold the same audio, are one recording; a
+  source under 5 s is too short to compare, of no recording known.
   Where a song holds several, as a live take beside the studio cut, its
   recording is the one whose length fits its MusicBrainz record, else
-  the one most of its sources hold; sources of another rank after every
-  source of it. A record counts only for a recording that holds none of
-  the audio the lookup asked with and not the source it was made from,
-  unless a file names its ID, so a music video's own lookup never makes
-  the video's cut the song's. With no
+  the one most of its whole sources hold, then most sources; sources of
+  another rank after every source of it. A record counts only for a
+  recording that holds none of the audio the lookup asked with and not
+  the source it was made from, unless a file names its ID, so a music
+  video's own lookup never makes the video's cut the song's. With no
   record and no recording holding the most sources, nothing changes.
   `status` names each source of another recording, and one playing more
   than 0.5% faster or slower than the rest of its own.
   `[audio.pick.recording] enabled = false` turns this off.
+- **A whole copy** beats a [damaged](guide.md#damaged-sources) one, however little it lacks.
 - **Sound beyond the song** is how long a source plays outside the
   stretch it shares with another source of the song. A music video's
   intro counts; silence does not. An excerpt lacks the rest of the
@@ -55,17 +56,19 @@ ranked](configuration.md#how-sources-are-ranked)).
 - **Real stereo** tells stereo from mono copied into two channels, even
   at different levels or a few samples apart. Of more than two
   channels, it compares the first two.
-- **Bandwidth** is where a lowpass cuts the sound off. A FLAC
-  transcoded from a lossy file measures as narrow as that file, while a
-  recording whose treble fades on its own measures full.
+- **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
+  made from an MP3 measures as narrow as the MP3, under any fill 20 dB
+  down, while a recording whose treble fades on its own measures full.
+  A lossy copy, or one that clips more, counts no wider than a lossless
+  copy of its recording: what clipping or an encoder fills in is no sound.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
   past full scale, only those at its own peak count.
-- **Dynamics** is how far the true peak stands over the loudness, which
-  a master squeezed louder lowers. It counts only where
-  `[audio.pick.dynamics]` is on, a matter of taste: it puts an older
-  master on a lossy upload ahead of a louder one on a CD.
+- **Dynamics** is how far the peaks, the loudest 0.1% of samples, stand
+  over the loudness: a master squeezed louder lowers it, a codec's
+  overshoot barely moves it. It counts only where `[audio.pick.dynamics]`
+  is on, a matter of taste: it puts an older master on a lossy upload ahead of a louder one on a CD.
 
 muman measures every channel as it is, never mixed into two. Of audio
 scored alike, lossless beats lossy, then the more bits its samples use,
@@ -73,12 +76,12 @@ then the lower sample rate, which an upsample would only waste. Lossless
 audio whose sound stops under 19 kHz, as lossy audio's does, was made
 from lossy audio and counts as lossy. `status` names it, a file above
 48 kHz whose sound stops at 24.5 kHz or lower, which was upsampled, and
-one whose samples use fewer bits than it declares. Of sources ranked
-alike, a song on an album takes the one from the folder most of its
+one whose samples use fewer bits than it declares. Of sources alike in
+all that, a song on an album takes the one from the folder most of its
 album's audio comes from, a disc's folder counting as its album's, so
-the album plays from one rip. A file
-with several audio streams is made from its best: lossless before
-lossy, then the most channels, then the highest rate.
+the album plays from one rip. A file with several audio streams is made
+from its best: lossless before lossy, then the most channels, then the
+highest rate.
 
 muman copies the audio chosen when `[audio] codecs` lists its codec.
 Otherwise it encodes lossless audio to `[audio] lossless` and lossy
@@ -89,8 +92,9 @@ song ends cleanly. [Audio](audio.md#codecs) says what each codec holds.
 
 muman checks a picture that is not square for bars, and crops a video
 frame with square art in the middle to that art. Effective resolution
-is the size up to which a picture keeps its detail, so an upscale
-measures no larger than the picture it was made from. Block artifacts
+is the size up to which a picture keeps its detail: an upscale gains
+little, though a mild one can measure up to 1.6 times its source's
+size, as a smooth picture keeps much the same detail. Block artifacts
 are how much more the pixels jump across JPEG's 8×8 block edges than
 between them.
 
@@ -101,16 +105,15 @@ it is tall, or as tall as wide, is a banner and never a cover, unless
 pinned. The songs of one album show one design, a pinned cover's, else
 the one most of their covers show: a song showing another takes that
 design from a source of its own where one holds it, before any picture
-that measures better. A picture is known by its bytes, never its name,
-so a PNG named `.jpg` is written as PNG.
-[`[[cover.out]]`](configuration.md#where-the-cover-goes) says where
-the cover goes.
+that measures better. A picture is known by its bytes, never its name
+or the media type a file labels it with, so a PNG named `.jpg` is
+written as PNG; one that does not decode is said, and is no cover.
+[`[[cover.out]]`](configuration.md#where-the-cover-goes) says where the cover goes.
 
 ### Lyrics
 
-Lyrics rank first by [role, timing and
-language](configuration.md#which-lyrics-a-song-takes). Only subtitles a
-person wrote count; generated captions never do. Lyrics from a source
+Lyrics rank first by [role, timing and language](configuration.md#which-lyrics-a-song-takes).
+Only subtitles a person wrote count; generated captions never do. Lyrics from a source
 other than the chosen audio must be of the same recording. muman shifts
 them by the offset it measured between the two, and stretches them when
 one plays a little faster. A word's time moves with its line's, and an
@@ -121,9 +124,9 @@ text is LRC: `USLT` in MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis
 comment, `©lyr` in MP4, `Lyrics` in APEv2. A `.lrc` with no audio of
 its own is taken as timed for the song. One that states its length, as
 LRCLIB's do, is trusted as far as that length agrees with the chosen
-audio's, and lyrics timed past the audio's end are another cut's, taken
-only where no lyrics fit. A song sung in no language, as MusicBrainz marks one
-(`zxx`), or titled as an instrumental or a karaoke take, takes no lyrics.
+audio's; lyrics timed past its end are another cut's, taken only where
+none fit, and a line over 2 s past it is left out and said. A song sung in
+no language (MusicBrainz's `zxx`), or titled as an instrumental or karaoke, takes none.
 Lyrics that state no language are the song's own, unless their letters
 are Latin alone and the song is sung in another script: then they are
 its romanization, ranked as `[lyrics] prefer` ranks one. A pin, as
@@ -134,8 +137,7 @@ its romanization, ranked as `[lyrics] prefer` ranks one. A pin, as
 Lyrics are [cleaned](metadata.md#cleaning) of cues such as `[Music]`, credits and
 what a site wrapped around them. A line in brackets of other words is a
 backing vocal, and is sung.
-[`[[lyrics.out]]`](configuration.md#where-lyrics-go) says where lyrics
-go.
+[`[[lyrics.out]]`](configuration.md#where-lyrics-go) says where they go.
 
 ### Tags
 
@@ -215,8 +217,7 @@ These leave songs out:
   `[providers] skip` leaves songs out of every provider.
 - `lookups = false` on a song asks no provider; `lookups.<provider> =
   false` asks that one nothing.
-- `enabled = false` in a provider's table asks its service nothing at
-  all, not even for a record it found before.
+- `enabled = false` in a provider's table asks its service nothing, not even for a record it found before.
 - `--offline` makes no lookup in that run.
 
 The other keys pace a provider: `concurrency` is how many lookups run
@@ -385,8 +386,9 @@ lookup alone.
   times, as a fetch does.
 - **`purge`** deletes the fetched sources and lookup records no song
   uses, which `status` and `info` name: an upload a release replaced, a
-  source taken out of its song. A removed song's sources stay for
-  `restore`, and files of your own are never touched.
+  source taken out of its song; and a folder that leaves empty, as a
+  torrent's. A removed song's sources stay for `restore`, and files of
+  your own are never touched.
 - **`duplicates`** lists songs listed apart that are one recording
   ([duplicates](songs.md#duplicates)).
 
@@ -416,27 +418,27 @@ An export may change, for itself alone, any setting of `[library]`,
 cleaning rule, as `tags.clean.tidy.spacing=false`. `--set
 table.key=value` sets any of them, and `--codec`, `--template` and
 `--lyrics` the commonest. The export then holds the library a sync
-would write under those settings. Each song the change leaves alone is
-copied, and every other is made again from its sources.
+would write under those settings, a song mixed into another layout
+levelled on its mix, which the export measures where no sync has. Each
+song the change leaves alone is copied, and every other is made again.
 
-A song you changed since muman wrote it, or whose sources are gone, goes
-in as the library holds it; the export says so and exits with code 4.
-An export cannot change where the library lives, its `max_size`, how
-sources are ranked or which lyrics a song takes, nor loudness when the
-song list's `[loudness] mode` measures none.
+A song you changed since muman wrote it, whose sources are gone, or that a sync
+leaves as built, as one cut off since, goes in as the library holds it; the
+export says so and exits with code 4. An export cannot change where the library
+lives, its `max_size`, how sources are ranked or which lyrics a song takes, nor
+loudness when the song list's `[loudness] mode` measures none.
 
 ### A size limit
 
 `--max-size` caps the export, as `--max-size 32GiB` for a card. In a
 folder, each file counts in whole blocks of `[library] block_size`,
 which `--set` may change. muman encodes the songs that do not fit again
-from their sources, at lower bitrates of `[audio] lossy`, the least
-audible loss for each byte saved first, as [the library's own
-limit](audio.md#library-size) does. It measures each song once encoded
-and fits the rest again on what it really took, so the export lands
-under the cap. When even the lowest bitrates cannot fit, muman writes
-nothing and says what size the export needs. The library itself never
-changes.
+from their sources, at lower bitrates of `[audio] lossy`, by the rule of
+[the library's own limit](audio.md#library-size). The songs get the cap
+less the song list and are lowered as a library of that `max_size`
+would be, a zip counting its own few bytes for each file too. When even
+the lowest bitrates cannot fit, muman writes nothing and says what size
+the export needs. The library itself never changes.
 
 ## Hooks
 
@@ -453,16 +455,16 @@ It runs once, after a run that wrote, moved or removed any file (an
 undo's files put back count as written), and after that run lets go of
 the home and the library, so it may run muman there; a muman a hook
 starts runs no hook. It is given `library` and how many files were
-`written`, `moved` and `removed`, each as a `{name}` placeholder in its
-words and as a `MUMAN_<NAME>` variable, such as `MUMAN_LIBRARY`; none
-holds a title or a file's name. `run` is an argument list, run without a
-shell; a batch file (`.bat`, `.cmd`) gets the variables only. Its output
-shows as `hook:`, and a hook that fails is warned of but fails nothing.
+`written`, `moved` and `removed`, as `{name}` placeholders in its words
+and `MUMAN_<NAME>` variables, such as `MUMAN_LIBRARY`; none holds a
+title or a file's name. `run` is a list of words, run without a shell;
+a batch file (`.bat`, `.cmd`) gets the variables only. Its output shows
+as `hook:` as it comes; a failure is warned of but fails nothing; and
+muman waits for the hook, not for a job it leaves running.
 
-A hook muman cannot run, as one `on = "written"`, is refused alone:
-commands that would run it say so, `check` reports it, and the rest
-still work. A tag a program should add goes in through `muman add` as a
-[tag file](songs.md#giving-songs-lyrics-pictures-and-tags); ReplayGain
-is [`[loudness]`](audio.md#loudness)'s. A muman a hook runs under
-another home, on the library the hook's run wrote, stops with exit code
-5: pass `--library` to name another.
+A hook muman cannot run, as one `on = "written"`, is refused alone, said
+by each command that would run it and by `check`. A tag a program should add is a [tag file](songs.md#giving-songs-lyrics-pictures-and-tags)
+given to `muman add`; ReplayGain is [`[loudness]`](audio.md#loudness)'s.
+The run's home and library are `MUMAN_HOOK_HOME` and `MUMAN_HOOK_LIBRARY`
+too: a muman the hook runs under another home stops with exit code 5 on
+that library; `--library` or `MUMAN_LIBRARY` names another.

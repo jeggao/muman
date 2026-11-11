@@ -148,6 +148,8 @@ impl<'a> Ledger<'a> {
     /// Move each of `moves`, a song's file and those beside it, all
     /// recorded ahead; a song whose files beside it cannot follow goes
     /// back whole, and one that cannot move is forgotten from the record.
+    /// A folder a move empties is removed before the next, which may
+    /// move a file to where it was.
     /// Returns each one's outcome, in order.
     pub fn relocate<W: Write>(
         &mut self,
@@ -163,7 +165,6 @@ impl<'a> Ledger<'a> {
             }
             run.checkpoint(self.home)?;
         }
-        let mut left = Vec::new();
         let mut done = Vec::new();
         for m in moves {
             let result = move_file(self.root, &m.from, &m.to).and_then(|()| {
@@ -180,6 +181,7 @@ impl<'a> Ledger<'a> {
             });
             match &result {
                 Ok(()) => {
+                    remove_empty_folders(self.root, std::slice::from_ref(&m.from));
                     crate::ui::info(
                         out,
                         &format!(
@@ -188,7 +190,6 @@ impl<'a> Ledger<'a> {
                             crate::relpath::show(&m.to)
                         ),
                     )?;
-                    left.push(m.from.clone());
                 }
                 Err(_) => {
                     if let Some(run) = self.run.as_deref_mut() {
@@ -201,7 +202,6 @@ impl<'a> Ledger<'a> {
             }
             done.push(result);
         }
-        remove_empty_folders(self.root, &left);
         Ok(done)
     }
 }
@@ -240,6 +240,18 @@ pub fn clear(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
 #[must_use]
 pub fn may_change(root: &Path, rel: &Path, claim: &[Owned]) -> bool {
     held(root, rel, claim).is_ok()
+}
+
+/// Refuse, before any is changed, a song's files at `rels` that are not
+/// all for [`put`] or [`clear`] to change as `claim` holds them, so a song
+/// one of them refuses is left as it was, whole, and as the state records
+/// it.
+pub fn claimed<'p>(
+    root: &Path,
+    rels: impl IntoIterator<Item = &'p PathBuf>,
+    claim: &[Owned],
+) -> Result<()> {
+    rels.into_iter().try_for_each(|rel| held(root, rel, claim))
 }
 
 /// Refuse a file at `rel` that no file of `claim` is, under its name or
@@ -362,7 +374,7 @@ pub fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
 
 /// Files a file manager leaves in a folder it showed, which keep an
 /// emptied album folder from being removed otherwise.
-fn is_desktop_clutter(name: &str) -> bool {
+pub(crate) fn is_desktop_clutter(name: &str) -> bool {
     matches!(name, "desktop.ini" | "Thumbs.db" | ".DS_Store") || name.starts_with("._")
 }
 

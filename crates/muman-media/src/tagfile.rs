@@ -16,7 +16,9 @@
 //! value would outlive it: gains and peaks (a hand gain beats the
 //! measured one, but these were measured on someone else's file), the
 //! encoder, embedded pictures and lyrics. Those are skipped ([`SKIPPED`]).
-//! Any other name is kept, as hand tags keep any Vorbis name.
+//! Any other name is kept, as hand tags keep any Vorbis name. A value
+//! continued over lines is read whole, and kept so or made one line as
+//! [`crate::tags::single_line`] says of its field.
 //!
 //! beets names its fields in its own way, so each is read into the
 //! Vorbis name Picard writes it as. What beets keeps of its own, as the
@@ -682,7 +684,7 @@ mod tests {
         let sheet = read(Path::new("tags.ffmeta"), text).unwrap();
         let tags = &sheet.tracks[0].tags;
         assert_eq!(values(tags, "TITLE"), ["Copper = Moth"]);
-        assert_eq!(values(tags, "ARTIST"), ["Marlo\nVenn"]);
+        assert_eq!(values(tags, "ARTIST"), ["Marlo Venn"]);
         assert_eq!(values(tags, "ALBUM"), ["The Glass Orchards;"]);
         assert_eq!(
             format_of(Path::new("x.txt"), text),
@@ -848,7 +850,7 @@ mod tests {
     #[test]
     fn ffmetadata_continues_on_an_odd_run_of_backslashes_and_reads_without_its_header() {
         let sheet = read(Path::new("x.ffmeta"), ";FFMETADATA1\ntitle=a\\\\\\\nb\n").unwrap();
-        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["a\\\nb"]);
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["a\\ b"]);
         let bare = read(
             Path::new("x.ffmeta"),
             "title=Copper Moth\nartist=Marlo Venn\n",

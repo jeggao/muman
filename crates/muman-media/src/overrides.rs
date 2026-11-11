@@ -7,7 +7,10 @@
 //!
 //! An override names a torrent by its info hash, or a channel by the
 //! name an upload credits it with where it names no artist of its own,
-//! case aside. It applies to each source it names before cleaning:
+//! case aside in any script ([`crate::similar::caseless`]): one of the
+//! two, never both, and a hash of a v1 or a v2 torrent's length in hex,
+//! so a slip that would name no source at all is refused as the song
+//! list is read. It applies to each source it names before cleaning:
 //! `drop`'s fields go, and with `credits = false` its artist, artists and
 //! album artist; then its title, as it came, is read by `title`, a
 //! pattern of `%title%`, `%artist%`, `%album%`, `%track%` and `%dummy%`
@@ -48,11 +51,7 @@ impl Override {
             offers
                 .get(&Field::Artist)
                 .filter(|o| !o.structured)
-                .is_some_and(|o| {
-                    o.values
-                        .iter()
-                        .any(|v| v.trim().eq_ignore_ascii_case(name.trim()))
-                })
+                .is_some_and(|o| o.values.iter().any(|v| crate::similar::caseless(v, name)))
         });
         torrent || channel
     }
@@ -203,5 +202,18 @@ mod tests {
         assert!(o.names(&upload, &offers));
         offers.get_mut(&Field::Artist).unwrap().structured = true;
         assert!(!o.names(&upload, &offers), "an artist of its own");
+        let accented = Override {
+            channel: Some("ÖLUND ÄRCHIVE".into()),
+            torrent: None,
+            ..o
+        };
+        let mut offers = Offers::new();
+        let channel = Offer {
+            values: vec!["ölund ärchive".into()],
+            structured: false,
+            also: Vec::new(),
+        };
+        offers.insert(Field::Artist, channel);
+        assert!(accented.names(&upload, &offers), "case aside in any script");
     }
 }

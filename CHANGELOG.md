@@ -7,6 +7,373 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **`purge` never deletes a source in use**: a stray file beside a listed
+  fetched source goes alone; a kept record in any case of extension, and
+  a record's `.json` left without its `.lrc`, are purged; the folders
+  purge empties go too.
+- **`add --from` finds a torrent's decomposed names**, as another client
+  left them on Linux.
+- **A multi-disc torrent's top folder covers its discs**, as such a folder
+  of your own does.
+- **`undo` runs nothing a song list names until it is trusted**: it read
+  the programs of an untrusted list's `[tools]` before asking, as no
+  other command does.
+- **An album keeps one gain while a song of it is left as built**: the
+  song counts in its album's loudness as its file was made.
+- **A cut-short cover a lookup kept is no cover**: any picture source
+  that does not decode whole is said and left out.
+- **An Opus copy no longer outranks its lossless source**: a lossy copy
+  counts its bandwidth no wider than a lossless copy of its recording
+  that was not itself made from lossy audio.
+- **Short sources compare**: copies and excerpts of 5 s or more align as
+  one recording, and one under 5 s is "too short to compare", rather
+  than "another recording"; excerpts under a minute no longer join
+  unrelated recordings.
+- **Clipping is no bandwidth**: a copy raised into clipping no longer
+  beats the clean copy it was made from.
+- **`[audio.pick.dynamics]` ignores codec overshoot**, so a lossy copy no
+  longer beats its lossless master; a squeezed master still loses.
+- **An embedded TIFF cover is read**, where it was dropped.
+- **A source that could not be read is read again once muman reads it
+  differently**, without waiting for the file to change or `--retry`.
+- **A control character no longer costs a lyrics file its lyrics**: a
+  DOS end-of-file mark, a terminal colour code or a NUL is dropped, as in
+  a lyrics tag; a file that reads as other data is said. Every song's
+  lyrics are written again once.
+- **Lyrics given to `add` find a song by its embedded lyrics.**
+- **WebVTT with a style or region block reads.**
+- **A lyrics line timed past the song's end is left out**, and said.
+- **A cover or lyrics pinned to a source that holds none is said** by
+  `sync`, `status` and `check`.
+- **Section headings and credits are cleaned alike**, in any bracket or
+  none; docs/metadata.md says what each lyrics rule drops.
+- **An album's lossy rip no longer wins over a lossless copy of the same
+  audio**: of audio scored alike, lossless, more bits and the lower rate
+  come before the folder most of the album comes from.
+- **A song with no date joins its album**, spelled, foldered, levelled and
+  checked for duplicates with the songs of its name dated in one year.
+- **A title or artist spelled alike but for case is spelled as most
+  sources spell it**, so the library path no longer follows the order of
+  `sources`.
+- **More than 255 chapters in an MP3**: a source with more is written as
+  MP3 with every one, where the song failed on every sync. FLAC, Ogg and
+  Opus keep the first 1000, as many as Vorbis comments number, and say
+  so.
+- **A copied FLAC states its length**: one copied from a FLAC that states
+  none, as one encoded into a pipe or an Ogg FLAC holds, is given its
+  sample count. Every FLAC song is written again once. An Ogg FLAC's
+  tags are read.
+- **Covers labelled wrong are read by their bytes**: an embedded cover
+  whose media type is wrong or unknown to ffmpeg, as a JPEG labelled PNG
+  or WebP in FLAC, is kept where it was dropped; one that does not
+  decode is said.
+- **`max_size` counts a song left as built as its file**, so another
+  song gives up the room, and the song is not reported lowered.
+- **An export makes no song from a source cut off since it was built**:
+  such a song goes in as the library holds it, the export saying so and
+  exiting 4, rather than a stub of a fraction of a second.
+- **`export --max-size` lowers what `[library] max_size` does**: the same
+  songs to the same formats, the song list and a zip's own bytes still
+  counted against the export's cap.
+- **`export --folder` onto a file or a link to nothing exits 5** with
+  a refusal, as onto a folder holding anything, not with an error of
+  the system's.
+- **Copies of one song moved together stay its own**, and are followed
+  again after `undo`; a move that cannot be told apart keeps the song's
+  library file, held as built, rather than delete it.
+- **A file of yours deleted by hand leaves its song** when another file
+  of yours still makes it, as after a re-encode: `sync` says so, `undo`
+  puts it back, and `check` no longer fails on it for good.
+- **A removed song keeps out its recording, not its name**: other audio
+  dropped at a removed song's file name is listed as a new file.
+- **`undo` follows swapped files again**: undoing the sync that followed
+  files trading names keeps each song's tags on its own recording.
+- **A run stopped at any point is undone**: every run records itself
+  before it changes anything, so one stopped right after saving the song
+  list no longer leaves a change `undo` refuses as made by hand.
+- **`undo` of a run stopped partway checks your edits too**: a library
+  file you changed since is refused as for a run that ended, and one
+  written as the run stopped, which cannot be told from an edit, is
+  named before it is put back.
+- **`undo` never moves a song back onto a file of yours**: a file in the
+  way of a song moving back is refused, rather than the song's file
+  taken for one the run made and deleted.
+- **A WAVE file of MP3 or other compressed audio is not called cut
+  off** when its header gives a false byte rate: with no `fact` chunk
+  counting its samples, its length is taken for a guess, as a headerless
+  MP3's is. Every source's integrity is measured again once.
+- **A source not mended goes once it measures whole**: `check` no longer
+  fails on a torrent's file noted as holding its torrent's own damaged
+  bytes after a measure since finds it whole.
+- **Files in `sources/manual` are followed by what they hold**: two
+  that trade names, or one renamed over another listed name, keep each
+  song's own tags, pins and offset; a removed song's file moved stays
+  out and `restore` finds it; undoing the sync that followed moved
+  lyrics or a picture follows them again; undoing an add whose copy you
+  moved takes the copy out. Two files either of which could be one gone
+  are not guessed at, and said so.
+- **A file beside a song that you changed is left when a build no
+  longer writes it**, as a folder cover a new template drops: it stays
+  yours rather than fail the song.
+- **A disc folder takes its album folder's cover only from a folder of
+  its own**, never from the manual folder or a folder of loose songs.
+- **Undoing a run stopped partway says what it takes back**: the song
+  list as it stands, with a line when it differs from what the run last
+  recorded, whether the run saved it or a hand did, rather than refuse
+  a run stopped in one of its steps, or rewrite the list unsaid.
+- **An `edit` whose save is refused and left leaves no run behind** for
+  `undo` to take for stopped.
+- **A change to a song list whose template names no field is refused
+  before it is saved**, as `sync` is, rather than saved and then refused.
+- **A file moved in `sources/manual` stays followed by every command**:
+  `set`, `remove`, `add` and `undo` follow it as `sync` does, a file a
+  tagger renamed and retagged at once matched by its audio. Undoing the
+  sync that followed a move no longer deletes the song's file.
+- **A torrent holding `a:b.flac` and `a：b.flac`** keeps the first and
+  names the second as left out, rather than list a song never written.
+- **An album folder's cover covers its discs**: a cover picture in
+  `Album/` goes to the songs in `Album/CD1/` with none of their own.
+- **Retagging an `.m4a` never crashes the run**: tags that came out
+  exactly 8 bytes shorter made the tag library panic, exit 101; a tag
+  writer that fails in any way now fails only that song.
+- **An album's spelling no longer depends on the order songs were
+  added**, nor a tie between cover designs.
+- **A template with no folders moves songs rather than writing them
+  anew**: the library folder itself gets no folder cover.
+- **Every source key names its song in a query**: `torrent:`,
+  `lrclib:`, `musicbrainz:` and `coverart:` keys as well.
+- **`undo` takes back a change with no earlier run kept**, as after the
+  history was let go of: `set`, `remove` and `restore` record the song
+  list as they found it.
+- **Ctrl-C while a change waits for another run cancels it**: `set`,
+  `remove` and `restore` wait before they save, not after.
+- **A run stopped as it saves the song list is undone**: an `add`
+  stopped in its lookups, after listing its songs, no longer leaves a
+  run `undo` refuses as changed by hand.
+- **`check --upstream` asks every site it can reach**, naming the
+  sources of a site that cannot be reached, rather than stopping at the
+  first.
+- **A torrent with a file named like a drive is added**: `a:b.flac` no
+  longer refuses the whole torrent; it is kept as `a：b.flac`.
+- **A file renamed in `sources/manual` is followed at once**, rather
+  than failing its song for 10 s; while a listed file is gone and
+  another is still being copied in, its song waits.
+- **A song is never built from audio damaged since it was built**, its
+  library file deleted or `max_size` leaving it out: it fails with exit
+  code 4 until the whole file is back or `sync --force`.
+- **Lyrics and pictures in a folder given to `add` reach their songs**
+  when no song file in the folder brings them, so a folder of lyrics
+  alone no longer fails.
+- **Placeholders are dropped whatever the typography**: MusicBrainz's
+  `[non-album tracks]` is dropped, as `status` says, after typographic
+  hyphens respell it, and the song is a single.
+- **A featured artist moved into the title leaves the album artist
+  too**, so the song stays in its album's folder.
+- **`The Orchards` is not `Orchards`**: an album's article counts when
+  one artist's songs are told into albums.
+- **`[[tags.from]]` refuses a table that names nothing**: a `torrent`
+  that is not a hash, both a `torrent` and a `channel`, or an empty
+  `channel`; and a channel matches case aside in any script.
+- **Tags are named as the song list names them** in a refused
+  `until`, as `has:isrc`, not by their ID3 names.
+- **`purge` never deletes what a run under way is about to use.** It
+  waits for an `add` or `sync` fetching what no song lists yet, and
+  keeps each file a song lists by then.
+- **A command begins its run only once it has saved**, so `review`
+  asking about the next song and `edit` opened again after a change
+  meanwhile hold no other run back either.
+- **`check --upstream` with no network says so once**, after asking one
+  site, rather than naming every source as no longer served.
+- **`status`, `info` and `purge` agree on what is unused**: a removed
+  song's sources are kept for `restore` in all three, and a copy `add`
+  made of lyrics or a picture no song lists is named in all three.
+- **A level may be spelled out**, as `"-1 decibel"`.
+- **`check --calibrate` with no MusicBrainz record kept says so**,
+  rather than ask whether vetting is off.
+- **An Opus made from an MP3 no longer replaces it.** Bandwidth is read
+  at the MP3's lowpass, under the noise Opus fills in above it, so a
+  transcode cannot win on bandwidth and cost a generation. Lossy sources
+  are measured again once. An Opus made from AAC, whose fill sits close
+  to the music's level, can still measure as wide.
+- **A whole Ogg file remuxed with `ffmpeg -c copy` is no longer called
+  damaged.** A last packet whose listed duration is impossible no longer
+  stretches the stream to many hours.
+- **A cue sheet or tag file in a folder given to `add` goes to its
+  songs**, as it does when named: an untagged rip given as a folder no
+  longer becomes "Untitled" songs, and a one-file rip exits 4. Rip notes
+  in a plain `.txt` and yt-dlp `.info.json` files are still left out.
+- **An export levels a song it mixes into another layout on the mix**,
+  as a sync does: a 5.1 song exported with `--codec mp3` gets its
+  ReplayGain, and a song mixed down to fit `--max-size` its own level.
+- **A question waiting for an answer holds no other run back.** `set`,
+  `remove`, `restore`, `review` and merging duplicates take the home
+  only once you answer, so a scheduled `sync` no longer waits on a
+  question left open; a song changed meanwhile still refuses the save.
+- **`add` says `-y` only where `-y` would add the file.** A picture
+  like covers on several albums, or lyrics whose length is far off,
+  name `--to` alone; an excerpt kept as its own song says to undo the
+  add first; and a file added again says it is a source already.
+- **`has:` holds for a ReplayGain tag a source gives**, as muman writes
+  its own measured gain in its place.
+- **`check` counts songs, not credits, for a name spelled more than one
+  way**, so a song's album artist filled from its artist counts once.
+- **A whole MP3 without a VBR header is copied, not judged cut off.** A
+  VBR MP3 with no Xing or VBRI header, and a raw AAC, AC-3 or DTS file,
+  states no length, and the length ffmpeg guesses is no longer taken as
+  one. A truncated file whose header counts its frames is still found.
+- **A dark cover framed in black bars stays square**, rather than losing
+  its sides to the bars. Sources whose cover was cropped to a shape not
+  square are measured again once.
+- **A folder cover you changed stays in its folder** when the song that
+  holds it moves to another album while other songs stay, those held
+  back from their own move included. A new path template that moves the
+  whole album still takes it along.
+- **`check` names every song the last sync failed**: one `max_size`
+  left out, and one whose source was damaged since it was built, as
+  well as one that could not be written.
+- **A sync whose library cannot be locked stops**, as `undo` does,
+  rather than write the library unlocked.
+- **The old state kept as `state.json.bak` is never written over.** A
+  stub whose line ends an editor changed stays the stub, and a second
+  `state.json` is kept beside the first, numbered.
+- **A song retitled beside lyrics you edited stays where it is.** It
+  was moved, then failed partway, its file retagged but recorded as it
+  was: from then on it read as changed by you, `check` failed and
+  `undo` refused. It keeps its name with a warning until `sync
+  --force`, and a song one of whose files is refused writes none.
+- **A damaged copy no longer replaces the whole one.** A source cut
+  off, missing audio or cut short ranks below every whole copy of its
+  recording, however little it lacks. A copy with holes is compared
+  with its whole copy allowing for the audio it lost, so it stays the
+  same recording, and copies of one damaged file no longer outvote a
+  whole copy. Every stored comparison is made again once.
+- **A library in the home's `history/` or `partial/` is refused**, as
+  one in `sources/` is: muman deletes what it keeps there as runs fall
+  out of the history, and the user's files with it.
+- **`has:` holds only for tags a source or the song list gives.** The
+  ReplayGain tags muman measures no longer match it.
+- **`undo` keeps no link to a song a run never wrote over.** A run that
+  changed only a song's lyrics or folder cover kept the song's own
+  file, so a tagger writing it in place changed what `undo` put back.
+- **A command stopped on a song list that does not read keeps no run**,
+  so it no longer pushes a real run out of the history.
+- **An export's output that is taken or not there exits 5**, a folder
+  that is not empty as a zip there already does.
+- **`undo` puts the library back as the run found it.** A file the run
+  added is taken out by the undo itself, so a forced sync that wrote a
+  held-back song at a new path is undone with the song held back again,
+  a file of your own it wrote over stays yours, and lyrics or a folder
+  cover written beside a song the run moved no longer stay behind. A
+  sync killed after it moved a song and then carried on by the next
+  sync is undone to the song's original bytes.
+- **A change to a home that is not there makes nothing.** `set`,
+  `remove`, `restore`, `edit`, `review`, `undo`, `purge` and merging
+  duplicates on a mistyped `--home` refuse, exit 5, instead of creating
+  the folder and its lock files, a dry run included.
+- **A regex query term ignores accents** as every other term does, and
+  bare text passed as one argument matches each of its words apart.
+- **`set track=0` says tracks and discs count from 1**, instead of
+  calling 0 no number.
+- **A line break set by hand in a name becomes a space**, so a title,
+  artist or other named field is stored as `list` shows it. A comment
+  or unknown tag keeps its lines, is listed with each break as `\n`,
+  and is matched as if the break were a space.
+- **`set` refuses the query fields `from=` and `has=`**, as it refused
+  `key=` and `path=`, and `release=<ID>` pins the song's release
+  instead of writing a tag.
+- **Interactive `set` counts only choices that change a song**, and a
+  field set on the album counts once.
+- **`undo -n` names every file a run added**, the lyrics beside a song
+  too, and a sync says the lyrics it wrote were added.
+- **A song removed with `--purge` keeps its title and artist**, so
+  `list --removed` names it and a query by those fields finds it.
+- **`edit` reopens a file on the song list as it is now**, with the
+  user's edits merged in, so saving again no longer takes back a change
+  made meanwhile.
+- **songs.toml keeps its CRLF line endings and byte-order mark**
+  through every write, instead of being rewritten with LF endings.
+- **`XDG_MUSIC_DIR` set in the environment** places the default library
+  on Linux, before the folder `user-dirs.dirs` names.
+- **The album artist muman fills in leaves out a featured artist** in
+  every `[tags] featured` style, so a guest credited in one song's
+  artist no longer splits its album into two folders.
+- **A file named as another song's folder** is told apart by a suffix,
+  so a template that puts some songs in an album folder and others not
+  no longer makes sync fail a song that status said would move.
+- **A path template is checked whole before anything is written**: a
+  syntax error, an unknown filter or test, or a `pad` or `truncate`
+  width that is no whole number up to 255 is refused (exit 5) while
+  `list` keeps working, and `pad` above 65535 no longer crashes.
+- **A provider's `skip` refuses a field no song has**, as a query in
+  `list` does, instead of matching nothing.
+- **A setting that does not read exits 2**, as the exit-code table
+  says, instead of 4.
+- **A song's `album` must name a listed `[[album]]`** and its `track`
+  must be a whole number from 1; the `[[album]]` keys are documented.
+- **A lyrics or cover suffix may be a dot and 24 bytes**, as documented,
+  instead of 23.
+- **A negative `recheck`, an `incoherence` over 100 %, and clipping
+  cutoffs that are empty, unsorted or over 100 % are refused**, and a
+  value too large to keep says it is out of range.
+- **An `[library] untitled` that shows nothing is refused**, so no song
+  is named `.flac`; refusals of a file named twice and of a song list
+  that is not valid TOML are worded alike everywhere.
+- **Stopping muman stops what its programs started**: on Linux and
+  macOS, Ctrl-C or a stop signal also ends a hook's background jobs and
+  whatever yt-dlp or a wrapper script started; on Windows only the
+  program muman started is ended.
+- **A hook's background job no longer holds muman**: muman waits for
+  the hook itself and lets go of its output a second after it exits.
+- **A hook's output shows as it comes**, stdout and stderr in the order
+  written, instead of all at once after the hook ends.
+- **A hook whose `run` holds a number or a boolean is refused**, and
+  `check` reports it, instead of running with those words dropped.
+- **Ctrl-C at a question exits 130**, as Ctrl-C does elsewhere, instead
+  of failing with exit 4.
+- **A read-only home can be read**: `list`, `status`, `check`, `info`
+  and `duplicates` work on a home muman may not write, such as a
+  read-only mount or a backup snapshot, and make no file there.
+- **`MUMAN_LIBRARY` works inside a hook**: a hook is also given
+  `MUMAN_HOOK_LIBRARY`, so a muman it runs on another library is no
+  longer refused as running on its own.
+
+- **A crash in one song fails that song alone**: a panic while building
+  a song, in muman or a library it uses, is that song's failure, with
+  its message and place, recorded for `check`, and leaves no `.part`
+  file, instead of ending the sync with exit 101.
+- **Only a length the file is known to state can mark it cut off**: a
+  source in another format is judged by its packets and decode alone,
+  so no format whose length ffmpeg guesses makes every whole file of it
+  look cut off. Sources are measured again once.
+- **A song left as built keeps its place**: while its source is fetched
+  again and not accepted, or damaged since it was built, no other song
+  takes its file's path or its folder's cover, and its album is not
+  respelled from the new source.
+- **A home muman may not write is read on Windows** when a failed open
+  left an empty `-wal` beside the store.
+
+- **A review stopped partway is undone**: each answer `review` saves is
+  recorded as it is saved, so Ctrl-C or a kill after an answer leaves a
+  run that `undo` takes back whole, rather than a change it refuses as a
+  hand edit. One `undo` takes back every answer of a review.
+- **`set` asking again holds no run back**: when a song changed while
+  `set` stepped through its fields, asking again no longer keeps a
+  scheduled sync waiting.
+- **An undo stopped in its sync is finished by `undo`**: an undo stopped
+  after its sync followed a moved file is finished by running `undo`
+  again, and the next run no longer takes the follow for a hand edit.
+
+- **A folder gets its cover when one of its songs is held back**: a
+  song left where it was for a file you changed, or kept unwritten by a
+  file of yours, no longer takes the folder's cover and leaves the
+  folder without one, sync after sync.
+- **`undo` keeps the files you moved where you moved them**: undoing a
+  sync that followed files you moved in `sources/manual` puts the song
+  list back naming each file where it is now, swaps and copies
+  included, instead of the next sync finding them again by content.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added

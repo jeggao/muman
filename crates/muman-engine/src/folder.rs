@@ -4,9 +4,11 @@
 //!
 //! A folder is the songs whose files the template puts in it, its name
 //! folded as a filesystem blind to case folds it. Its songs are of one
-//! album when they share an album artist and album, as an album is
-//! levelled ([`crate::loudness`]); a single, or a song on no album, is an
-//! album of its own. A folder of one album takes its cover. A folder of
+//! album when [`crate::album::of_each`] puts them on one, as they are
+//! levelled ([`crate::levels`]); a single, or a song on no album, is an
+//! album of its own. A folder of one album takes its cover, but for the
+//! library folder itself, which holds the songs a template puts in no
+//! folder: its cover would stand for the whole library, said. A folder of
 //! several takes none, said, unless an output's `mixed = "majority"`
 //! takes the album most of its songs are on, where one album's songs
 //! outnumber every other's. An album's cover is the one most of its
@@ -22,11 +24,30 @@
 //! stale to the song it leaves ([`crate::reconcile`]). A name one of the
 //! songs' own files takes is left to the song, said.
 //!
-//! A song held at its last plan while it fails ([`crate::reconcile`]) is
-//! one of its folder's songs still: it counts toward the albums, the
-//! majority and the cover, and one that holds the folder's file keeps
-//! it, its file kept with it. So a song that fails moves no cover, makes
-//! none appear and takes none away, and no two songs list one file.
+//! A song that moves carries the folder's file with it, as it carries
+//! its own, so a folder a path template renames keeps its cover, the
+//! user's change to it with it, as their change to a song's `.lrc`; only
+//! where it holds its new folder's file, so songs of several folders
+//! moving into one bring no file there of each, in one another's way. But
+//! one the user changed stays where it is while songs are left in its
+//! folder, as when the song that holds it moves to another album: it is
+//! that folder's cover, not the song's. Carried off, it would sit in
+//! another album's folder at a name the song there may not write, its
+//! own folder given a new cover in its place, and `undo`, which takes
+//! out what the run wrote but leaves a file of the user's, could not put
+//! the two back. Left, it is a file of the user's own to its folder's
+//! next holder, which writes beside it, and the song's new folder gets
+//! a cover of its own.
+//!
+//! A song held at its last plan while it fails, while a sync leaves it as
+//! built, or while a file of the user's keeps it unwritten
+//! ([`crate::reconcile`]), is one of its folder's songs still, by that
+//! plan: it counts toward the albums, the majority and the cover,
+//! and one that holds the folder's file keeps it, its file kept with it.
+//! So such a song moves no cover, makes none appear and takes none away,
+//! and no two songs list one file. One a file of the user's keeps from
+//! being written with no file of its own counts by its plan and holds
+//! no folder's file, which another song writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -54,15 +75,17 @@ pub enum Why {
     Tie(usize),
     /// A song's own file takes the name.
     Taken(PathBuf),
+    /// The folder is the library's own.
+    Root,
 }
 
-/// An album of a folder: its artist and name, or for a song on none, the
-/// song's place.
-type Album = (Option<(String, String)>, Option<usize>);
+/// An album of a folder, or for a song on none, the song's place.
+type Album = (Option<crate::album::Album>, Option<usize>);
 
 /// Give each folder's cover, as the folder outputs of `cover` say, to
 /// the song of `planned` that holds it, the songs of `held` counted
-/// among theirs; each folder's file not written, and why.
+/// among theirs, by their plan there alone; each folder's file not
+/// written, and why.
 pub fn assign(
     planned: &mut [(usize, Resolved)],
     held: &[(usize, Resolved)],
@@ -73,15 +96,18 @@ pub fn assign(
     if outs.is_empty() {
         return Vec::new();
     }
-    // Planned songs first, so an index below `planned.len()` is one that
-    // can be given the file.
+    // Planned songs held by no other plan first, so an index below
+    // `free.len()` is one that can be given the file.
     let mut given = Vec::new();
+    let free: Vec<usize> = (0..planned.len())
+        .filter(|&i| held.iter().all(|(n, _)| *n != planned[i].0))
+        .collect();
     let unplaced = {
-        let all: Vec<&(usize, Resolved)> = planned.iter().chain(held).collect();
-        assigned(&all, planned.len(), &outs, facts, &mut given)
+        let all: Vec<&(usize, Resolved)> = free.iter().map(|&i| &planned[i]).chain(held).collect();
+        assigned(&all, free.len(), &outs, facts, &mut given)
     };
     for (i, placed) in given {
-        planned[i].1.plan.folder = Some(placed);
+        planned[free[i]].1.plan.folder = Some(placed);
     }
     unplaced
 }
@@ -96,6 +122,7 @@ fn assigned(
     given: &mut Vec<(usize, CoverRef)>,
 ) -> Vec<Unplaced> {
     let paths: Vec<PathBuf> = all.iter().map(|(_, r)| path_of(r)).collect();
+    let album_of = crate::album::of_each(all.iter().map(|(_, r)| r));
     let taken: BTreeSet<String> = all
         .iter()
         .zip(&paths)
@@ -112,9 +139,16 @@ fn assigned(
     for songs in folders.values_mut() {
         songs.sort_by_key(|&i| (folded(&paths[i]), paths[i].clone()));
         let folder = parent(&paths[songs[0]]).to_path_buf();
+        if folder.as_os_str().is_empty() {
+            unplaced.push(Unplaced {
+                folder,
+                why: Why::Root,
+            });
+            continue;
+        }
         let mut albums: BTreeMap<Album, Vec<usize>> = BTreeMap::new();
         for &i in songs.iter() {
-            let album = crate::levels::album_of(&all[i].1);
+            let album = album_of[i].clone();
             let own = album.is_none().then_some(i);
             albums.entry((album, own)).or_default().push(i);
         }
@@ -246,6 +280,13 @@ pub fn said(unplaced: &[Unplaced]) -> Vec<String> {
             "No folder cover where no album has the most of a folder's songs: {}",
             named(&tied)
         ));
+    }
+    if unplaced.iter().any(|u| u.why == Why::Root) {
+        lines.push(
+            "No folder cover in the library folder itself, where the template puts songs \
+             in no folder of their own"
+                .to_string(),
+        );
     }
     for u in unplaced {
         if let Why::Taken(file) = &u.why {

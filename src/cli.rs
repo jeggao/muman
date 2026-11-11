@@ -39,30 +39,23 @@ Exit codes:
   0  Every song was written, or nothing needed to be; or a change was
      declined
   2  yt-dlp, aria2c, ffmpeg or ffprobe is missing, does not run or is
-     older than muman runs, the system names no home folder, or the
-     command line does not parse or gives a setting that does not read
+     older than muman runs, the system names no home folder, the command
+     line does not parse, or a setting it or the song list gives does
+     not read
   4  yt-dlp failed, at least one song could not be written, the song
-     list or state could not be read or written, or check found a problem
+     list or state could not be read or written, the song list is no
+     TOML or a song, album or removed song in it does not read, or check
+     found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, a change or undo was refused, the song list sets
-     commands or servers not trusted, with no terminal to ask on, or a
-     hook ran muman on its run's library under another home
+     and was left out, a change, an undo or an export's output was
+     refused, the library template cannot name every song, the song list
+     sets commands or servers not trusted, with no terminal to ask on, or
+     a hook ran muman on its run's library under another home
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started";
 
-/// A command line that parses but gives what does not read, as a setting
-/// `export --set` gives; it exits as one that does not parse.
-#[derive(Debug)]
-pub struct Invalid(pub String);
-
-impl std::fmt::Display for Invalid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Invalid {}
+pub use crate::errors::Invalid;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -114,7 +107,8 @@ pub struct Cli {
     pub library: Option<PathBuf>,
 
     /// Reach no network: make no lookup, fetch nothing missing, and
-    /// refuse URLs; what is on disk is written as ever.
+    /// refuse URLs and torrents, which aria2c checks and finishes even
+    /// with `--from`; what is on disk is written as ever.
     #[arg(
         long,
         global = true,
@@ -320,6 +314,7 @@ Assignments:
   lyrics=false       Take no lyrics
   audio!             Unpin
   lyrics_offset=80ms Move the lyrics later; a negative time, earlier
+  release=<ID>       Pin it to that MusicBrainz release; release! unpins
 Every other word is a query, as `muman list` reads it. A query alone, on
 a terminal, sets them step by step: each field with where its value comes
 from and what the sources offer.";
@@ -484,7 +479,7 @@ pub enum Command {
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
     },
-    /// Set tags, pins or the lyrics offset on the songs a query matches:
+    /// Set tags, pins, the release or the lyrics offset on the songs a query matches:
     /// each `NAME=VALUE` sets, `NAME!` clears, the other words query.
     #[command(after_help = SET_HELP)]
     Set {

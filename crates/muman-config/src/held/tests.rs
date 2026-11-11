@@ -1,5 +1,5 @@
 use super::*;
-use crate::manifest::{Edit, Manifest};
+use crate::manifest::{Edit, Manifest, Unrecorded};
 
 const SONG: &str =
     "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"manual:a.flac\"]\n";
@@ -32,7 +32,7 @@ fn a_record_is_written_as_one_line_per_source_and_read_back() {
             ..held("0123456789abcdef", Some("251"))
         },
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let text = std::fs::read_to_string(dir.path().join("songs.toml")).unwrap();
     assert!(
         text.contains(
@@ -61,7 +61,7 @@ fn a_source_renamed_or_dropped_loses_its_record() {
     ] {
         let (dir, mut m) = load(&text);
         m.edit(edit);
-        m.save().unwrap();
+        m.save(&mut Unrecorded).unwrap();
         let after = std::fs::read_to_string(dir.path().join("songs.toml")).unwrap();
         assert!(!after.contains("held.\"youtube"), "{after}");
     }
@@ -225,7 +225,7 @@ fn a_source_two_songs_share_is_held_by_each() {
             },
         });
     }
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let again = Manifest::load(dir.path()).unwrap();
     assert!(
         again.songs.iter().all(|s| s.held.contains_key(&cover)),

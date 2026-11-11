@@ -549,7 +549,19 @@ impl AudioPick {
             .iter()
             .map(|c| ("clipping.cutoffs", *c));
         let bounds = std::iter::once(("stereo.incoherence", self.stereo.incoherence));
-        check_measures("audio.pick", &steps, bounds.chain(cutoffs))
+        let shares = bounds.chain(cutoffs);
+        check_measures("audio.pick", &steps, shares.clone())?;
+        if let Some((key, _)) = shares.into_iter().find(|(_, share)| *share > 1.0) {
+            bail!("[audio.pick.{key}] must be 100 % or less, a share of the audio");
+        }
+        let cutoffs = &self.clipping.cutoffs;
+        if cutoffs.is_empty() {
+            bail!("[audio.pick.clipping.cutoffs] lists none; `enabled = false` judges no clipping");
+        }
+        if !cutoffs.is_sorted_by(|a, b| a < b) {
+            bail!("[audio.pick.clipping.cutoffs] must rise, each above the one before");
+        }
+        Ok(())
     }
 }
 
@@ -626,13 +638,15 @@ impl Cover {
                         o.format
                             .extensions()
                             .iter()
-                            .map(|e| format!("{}.{e}", o.suffix).to_uppercase())
+                            .map(|e| format!("{}.{e}", o.suffix))
                             .collect()
                     };
                     let twice = self.out[..n].iter().any(|o| {
                         o.to == To::File
                             && o.scope == Scope::Song
-                            && names(o).iter().any(|a| names(out).contains(a))
+                            && names(o)
+                                .iter()
+                                .any(|a| names(out).iter().any(|b| one_name(a, b)))
                     });
                     if twice {
                         bail!(
@@ -661,12 +675,15 @@ impl Cover {
             o.format
                 .extensions()
                 .iter()
-                .map(|e| format!("{}.{e}", o.name).to_uppercase())
+                .map(|e| format!("{}.{e}", o.name))
                 .collect()
         };
-        let twice = before
-            .iter()
-            .any(|o| o.scope == Scope::Folder && names(o).iter().any(|a| names(out).contains(a)));
+        let twice = before.iter().any(|o| {
+            o.scope == Scope::Folder
+                && names(o)
+                    .iter()
+                    .any(|a| names(out).iter().any(|b| one_name(a, b)))
+        });
         if twice {
             bail!(
                 "[[cover.out]] names the folder's file `{}` twice",
@@ -680,6 +697,12 @@ impl Cover {
     pub fn of(&self, scope: Scope) -> impl Iterator<Item = &CoverOut> {
         self.out.iter().filter(move |o| o.scope == scope)
     }
+}
+
+/// Whether `a` and `b` name one file where case is not told apart, as on
+/// Windows and macOS.
+fn one_name(a: &str, b: &str) -> bool {
+    a.to_uppercase() == b.to_uppercase()
 }
 
 /// The quality a cover is encoded at, where `[[cover.out]]` sets none.
@@ -896,8 +919,8 @@ impl Default for Stereo {
 pub struct Dynamics {
     pub enabled: bool,
     pub weight: u32,
-    /// In hundredths of a dB: wider than the tenth of a dB a lossy
-    /// encoding of one master moves it by.
+    /// In hundredths of a dB: wider than the few tenths of a dB a lossy
+    /// encoding of one master moves it by, 0.6 at most as measured.
     #[serde(rename = "step", deserialize_with = "serde_as::db")]
     pub step_cdb: i32,
 }
@@ -1251,11 +1274,9 @@ impl Lyrics {
                 To::File => {
                     crate::naming::check_suffix(&out.suffix)
                         .map_err(|e| anyhow::anyhow!("[[lyrics.out]] suffix: {e}"))?;
-                    let name = |o: &LyricsOut| {
-                        format!("{}.{}", o.suffix, o.format.extension()).to_uppercase()
-                    };
+                    let name = |o: &LyricsOut| format!("{}.{}", o.suffix, o.format.extension());
                     let twice = self.out[..n].iter().any(|o| {
-                        o.to == To::File && name(o) == name(out) && o.when.meets(out.when)
+                        o.to == To::File && one_name(&name(o), &name(out)) && o.when.meets(out.when)
                     });
                     if twice {
                         bail!(
@@ -1493,7 +1514,12 @@ pub struct Override {
 /// The settings `doc` sets with `overrides` set over them, checked as
 /// the song list's own are. They are set by today's names, after the
 /// file's older names are renamed, so one never collides with another.
+/// One that does not read is [`Invalid`](crate::errors::Invalid).
 pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
+    checked(doc, overrides).map_err(crate::errors::invalid)
+}
+
+fn checked(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     let mut only = DocumentMut::new();
     for table in TABLES.into_iter().chain(crate::migrate::moved_from()) {
         if let Some(item) = doc.get(table) {
@@ -1559,12 +1585,12 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     if library.block_size.0 == 0 {
         bail!("[library] block_size must be above 0");
     }
-    if library
-        .template
-        .split('/')
-        .all(|part| part.trim().is_empty())
-    {
-        bail!("[library] template names no path for a song");
+    if !crate::naming::shows(&library.untitled) {
+        bail!(
+            "[library] untitled names a song with no title, so it must name something seen, \
+             not `{}`",
+            library.untitled
+        );
     }
     let least = [
         (
@@ -1636,10 +1662,16 @@ fn plainly(message: &str) -> String {
     let message = message.replace("unknown variant", "unknown value");
     let message = message.replace("invalid type: ", "");
     RUST.replace_all(&message, |c: &regex::Captures| {
-        if c[0].starts_with('f') {
-            "a number"
-        } else {
-            "a whole number"
+        let range = |low: i128, high: i128| format!("a whole number from {low} to {high}");
+        match &c[0] {
+            "u8" => range(0, u8::MAX.into()),
+            "u16" => range(0, u16::MAX.into()),
+            "u32" => range(0, u32::MAX.into()),
+            "i8" => range(i8::MIN.into(), i8::MAX.into()),
+            "i16" => range(i16::MIN.into(), i16::MAX.into()),
+            "i32" => range(i32::MIN.into(), i32::MAX.into()),
+            "f32" | "f64" => "a number".into(),
+            _ => "a whole number".into(),
         }
     })
     .into_owned()
@@ -1802,7 +1834,12 @@ mod tests {
             ),
             (
                 "[[lyrics.out]]\nto = \"file\"\n[[lyrics.out]]\nto = \"file\"\nwhen = \"timed\"\n",
-                "twice",
+                "names the file `<song>.lrc` twice",
+            ),
+            (
+                "[[lyrics.out]]\nto = \"file\"\nsuffix = \".en\"\n\
+                 [[lyrics.out]]\nto = \"file\"\nsuffix = \".EN\"\n",
+                "`<song>.EN.lrc` twice",
             ),
             ("[[lyrics.out]]\nto = \"aside\"\n", "aside"),
         ] {
@@ -1951,7 +1988,13 @@ mod tests {
         );
         assert!(settings("[library]\nmax_folder_bytes = 3\n").is_err());
         assert!(settings("[library]\nmax_name_bytes = 40\nmax_folder_bytes = 16\n").is_ok());
-        assert!(settings("[library]\ntemplate = \" / / \"\n").is_err());
+        for untitled in ["", " . ", "\u{200b}"] {
+            let e = settings(&format!("[library]\nuntitled = \"{untitled}\"\n")).unwrap_err();
+            assert!(format!("{e:#}").contains("untitled"), "{e:#}");
+        }
+        assert!(settings("[library]\nunknown_artist = \"\"\nunknown_album = \"\"\n").is_ok());
+        let empty = settings("[library]\ntemplate = \" / / \"\n").unwrap();
+        assert!(empty.library.naming(Path::new("lib")).is_err());
         let e = settings("[library]\nmax_folder_bytes = 1000\n").unwrap_err();
         assert!(format!("{e:#}").contains("at most 255"), "{e:#}");
         assert!(settings("[library]\nmax_name_bytes = 255\n").is_ok());
@@ -2024,6 +2067,37 @@ mod tests {
             "{e:#}"
         );
         assert!(settings("[audio.pick.clipping]\ncutoffs = [-1.0]\n").is_err());
+        for (bad, says) in [
+            (
+                "[audio.pick.stereo]\nincoherence = \"150 %\"\n",
+                "100 % or less",
+            ),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"200 %\"]\n",
+                "100 % or less",
+            ),
+            ("[audio.pick.clipping]\ncutoffs = []\n", "lists none"),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"0.1 %\"]\n",
+                "must rise",
+            ),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"1 %\"]\n",
+                "must rise",
+            ),
+            (
+                "[audio.pick.purity]\nweight = 10000000000\n",
+                "from 0 to 4294967295",
+            ),
+            (
+                "[ytdlp]\nkeep_partial = \"9999999999999 days\"\n",
+                "out of range",
+            ),
+        ] {
+            let e = settings(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(says), "{bad}: {e:#}");
+        }
+        assert!(settings("[audio.pick.clipping]\ncutoffs = [\"0.1 %\", \"100 %\"]\n").is_ok());
         assert!(settings("[audio.pick.loudness]\nweight = 1\n").is_err());
         assert!(settings("[cover.pick.stereo]\nweight = 1\n").is_err());
     }

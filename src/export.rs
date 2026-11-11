@@ -6,7 +6,9 @@
 //! records, so a song not written yet is not in it; `sync` first brings it
 //! in step. Entries are stored, not compressed: audio does not compress.
 //! The library, the song list and the state are only read, under the
-//! home's lock.
+//! home's lock: a mix the export's settings level a song by, which no
+//! sync measured, as 5.1 written in MP3's stereo, is measured for the
+//! export alone and not kept.
 //!
 //! **Settings.** An export may change any setting of `[library]`,
 //! `[audio]` and `[loudness]` for itself alone, and its library is then the
@@ -26,28 +28,42 @@
 //! A song changed since muman wrote it is copied as the library holds it:
 //! the file is the user's. So is one whose sources are gone, or that the
 //! export's settings resolve to no plan, as its file is the only one there
-//! is; each is said, and the export fails. The settings that place or
+//! is, and one a sync leaves as built ([`reconcile::Foreseen::held`]): a
+//! source fetched again holding otherwise, not yet accepted, or one whose
+//! audio was damaged since, as a copy cut off leaves it. The export makes
+//! a song from the sources a sync would make it from, or not at all. Each
+//! that the export's settings or size would have made anew is said, and
+//! the export fails. The settings that place or
 //! cap the library folder, `path`, `touch_root` and `max_size`, are no
 //! export's, and `block_size` is a folder's alone. Nor is `[audio.pick]`: the measures a sync takes
 //! follow its weights, so an export could rank by measures never taken. Loudness
 //! is refused for the same reason when the song list's mode measures none.
 //!
-//! With a size, songs are fitted by [`crate::fit`]. Each starts as the file
-//! the export writes: its library file, whose size is known, or its plan
-//! made anew, estimated from its facts as [`crate::limit`] estimates a
-//! plan. Each may be encoded again from its sources at the lower bitrates
-//! of the export's `[audio] lossy`, estimated as its bitrate times the
-//! song's length, plus what the first holds besides audio: the cover and
-//! embedded lyrics its library file holds, else `limit`'s guess at them.
-//! The songs chosen are encoded into the scratch folder, and their real
-//! sizes replace the estimates. A song's real size corrects its other
-//! estimates by as much as it missed, and the songs not encoded yet by how
-//! much all missed on average: a VBR encoder spends more on some music than
-//! its bitrate, a pure tone half again. [`fit::settle`] fits again until
-//! every song chosen is one measured, `PASSES` times at most before it
-//! settles on sizes encoded alone. A song that can only be copied stays
-//! its library file. Every entry is counted with what the zip spends on
-//! it, `ENTRY` bytes and its name twice.
+//! With a size, songs are fitted as `[library] max_size` fits the library
+//! under the export's settings, so an export and a library fitted into one
+//! size lower the same songs to the same formats: by [`fit::settle`], with
+//! [`crate::limit`]'s rungs, keys, margin and passes. Each song's first
+//! rung is its plan, the library file's or one made anew, and its lower
+//! rungs the export's `[audio] lossy` at lower bitrates; all start as
+//! estimates from the facts alone, and a real size is taken only where a
+//! pass asks for it, as a library takes one it measured before: the
+//! library file's size for a first rung that copies it, and otherwise
+//! what the song took encoded into the scratch folder. A song that can
+//! only be copied is its library file, its size known, as a library's
+//! song changed since muman wrote it is. What an export counts is the one
+//! difference: its room is the size less the song list and, in a zip, its
+//! end, and every entry of a zip counts what the zip spends on it, `ENTRY`
+//! bytes and its name twice, where a folder counts whole blocks as the
+//! library does.
+//!
+//! Fitting encodes each rung at the gains of the song's first. A rung that
+//! mixes it into another layout measures otherwise, and so does the pool
+//! of its album, so once fitting has chosen, every song is levelled again
+//! at the format chosen, by the resolving a sync's fitted songs are
+//! levelled by (`reconcile::resolve_as_fitted`), and one whose gains that
+//! changes is encoded again, as a sync renders it again. Under a size,
+//! the layout each song would be lowered into is measured whether or not
+//! fitting lowers it, as `[library] max_size` has it measured.
 //!
 //! Each file encoded for the zip is deleted from the scratch folder once it
 //! is in, so an export made anew needs about its own size free beside it,
@@ -71,23 +87,19 @@
 //! Each file counts whole blocks of `[library] block_size`, as the
 //! library does, since a card's filesystem spends them.
 
-use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use lofty::file::TaggedFileExt;
-use lofty::tag::ItemKey;
 use toml_edit::DocumentMut;
 use zip::CompressionMethod;
 use zip::write::{FullFileOptions, ZipWriter};
 
 use crate::atomic::Lock;
 use crate::dirs::{self, Dirs};
-use crate::facts::Facts;
-use crate::fit::{self, Item, Rung, Source};
+use crate::fit::{self, Item, Rung};
 use crate::limit;
 use crate::manifest::Manifest;
 use crate::parallel;
@@ -113,17 +125,6 @@ const ENTRY: u64 = 30 + 46 + 64 + 2 * 9;
 const EXTENDED_TIMESTAMP: u16 = 0x5455;
 /// What a zip spends once, at its end, ZIP64 records included.
 const END: u64 = 22 + 56 + 20;
-/// Bytes a file holds besides its stream, its cover and lyrics: headers
-/// and tags.
-const HEADERS: u64 = 4 * 1024;
-/// What encoding a song again costs, as loss per minute of it, so a song
-/// moved at all moves far rather than many a little.
-const CHURN_PER_MINUTE: f64 = 0.25;
-/// How many times songs are fitted again once real sizes are known.
-const PASSES: usize = 4;
-/// The most an encoding's real size is taken to miss its estimate by,
-/// either way, when the song's other estimates are corrected by it.
-const MISS: f64 = 3.0;
 
 /// The tables `--set` reaches.
 const TABLES: [&str; 5] = ["library", "audio", "loudness", "lyrics", "cover"];
@@ -313,6 +314,8 @@ struct Song {
     anew: bool,
     /// What it may be encoded from; none when it can only be copied.
     sources: Option<BTreeMap<SourceKey, Located>>,
+    /// Its place in the song list, when a song lists it.
+    n: Option<usize>,
 }
 
 /// The songs encoded for the zip, by their place and rung, with their
@@ -387,30 +390,6 @@ fn entries_size(target: Target, files: &[Entry]) -> u64 {
         .sum()
 }
 
-/// The bytes a library file holds besides its audio: its pictures and
-/// embedded lyrics, as `lofty` reads them, and its headers.
-fn extras(path: &Path) -> u64 {
-    let Ok(tagged) = lofty::read_from_path(path) else {
-        return 64 * 1024 + HEADERS;
-    };
-    let held: usize = tagged
-        .tags()
-        .iter()
-        .map(|tag| {
-            let pictures: usize = tag.pictures().iter().map(|p| p.data().len()).sum();
-            let lyrics = [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
-                .iter()
-                .filter_map(|k| tag.get_string(*k))
-                .map(str::len)
-                .max()
-                .unwrap_or(0);
-            pictures + lyrics
-        })
-        .max()
-        .unwrap_or(0);
-    held as u64 + HEADERS
-}
-
 /// Export the song list and the library in `dirs` into the zip or folder
 /// `options` names, under the settings it changes, fitting it into its
 /// size when given. Returns whether every song went in as chosen.
@@ -441,16 +420,24 @@ pub fn export<R: Runner, W: Write>(
     } else {
         Some(settings_of(&manifest, options.settings)?)
     };
-    let state = State::load(&dirs.home)?;
+    let mut state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let (output, target) = target_of(options, settings.as_ref().unwrap_or(&manifest.settings))?;
+    let writes_under = settings.as_ref().unwrap_or(&manifest.settings);
+    let (output, target) = target_of(options, writes_under)?;
     guard(&output, dirs, options.force)?;
     let (beside, _made) = scratch_beside(target, &output)?;
 
-    let (songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
-    let audio = settings
-        .as_ref()
-        .map_or(&manifest.settings.audio, |s| &s.audio);
+    let asked = (settings.as_ref(), options.max_size.is_some());
+    reconcile::analyze_mixes(
+        runner,
+        &store,
+        &manifest.keys(),
+        &mut state,
+        (writes_under, asked.1),
+        out,
+    )?;
+    let (mut songs, mut ok) = songs(dirs, &manifest, asked, &state, &store, out)?;
+    let audio = &writes_under.audio;
     let held: Vec<Vec<Entry>> = songs
         .iter()
         .map(|s| held_entries(&dirs.library, s))
@@ -465,8 +452,8 @@ pub fn export<R: Runner, W: Write>(
         let fitted = fit_into(
             runner,
             (audio, target),
-            &state,
-            (&songs, &held),
+            (&manifest, writes_under, &state, dirs.library.as_path()),
+            (&mut songs, &held),
             (max, budget),
             scratch.path(),
             out,
@@ -721,18 +708,20 @@ fn located(store: &Store, plan: &Plan) -> Option<BTreeMap<SourceKey, Located>> {
 #[derive(Debug, Default)]
 struct Kept {
     changed: usize,
+    held: usize,
     gone: usize,
     unresolved: usize,
 }
 
 /// The songs the library holds as the state records them, in its path
 /// order, each as the export writes it: under `settings`, when given,
-/// and else as the library holds it. Returns them with whether every song
-/// the library should hold is there, as asked.
+/// and else as the library holds it, `fitted` to a size or not. Returns
+/// them with whether every song the library should hold is there, as
+/// asked.
 fn songs<W: Write>(
     dirs: &Dirs,
     manifest: &Manifest,
-    settings: Option<&Settings>,
+    (settings, fitted): (Option<&Settings>, bool),
     state: &State,
     store: &Store,
     out: &mut W,
@@ -742,20 +731,24 @@ fn songs<W: Write>(
             .into_iter()
             .map(|(n, path)| (path, n))
             .collect();
-    let mut planned: Option<(BTreeMap<usize, Resolved>, BTreeMap<usize, Resolved>)> = None;
-    if let Some(settings) = settings {
-        let (library, _) = reconcile::plan_with(
-            manifest,
-            &manifest.settings,
-            state,
-            &dirs.library,
-            None,
-            &mut io::sink(),
-        )?;
-        let (export, _) =
-            reconcile::plan_with(manifest, settings, state, &dirs.library, None, out)?;
-        planned = Some((library.into_iter().collect(), export.into_iter().collect()));
-    }
+    let (library, _) = reconcile::plan_with(
+        manifest,
+        &manifest.settings,
+        state,
+        &dirs.library,
+        None,
+        &mut io::sink(),
+    )?;
+    let held = reconcile::foresee(manifest, state, &library, &dirs.library, (false, false)).held;
+    let library: BTreeMap<usize, Resolved> = library.into_iter().collect();
+    let export: Option<BTreeMap<usize, Resolved>> = match settings {
+        Some(settings) => {
+            let (export, _) =
+                reconcile::plan_with(manifest, settings, state, &dirs.library, None, out)?;
+            Some(export.into_iter().collect())
+        }
+        None => None,
+    };
     let mut songs = Vec::new();
     let mut missing = 0_usize;
     let mut kept = Kept::default();
@@ -768,6 +761,8 @@ fn songs<W: Write>(
             continue;
         }
         let changed = reconcile::changed_since_written(&dirs.library, &state.outputs, path);
+        let n = owners.get(path).copied();
+        let as_built = n.is_some_and(|n| held.contains(&n));
         let mut song = Song {
             stem: path.with_extension(""),
             path: path.clone(),
@@ -778,15 +773,19 @@ fn songs<W: Write>(
                 .collect(),
             plan: plan.clone(),
             anew: false,
-            sources: located(store, plan).filter(|_| !changed),
+            sources: located(store, plan).filter(|_| !changed && !as_built),
+            n,
         };
-        if let (Some((library, export)), Some(n)) = (&planned, owners.get(path)) {
-            match (library.get(n), export.get(n)) {
+        let mut asked = fitted;
+        if let (Some(export), Some(n)) = (&export, n) {
+            match (library.get(&n), export.get(&n)) {
                 (Some(was), Some(now)) => {
                     song.stem.clone_from(&now.stem);
                     if now.plan != was.plan {
+                        asked = true;
                         match located(store, &now.plan) {
                             _ if changed => kept.changed += 1,
+                            _ if as_built => {}
                             None => kept.gone += 1,
                             Some(sources) => {
                                 song.plan = now.plan.clone();
@@ -800,8 +799,18 @@ fn songs<W: Write>(
                 (_, None) => kept.unresolved += 1,
             }
         }
+        if as_built && !changed && asked {
+            kept.held += 1;
+        }
         songs.push(song);
     }
+    let all = say_kept(missing, &kept, out)?;
+    Ok((songs, all))
+}
+
+/// Say which songs the library should hold are `missing` from it, and
+/// which it gives only as it holds them, by why; whether there were none.
+fn say_kept<W: Write>(missing: usize, kept: &Kept, out: &mut W) -> Result<bool> {
     if missing > 0 {
         crate::ui::warning(
             out,
@@ -827,10 +836,17 @@ fn songs<W: Write>(
             ),
         )?;
     }
-    Ok((
-        songs,
-        missing == 0 && reasons.iter().all(|(count, _)| *count == 0),
-    ))
+    if kept.held > 0 {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{} song(s) a sync leaves as built, a source holding otherwise than they were \
+                 built from, are exported as the library holds them; `muman sync` says why",
+                kept.held
+            ),
+        )?;
+    }
+    Ok(missing == 0 && kept.held == 0 && reasons.iter().all(|(count, _)| *count == 0))
 }
 
 /// A song's library file and those beside it, named in the zip by its
@@ -868,10 +884,11 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
         .to_string_lossy()
         .ends_with(std::path::is_separator);
     if named_folder && !output.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or name the zip to write",
             output.display()
-        );
+        ))
+        .into());
     }
     let zip = if output.is_dir() {
         output.join("muman.zip")
@@ -883,10 +900,11 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     if !folder.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or write the zip into one that is",
             folder.display()
-        );
+        ))
+        .into());
     }
     Ok(zip)
 }
@@ -959,10 +977,19 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     if !parent.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or write the export into one that is",
             parent.display()
-        );
+        ))
+        .into());
+    }
+    // Read by the link itself, so a link to nothing is found too.
+    if fs::symlink_metadata(output).is_ok() && !output.is_dir() {
+        return Err(crate::errors::Refused(format!(
+            "{} is there already, and no folder; name a folder to make",
+            output.display()
+        ))
+        .into());
     }
     if output.exists() {
         let empty = fs::read_dir(output)
@@ -970,24 +997,28 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
             .next()
             .is_none();
         if !empty {
-            bail!(
+            return Err(crate::errors::Refused(format!(
                 "{} is not empty; name a folder to make, such as {}",
                 output.display(),
                 output.join("muman").display()
-            );
+            ))
+            .into());
         }
     }
     Ok(output.to_path_buf())
 }
 
-/// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
-/// chosen into `scratch`; each encoding's real size replaces its
-/// estimate, and corrects the estimates not measured yet.
+/// Fit the songs into `budget` bytes as [`limit`] fits a library, by
+/// [`fit::settle`] over the same rungs, encoding those chosen into
+/// `scratch`; each encoding's real size replaces its estimate. The songs
+/// are then levelled at the formats chosen, as `resolving` them under
+/// the export's settings levels them, and made again where that changes
+/// them.
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
     (audio, target): (&Audio, Target),
-    state: &State,
-    (songs, held): (&[Song], &[Vec<Entry>]),
+    resolving: (&Manifest, &Settings, &State, &Path),
+    (songs, held): (&mut [Song], &[Vec<Entry>]),
     (max, budget): (u64, u64),
     scratch: &Path,
     out: &mut W,
@@ -995,51 +1026,43 @@ fn fit_into<R: Runner, W: Write>(
     let mut items: Vec<Item> = songs
         .iter()
         .zip(held)
-        .map(|(song, entries)| item((audio, target), state, song, entries))
+        .map(|(song, entries)| item((resolving.0, audio, target), resolving.2, song, entries))
         .collect();
-    let estimates: Vec<Vec<u64>> = items
-        .iter()
-        .map(|i| i.rungs.iter().map(|r| r.bytes).collect())
-        .collect();
-    let mut ratios: Vec<Option<f64>> = vec![None; items.len()];
     let mut made = Made::new();
     let mut ok = true;
     let mut again = false;
     let mut measure = |items: &mut [Item], wanted: &fit::Wanted| -> Result<()> {
-        let due: Vec<(usize, usize, Format)> = wanted
-            .iter()
-            .filter(|(n, c)| !items[*n].rungs[*c].known)
-            .map(|&(n, c)| (n, c, items[n].rungs[c].format))
-            .collect();
+        let mut due = Vec::new();
+        for &(n, c) in wanted {
+            if items[n].rungs[c].known {
+                continue;
+            }
+            if c == 0 && !songs[n].anew {
+                known(&mut items[n].rungs[0], entries_size(target, &held[n]));
+            } else {
+                due.push((n, c, songs[n].plan.with_format(items[n].rungs[c].format)));
+            }
+        }
         let results = make(runner, songs, &due, again, scratch, out)?;
         again |= due.iter().any(|(_, c, _)| *c > 0);
         for ((n, c, _), result) in due.into_iter().zip(results) {
-            let rung = &mut items[n].rungs[c];
             if let Some(entries) = result {
-                let real = entries_size(target, &entries);
-                let ratio = real as f64 / estimates[n][c].max(1) as f64;
-                ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
-                rung.bytes = real;
-                rung.sigma = 0.0;
-                rung.known = true;
+                known(&mut items[n].rungs[c], entries_size(target, &entries));
                 made.insert((n, c), entries);
             } else {
                 ok = false;
                 // A first rung not made is the library file, copied.
                 if c == 0 {
-                    rung.bytes = entries_size(target, &held[n]);
-                    rung.sigma = 0.0;
-                    rung.known = true;
+                    known(&mut items[n].rungs[0], entries_size(target, &held[n]));
                 }
             }
         }
-        correct(items, &estimates, &ratios);
         Ok(())
     };
     let settled = fit::settle(
         &mut items,
-        &fit::Policy::exact(budget),
-        PASSES,
+        &limit::policy(budget),
+        limit::PASSES,
         &mut measure,
     )?;
     let fit = match settled {
@@ -1050,11 +1073,96 @@ fn fit_into<R: Runner, W: Write>(
             crate::ui::bytes(floor + (max - budget))
         ),
     };
+    let formats: Vec<Format> = (items.iter().zip(&fit.choice))
+        .map(|(item, &c)| item.rungs[c].format)
+        .collect();
+    let again = level_as_fitted(resolving, songs, (&fit.choice, &formats))?;
+    ok &= make_again(runner, songs, &again, &mut made, scratch, out)?;
     Ok(Fitted {
         choice: fit.choice,
         made,
         ok,
     })
+}
+
+/// Level every song again at the rung fitting chose for it, by its place
+/// in `choice`, and that rung's format, as a sync levels its songs once
+/// fitted ([`reconcile::resolve_as_fitted`]): a song lowered into another
+/// layout by its mix, and its album's songs by their pool with it.
+/// Returns, by place, the songs whose gains that changes, each with its
+/// rung and the plan it is made from; a song at its first rung is made
+/// anew.
+fn level_as_fitted(
+    (manifest, settings, state, library): (&Manifest, &Settings, &State, &Path),
+    songs: &mut [Song],
+    (choice, formats): (&[usize], &[Format]),
+) -> Result<Vec<(usize, usize, Plan)>> {
+    let lowered: BTreeMap<usize, Format> = (songs.iter().zip(formats).zip(choice))
+        .filter(|(_, c)| **c > 0)
+        .filter_map(|((song, format), _)| Some((song.n?, *format)))
+        .collect();
+    if lowered.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolved = |fitted: &BTreeMap<usize, Format>| -> Result<BTreeMap<usize, Resolved>> {
+        Ok(
+            reconcile::resolve_as_fitted(manifest, settings, state, library, fitted)?
+                .into_iter()
+                .collect(),
+        )
+    };
+    let best = resolved(&BTreeMap::new())?;
+    let fitted = resolved(&lowered)?;
+    let mut again = Vec::new();
+    for (i, song) in songs.iter_mut().enumerate() {
+        let Some(n) = song.n.filter(|_| song.sources.is_some()) else {
+            continue;
+        };
+        let (Some(best), Some(fitted)) = (best.get(&n), fitted.get(&n)) else {
+            continue;
+        };
+        let c = choice[i];
+        let format = formats[i];
+        let (Some(gains), true) = (fitted.plan.loudness, fitted.plan.format == format) else {
+            continue;
+        };
+        if best.plan.loudness == Some(gains) {
+            continue;
+        }
+        let plan = song.plan.with_format(format).with_loudness(gains);
+        if c == 0 {
+            song.plan = plan.clone();
+            song.anew = true;
+        }
+        again.push((i, c, plan));
+    }
+    Ok(again)
+}
+
+/// Make again each song of `again` at its rung, from the plan given
+/// there, in place of what fitting made of it; whether every one was
+/// made. One that could not be is exported as when fitting could not
+/// make it: not lowered, or as the library holds it.
+fn make_again<R: Runner, W: Write>(
+    runner: &R,
+    songs: &[Song],
+    again: &[(usize, usize, Plan)],
+    made: &mut Made,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    // A folder of its own, so no file made at the earlier gains stands in its way.
+    let results = make(runner, songs, again, true, &scratch.join("levelled"), out)?;
+    let mut all = true;
+    for ((i, c, _), result) in again.iter().zip(results) {
+        if let Some(entries) = result {
+            made.insert((*i, *c), entries);
+        } else {
+            made.remove(&(*i, *c));
+            all = false;
+        }
+    }
+    Ok(all)
 }
 
 /// Make each song the export's settings ask for anew into `scratch`, by
@@ -1065,11 +1173,11 @@ fn anew<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<(Made, bool)> {
-    let due: Vec<(usize, usize, Format)> = songs
+    let due: Vec<(usize, usize, Plan)> = songs
         .iter()
         .enumerate()
         .filter(|(_, s)| s.anew)
-        .map(|(n, s)| (n, 0, s.plan.format))
+        .map(|(n, s)| (n, 0, s.plan.clone()))
         .collect();
     let results = make(runner, songs, &due, false, scratch, out)?;
     let all = results.iter().all(Option::is_some);
@@ -1081,12 +1189,12 @@ fn anew<R: Runner, W: Write>(
     Ok((made, all))
 }
 
-/// Encode each song of `due` at its rung's format into `scratch`: what
-/// each made, none where it could not be, which is said.
+/// Encode each song of `due` at its rung, from the plan given there, into
+/// `scratch`: what each made, none where it could not be, which is said.
 fn make<R: Runner, W: Write>(
     runner: &R,
     songs: &[Song],
-    due: &[(usize, usize, Format)],
+    due: &[(usize, usize, Plan)],
     again: bool,
     scratch: &Path,
     out: &mut W,
@@ -1112,14 +1220,9 @@ fn make<R: Runner, W: Write>(
         )?;
     }
     let step = crate::progress::step("Encoding", Some(due.len() as u64));
-    let rendered = parallel::map(due, parallel::builds(), |(n, c, format)| {
+    let rendered = parallel::map(due, parallel::builds(), |(n, c, plan)| {
         let _working = step.working(&crate::progress::label(&songs[*n].path));
-        encode(
-            runner,
-            &songs[*n],
-            *format,
-            &scratch.join(format!("{n}-{c}")),
-        )
+        encode(runner, &songs[*n], plan, &scratch.join(format!("{n}-{c}")))
     });
     let mut made = Vec::with_capacity(due.len());
     for ((n, c, _), result) in due.iter().zip(rendered) {
@@ -1145,120 +1248,71 @@ fn make<R: Runner, W: Write>(
     Ok(made)
 }
 
-/// Scale each estimate not yet replaced by a real size by how far the
-/// song's encodings missed theirs, or, for a song not encoded yet, by how
-/// far all did on average, by their logarithms.
-fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
-    let seen: Vec<f64> = ratios.iter().flatten().map(|r| r.ln()).collect();
-    if seen.is_empty() {
-        return;
-    }
-    let mean = (seen.iter().sum::<f64>() / seen.len() as f64).exp();
-    for (n, item) in items.iter_mut().enumerate() {
-        let ratio = ratios[n].unwrap_or(mean);
-        for (c, rung) in item.rungs.iter_mut().enumerate() {
-            if !rung.known {
-                let scaled = (estimates[n][c] as f64 * ratio) as u64;
-                rung.bytes = scaled;
-            }
-        }
-    }
+/// Take `bytes` as what `rung` really takes.
+fn known(rung: &mut Rung, bytes: u64) {
+    rung.bytes = bytes;
+    rung.sigma = 0.0;
+    rung.known = true;
 }
 
-/// One song's ladder: its first rung, the library file as it is or its
-/// plan made anew, then each lower rung it may be encoded at, estimated.
-fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[Entry]) -> Item {
-    let facts = state.facts.get(&song.plan.audio.key);
-    let seconds = facts.and_then(Facts::length).filter(|s| *s > 0.0);
-    // The audio file's name and what it holds besides its stream, and what
-    // the files beside it take.
-    let (name, extras, beside) = if song.anew {
-        let made = crate::artifact::parts(&song.plan);
-        let (extras, beside) = made.guess();
-        let audio = named(
-            &song.stem,
-            Path::new(&format!("_.{}", song.plan.format.extension())),
-        );
-        let names = made.files(&audio);
-        let beside = names
-            .iter()
-            .zip(beside)
-            .map(|(name, bytes)| target.takes(&name_in_zip(name), bytes))
-            .sum();
-        (name_in_zip(&audio), extras, beside)
-    } else {
-        let beside = entries_size(target, &held[1..]);
-        (held[0].name.clone(), extras(&held[0].from), beside)
-    };
-    let takes = |stream: u64| target.takes(&name, stream + extras) + beside;
-    let first = if song.anew {
-        let stream = match (facts, seconds) {
-            (Some(f), Some(s)) => limit::estimate(song.plan.format, f, s).0 as u64,
-            _ => 0,
-        };
-        takes(stream)
-    } else {
-        entries_size(target, held)
-    };
-    let mut item = Item {
-        key: relpath::to_portable(&song.stem),
-        rungs: vec![Rung {
+/// One song's rungs, as [`limit::rungs`] starts a library's song, each
+/// counted as `target` takes its files, and its key, as `limit` gives a
+/// song listed as it is. A song that can only be copied has one rung, its
+/// library file as it is, as a library's song changed since muman wrote
+/// it has.
+fn item(
+    (manifest, audio, target): (&Manifest, &Audio, Target),
+    state: &State,
+    song: &Song,
+    held: &[Entry],
+) -> Item {
+    let sources = song.n.map_or(&[][..], |n| &manifest.songs[n].sources);
+    let key = limit::key(sources, &song.plan);
+    if song.sources.is_none() {
+        let copied = Rung {
             format: song.plan.format,
-            bytes: first,
+            bytes: entries_size(target, held),
             loss: 0.0,
             sigma: 0.0,
-            known: !song.anew,
-        }],
-        churn: 0.0,
-    };
-    let (Some(_), Some(facts), Some(seconds), Some(shape)) = (
-        &song.sources,
-        facts,
-        seconds,
-        facts.and_then(|f| f.audio.as_ref()),
-    ) else {
-        return item;
-    };
-    let source = Source {
-        lossless: shape.is_lossless(),
-        bandwidth_hz: shape.quality.map(|q| q.bandwidth_hz),
-        seconds,
-    };
-    item.churn = CHURN_PER_MINUTE * units::minutes_of_seconds(seconds);
-    for format in fit::lower(song.plan.format, &shape.shape(), audio) {
-        let bytes = takes(limit::estimate(format, facts, seconds).0 as u64);
-        if bytes.saturating_mul(10) <= first.saturating_mul(9) {
-            item.rungs.push(Rung {
-                format,
-                bytes,
-                loss: fit::loss(&source, song.plan.format, format),
-                sigma: 0.0,
-                known: false,
-            });
-        }
+            known: true,
+        };
+        return Item {
+            key,
+            rungs: vec![copied],
+        };
     }
-    item
+    let takes = |plan: &Plan, file: u64, beside: &[u64]| {
+        let audio = named(
+            &song.stem,
+            Path::new(&format!("_.{}", plan.format.extension())),
+        );
+        let names = crate::artifact::parts(plan).files(&audio);
+        let beside: u64 = (names.iter().zip(beside))
+            .map(|(name, bytes)| target.takes(&name_in_zip(name), *bytes))
+            .sum();
+        target.takes(&name_in_zip(&audio), file) + beside
+    };
+    let facts = state.facts.get(&song.plan.audio.key);
+    Item {
+        key,
+        rungs: limit::rungs(&song.plan, facts, (audio, true), &takes),
+    }
 }
 
-/// Encode one song as `format` into `scratch`, returning its entries and
+/// Encode one song from `plan` into `scratch`, returning its entries and
 /// what could not be added to it.
 fn encode<R: Runner>(
     runner: &R,
     song: &Song,
-    format: Format,
+    plan: &Plan,
     scratch: &Path,
 ) -> Result<(Vec<Entry>, Vec<String>)> {
     let sources = song
         .sources
         .as_ref()
         .ok_or_else(|| anyhow!("its sources are gone"))?;
-    let plan = if format == song.plan.format {
-        song.plan.clone()
-    } else {
-        song.plan.with_format(format)
-    };
     let library = scratch.join("library");
-    let parts = crate::artifact::parts(&plan);
+    let parts = crate::artifact::parts(plan);
     let rendered = render::render(
         runner,
         &render::Job {
@@ -1428,6 +1482,7 @@ mod tests {
                     plan,
                     anew: false,
                     sources: None,
+                    n: None,
                 },
                 vec![entry],
             )
@@ -1565,36 +1620,5 @@ mod tests {
             written <= entry_size("library/A/song.opus", 4) + END,
             "ENTRY counts it"
         );
-    }
-
-    fn rung(bytes: u64, known: bool) -> fit::Rung {
-        fit::Rung {
-            format: Format::Copy { codec: Codec::Flac },
-            bytes,
-            loss: 0.0,
-            sigma: 0.0,
-            known,
-        }
-    }
-
-    #[test]
-    fn estimates_follow_how_far_encodings_missed() {
-        let mut items = vec![
-            Item {
-                key: "a".into(),
-                rungs: vec![rung(100, true), rung(52, true), rung(20, false)],
-                churn: 0.0,
-            },
-            Item {
-                key: "b".into(),
-                rungs: vec![rung(100, true), rung(40, false)],
-                churn: 0.0,
-            },
-        ];
-        let estimates = vec![vec![100, 40, 20], vec![100, 40]];
-        correct(&mut items, &estimates, &[Some(1.3), None]);
-        assert_eq!(items[0].rungs[1].bytes, 52, "a size encoded stays");
-        assert_eq!(items[0].rungs[2].bytes, 26, "the song's own miss");
-        assert_eq!(items[1].rungs[1].bytes, 52, "the others' miss");
     }
 }

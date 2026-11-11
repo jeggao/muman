@@ -5,6 +5,7 @@ use super::measure::out_of_space;
 use super::prune::{Pruned, prune_plan};
 use super::*;
 use crate::facts::Facts;
+use crate::history::Run;
 use crate::resolve::Plan;
 use crate::state::{Step, Written};
 use crate::testing::{Fake, words};
@@ -40,7 +41,7 @@ impl Home {
 
     fn run(&self, fake: &Fake, opts: Options) -> (bool, String) {
         let mut out = Vec::new();
-        let ok = reconcile(fake, &self.dirs, opts, None, &mut out)
+        let ok = reconcile(fake, &self.dirs, opts, Recording::Test, &mut out)
             .unwrap()
             .ok;
         let text = String::from_utf8(out).unwrap();
@@ -67,7 +68,7 @@ impl Home {
             fake,
             &self.dirs,
             opts,
-            None,
+            Recording::DryRun,
             &mut std::io::sink(),
             Some(shown),
         )
@@ -310,7 +311,7 @@ fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
         &infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]),
         &elsewhere,
         dry,
-        None,
+        Recording::DryRun,
         &mut out,
     )
     .unwrap();
@@ -673,6 +674,92 @@ fn a_song_whose_write_failed_keeps_its_record_as_it_was() {
     );
 }
 
+/// A runner that panics building the song at a path holding a fragment,
+/// as a crate's bug would, and runs every other command as `Fake` does.
+struct Panicking<'a>(&'a Fake, &'a str);
+
+impl crate::runner::Runner for Panicking<'_> {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        let args: Vec<String> = cmd
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let building = |a: &String| a.contains(&format!("{}.opus.part", self.1));
+        assert!(!args.iter().any(building), "a width past every name");
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+
+    fn pipe(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_bytes: &mut dyn FnMut(&[u8]),
+    ) -> anyhow::Result<()> {
+        self.0.pipe(cmd, on_bytes)
+    }
+
+    fn fingerprint(&self, pcm: &Path) -> anyhow::Result<Vec<u32>> {
+        self.0.fingerprint(pcm)
+    }
+}
+
+#[test]
+fn a_panic_building_one_song_fails_that_song_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let mut out = Vec::new();
+    let runner = Panicking(&fake, "bbbbbbbbbbb");
+    let ok = reconcile(
+        &runner,
+        &h.dirs,
+        Options::default(),
+        Recording::Test,
+        &mut out,
+    )
+    .unwrap()
+    .ok;
+    let text = String::from_utf8(out).unwrap();
+    h.holds(&text);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Failed: ") && text.contains("a width past every name (a panic at "),
+        "the panic is said in the song's failure: {text}"
+    );
+    assert!(
+        h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus")
+            .exists(),
+        "{text}"
+    );
+    h.audit(&[], &text);
+    let failures = State::load(&h.dirs.home).unwrap().song_failures;
+    assert_eq!(failures.len(), 1, "check names the song: {failures:?}");
+    assert!(
+        failures
+            .values()
+            .all(|f| f.error.contains("a width past every name")),
+        "{failures:?}"
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(
+        ok && text.contains("Added: "),
+        "the next sync writes it: {text}"
+    );
+}
+
 #[test]
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();
@@ -804,7 +891,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
         &infos(&["aaaaaaaaaaa"]),
         &h.dirs,
         Options::default(),
-        Some(&mut run),
+        Recording::Run(&mut run),
         &mut out,
     )
     .unwrap();
@@ -943,6 +1030,41 @@ fn a_move_lands_where_another_song_leaves_and_never_on_its_file() {
         "edited by a tagger",
         "{text}"
     );
+}
+
+#[test]
+fn a_file_and_a_folder_of_one_name_trade_places_by_moves_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let with = |other: &str| {
+        format!(
+            "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}Y{{% else %}}{other}t{{% \
+             endif %}}\"\n{TWO}"
+        )
+    };
+    h.songs(&with(""));
+    assert!(h.run(&fake, Options::default()).0);
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    for (other, a, b) in [
+        ("Y.opus/", "Y [aaaaaaaaaaa].opus", "Y.opus/t.opus"),
+        ("", "Y.opus", "t.opus"),
+    ] {
+        h.songs(&with(other));
+        let (_, said) = h.run(&fake, dry);
+        let (ok, text) = h.run(&fake, Options::default());
+        assert!(ok, "{text}");
+        assert!(crate::ui::plain(&said).contains("2 moved"), "{said}");
+        assert!(
+            !text.contains("Wrote") && !text.contains("Could not"),
+            "{text}"
+        );
+        assert!(h.lib(a).is_file() && h.lib(b).is_file(), "{text}");
+    }
 }
 
 #[test]
@@ -1154,13 +1276,19 @@ fn a_limit_too_small_for_any_bitrate_leaves_songs_out() {
     );
     assert!(!h.lib("Artist/Record/02 Song.opus").exists());
     assert!(!h.lib("Artist/Record/02 Song.flac").exists());
+    let failures = State::load(&h.dirs.home).unwrap().song_failures;
+    assert_eq!(failures.len(), 1, "check names the song left out");
+    assert!(
+        failures.values().all(|f| f.error.contains("max_size")),
+        "{failures:?}"
+    );
 }
 
 /// Three manual FLACs a second long with no cover, whose audio takes 30,
 /// 20 and 10 kB: estimates the size of what the fake writes.
 fn three_flacs() -> Fake {
     let short = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
-        "channels": 2, "sample_rate": "44100"}], "format": {"duration": "1.0",
+        "channels": 2, "sample_rate": "44100"}], "format": {"format_name": "flac", "duration": "1.0",
         "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
     Fake {
         packets: vec![
@@ -1252,6 +1380,77 @@ fn a_changed_file_forced_fits_as_the_next_sync_does() {
     assert!(ok, "{text}");
     assert_eq!(renders(&again), 0, "nothing encoded again: {text}");
     assert_eq!(formats(&h), fitted, "{text}");
+}
+
+#[test]
+fn a_song_left_as_built_counts_against_the_limit_as_its_file_is() {
+    let h = home();
+    listing(&h, "", &["a", "b"]);
+    let (ok, text) = h.run(&three_flacs(), Options::default());
+    assert!(ok, "{text}");
+    let built = formats(&h);
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = || {
+        let mut fake = Fake {
+            held: vec![("a.flac".into(), 3)],
+            ..three_flacs()
+        };
+        let said = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
+            "channels": 2, "sample_rate": "44100", "duration": "200.0"}], "format":
+            {"format_name": "flac", "duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist",
+            "ALBUM": "Record", "track": "2"}}}"#;
+        fake.probes.insert(0, ("a.flac".into(), said.into()));
+        fake
+    };
+    let (ok, text) = h.run(&cut(), Options::default());
+    assert!(!ok && text.contains("cut off"), "{text}");
+    let (held, _) = built
+        .iter()
+        .find(|(p, _)| {
+            let w = &State::load(&h.dirs.home).unwrap().outputs[p];
+            w.sources.iter().any(|k| k.to_string().ends_with("a.flac"))
+        })
+        .cloned()
+        .expect("a's file");
+    let kept = std::fs::read(h.lib(&held.to_string_lossy())).unwrap();
+    let whole: u64 = built
+        .iter()
+        .map(|(p, _)| {
+            std::fs::metadata(h.lib(&p.to_string_lossy()))
+                .unwrap()
+                .len()
+        })
+        .sum();
+    let max = whole - 2_000;
+    let list = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    let block = r#"block_size = "4 KiB""#;
+    assert!(list.contains(block), "{list}");
+    let limited = list.replacen(block, &format!("block_size = 1\nmax_size = {max}"), 1);
+    std::fs::write(h.dirs.manifest(), limited).unwrap();
+    let (_, text) = h.run(&cut(), Options::default());
+    assert!(
+        text.contains("1 song(s) below their best format"),
+        "the song left as built is not counted lowered: {text}"
+    );
+    assert_eq!(
+        std::fs::read(h.lib(&held.to_string_lossy())).unwrap(),
+        kept,
+        "{text}"
+    );
+    let fitted = formats(&h);
+    assert!(
+        fitted.iter().any(|(p, f)| *p != held && f.is_encoded()),
+        "the song written is lowered for the one left as built: {fitted:?} {text}"
+    );
+    let total: u64 = fitted
+        .iter()
+        .map(|(p, _)| {
+            std::fs::metadata(h.lib(&p.to_string_lossy()))
+                .unwrap()
+                .len()
+        })
+        .sum();
+    assert!(total <= max, "{total} > {max}: {text}");
 }
 
 #[test]
@@ -1848,7 +2047,7 @@ fn status_refuses_a_field_no_song_has() {
         &infos(&["aaaaaaaaaaa"]),
         &h.dirs,
         opts,
-        None,
+        Recording::DryRun,
         &mut std::io::sink(),
         Some(shown),
     )
@@ -2088,7 +2287,13 @@ fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
         let (h, old) = prepare();
         let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reconcile(&fake, &h.dirs, Options::default(), None, &mut Vec::new())
+            reconcile(
+                &fake,
+                &h.dirs,
+                Options::default(),
+                Recording::Test,
+                &mut Vec::new(),
+            )
         }));
         drop(kill);
         assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
@@ -2218,6 +2423,50 @@ fn songs_are_levelled_by_what_they_measured_and_an_album_by_all_its_songs() {
     );
     let (_, again) = h.run(&fake, Options::default());
     assert!(again.contains("Up to date: 2"), "{again}");
+}
+
+#[test]
+fn a_song_left_as_built_is_pooled_in_its_album_as_its_file_was_made() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let source = h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    assert!(h.run(&levelled(), Options::default()).0);
+    let album_gains = |h: &Home| -> BTreeSet<String> {
+        (plans(h).iter())
+            .filter_map(|p| tag(p, "REPLAYGAIN_ALBUM_GAIN").map(str::to_string))
+            .collect()
+    };
+    let built = album_gains(&h);
+    assert_eq!(built.len(), 1, "{built:?}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let (path, _) = (state.outputs.iter())
+        .find(|(_, w)| w.sources == [SourceKey::youtube("bbbbbbbbbbb")])
+        .unwrap();
+    let song = h.dirs.library.join(path);
+    let file = std::fs::read(&song).unwrap();
+    std::fs::write(&source, "re-encoded louder by the site").unwrap();
+    let mut louder = levelled();
+    louder.wavs[1].1 = tone(0.9);
+
+    let (ok, text) = h.run(&louder, Options::default());
+    assert!(ok, "{text}");
+    assert!(crate::ui::plain(&text).contains("left as built"), "{text}");
+    assert!(!text.contains("Updated"), "{text}");
+    assert_eq!(album_gains(&h), built, "one album, one gain");
+    assert_eq!(std::fs::read(&song).unwrap(), file);
+    let (_, again) = h.run(&louder, Options::default());
+    assert!(!again.contains("Updated"), "{again}");
+
+    let accept = Options {
+        accept: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&louder, accept);
+    assert!(ok, "{text}");
+    let taken = album_gains(&h);
+    assert_eq!(taken.len(), 1, "{taken:?}");
+    assert_ne!(taken, built, "pooled by what it holds once accepted");
 }
 
 #[test]
@@ -2721,6 +2970,63 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
 }
 
 #[test]
+fn a_file_named_as_another_song_s_folder_is_told_apart_in_either_order() {
+    use crate::codec::Codec;
+    use crate::resolve::{AudioRef, Format, Plan, Resolved, TAGGING, Why, render_version};
+    let song = |stem: PathBuf, id: &str| {
+        (
+            0,
+            Resolved {
+                plan: Plan {
+                    folder: None,
+                    version: render_version(Codec::Flac),
+                    format: Format::Copy { codec: Codec::Flac },
+                    audio: AudioRef {
+                        key: SourceKey::youtube(id),
+                        rev: "r".into(),
+                        index: 0,
+                    },
+                    cover: None,
+                    lyrics: None,
+                    tags: Vec::new(),
+                    loudness: None,
+                    tagging: TAGGING,
+                    chapters: Vec::new(),
+                },
+                stem,
+                why: Why::default(),
+            },
+        )
+    };
+    let library = crate::settings::Library::default();
+    let naming = library.naming(Path::new("lib")).unwrap();
+    let beside = |_: &Path, _: &Plan| Vec::new();
+    let inside = Path::new("Y.flac").join("t1");
+    for first in [true, false] {
+        let mut planned = vec![
+            song(inside.clone(), "aaaaaaaaaaa"),
+            song(PathBuf::from("y"), "bbbbbbbbbbb"),
+        ];
+        if !first {
+            planned.reverse();
+        }
+        plan::separate(&mut planned, &[], &naming, &beside);
+        let stem = |id: &str| {
+            (planned.iter())
+                .find(|(_, r)| r.plan.audio.key == SourceKey::youtube(id))
+                .map(|(_, r)| r.stem.clone())
+                .unwrap()
+        };
+        assert_eq!(stem("aaaaaaaaaaa"), inside);
+        assert_eq!(
+            stem("bbbbbbbbbbb"),
+            PathBuf::from("y [bbbbbbbbbbb]"),
+            "`y.flac` is the folder `Y.flac` on a filesystem blind to case"
+        );
+    }
+}
+
+#[test]
 fn a_source_holding_audio_compared_before_is_not_compared_again() {
     let h = home();
     for id in ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"] {
@@ -2763,4 +3069,128 @@ fn a_source_holding_audio_compared_before_is_not_compared_again() {
         State::load(&h.dirs.home).unwrap().alignments.is_empty(),
         "gone once no source kept holds its audio"
     );
+}
+
+#[test]
+fn a_song_left_as_built_keeps_its_path_from_a_song_named_as_it_was() {
+    let h = home();
+    let source = h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let titled = |a: &str| Fake {
+        hashes: vec![("aaaaaaaaaaa".into(), 7), ("bbbbbbbbbbb".into(), 8)],
+        ..Fake::default()
+            .info(
+                "aaaaaaaaaaa",
+                &format!(r#"{{"id": "aaaaaaaaaaa", "title": "{a}", "uploader": "Chan"}}"#),
+            )
+            .info(
+                "bbbbbbbbbbb",
+                r#"{"id": "bbbbbbbbbbb", "title": "Harbor", "uploader": "Chan"}"#,
+            )
+    };
+    assert!(h.run(&titled("Lantern Weather"), Options::default()).0);
+    let song = h.lib("Chan/Lantern Weather/Lantern Weather.opus");
+    let built = std::fs::read(&song).unwrap();
+    std::fs::write(&source, "fetched again").unwrap();
+    let list = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    let at = list
+        .find("sources = [\"youtube.com:bbbbbbbbbbb\"]")
+        .unwrap();
+    let titled_b = list[at..].replacen("tags.title = \"\"", "tags.title = \"Lantern Weather\"", 1);
+    assert_ne!(titled_b, list[at..], "{list}");
+    std::fs::write(h.dirs.manifest(), format!("{}{titled_b}", &list[..at])).unwrap();
+
+    let (_, text) = h.run(&titled("Paper Comets"), Options::default());
+    let plain = crate::ui::plain(&text);
+    assert!(plain.contains("left as built"), "{plain}");
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{plain}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let rel = PathBuf::from("Chan/Lantern Weather/Lantern Weather.opus");
+    assert_eq!(
+        state.outputs[&rel].sources,
+        vec![SourceKey::parse("youtube.com:aaaaaaaaaaa").unwrap()],
+        "{plain}"
+    );
+}
+
+/// A manual FLAC's probe: a second long, or said to run 200 s where
+/// `said`, titled and on `album`, with an embedded cover.
+fn tagged_flac(title: &str, track: u32, album: &str, said: bool) -> String {
+    let duration = if said { "200.0" } else { "1.0" };
+    format!(
+        r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "flac",
+        "channels": 2, "sample_rate": "44100", "duration": "{duration}"}},
+        {{"index": 1, "codec_type": "video", "codec_name": "mjpeg", "width": 64, "height": 64,
+        "disposition": {{"attached_pic": 1}}}}], "format": {{"format_name": "flac",
+        "duration": "{duration}", "tags": {{"TITLE": "{title}", "ARTIST": "Artist",
+        "ALBUM": "{album}", "track": "{track}"}}}}}}"#
+    )
+}
+
+#[test]
+fn a_song_left_as_built_keeps_the_cover_its_folder_holds() {
+    let h = home();
+    listing(
+        &h,
+        "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n",
+        &["a", "b"],
+    );
+    let whole = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Record", false));
+    let (ok, text) = h.run(&whole, Options::default());
+    assert!(ok, "{text}");
+    let cover = PathBuf::from("Artist/Record/cover.jpg");
+    let holder = |h: &Home| {
+        let state = State::load(&h.dirs.home).unwrap();
+        state
+            .outputs
+            .iter()
+            .filter(|(_, w)| w.sidecar_paths().any(|s| *s == cover))
+            .map(|(p, _)| p.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        holder(&h),
+        [PathBuf::from("Artist/Record/01 Kite.flac")],
+        "{text}"
+    );
+
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..Fake::default()
+            .probe("a.flac", &tagged_flac("Kite", 1, "Other", true))
+            .probe("b.flac", &tagged_flac("Tide", 2, "Record", false))
+    };
+    let (_, text) = h.run(&cut, Options::default());
+    assert!(text.contains("cut off"), "{text}");
+    assert_eq!(
+        holder(&h),
+        [PathBuf::from("Artist/Record/01 Kite.flac")],
+        "{text}"
+    );
+}
+
+#[test]
+fn a_song_left_as_built_spells_its_album_for_no_other_song() {
+    let h = home();
+    listing(&h, "", &["a", "b"]);
+    let whole = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Paper comets", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Paper comets", false));
+    let (ok, text) = h.run(&whole, Options::default());
+    assert!(ok, "{text}");
+    let built = formats(&h);
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..Fake::default()
+            .probe("a.flac", &tagged_flac("Kite", 1, "Paper Comets", true))
+            .probe("b.flac", &tagged_flac("Tide", 2, "Paper comets", false))
+    };
+    let (_, text) = h.run(&cut, Options::default());
+    assert!(text.contains("cut off"), "{text}");
+    assert_eq!(formats(&h), built, "{text}");
 }

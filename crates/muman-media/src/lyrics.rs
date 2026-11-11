@@ -12,13 +12,16 @@
 //! yt-dlp tags Filipino `fin`, the code for Finnish.
 //!
 //! A line is no lyric when it is a cue or a credit. A cue is blank, only
-//! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
-//! `(Guitar solo)`, `（間奏）`, `*GuitarSolo*`), or a short bracket naming a
-//! passage played (`(gentle piano solo)`); brackets of other words hold a
-//! backing vocal, which is sung. A credit is credit words, a separator
-//! and a name, in the shapes `is_credit` lists, and is one only in a
-//! block at the start or end of the lyrics, where credits sit: between
-//! two lines sung, `Music by the water` is sung too.
+//! music symbols, or wholly in brackets of any kind and of cue words
+//! (`[Chorus]`, `{Verse 2}`, `(Guitar solo)`, `（間奏）`, `*GuitarSolo*`),
+//! or a short bracket naming a passage played (`(gentle piano solo)`);
+//! brackets of other words hold a backing vocal, which is sung. A
+//! section's heading out of brackets is a cue too when a colon closes it
+//! or it is in capitals (`Verse 1:`, `CHORUS x2`); `Chorus` alone in
+//! small letters may be sung. A credit is credit words, a separator and
+//! a name, in the shapes `is_credit` lists, or a copyright line, and is
+//! one only in a block at the start or end of the lyrics, where credits
+//! sit: between two lines sung, `Music by the water` is sung too.
 //!
 //! Lyrics come from LRCLIB, subtitles, tags and files anyone may write,
 //! up to a body of megabytes, so each line is read in time linear in its
@@ -26,8 +29,14 @@
 //! the line, and a closing `>` or `}` found missing once is not looked
 //! for again from each later `<` or `{`.
 //!
+//! Lyrics read from a file and from a tag are read alike ([`as_read`]):
+//! a control character, as a DOS end-of-file mark or a terminal's colour
+//! code pasted in, is dropped rather than costing the whole text, and a
+//! file is refused as no lyrics only when it reads as other data
+//! ([`is_text`]).
+//!
 //! [`WRITING`] names how a song's lyrics are read from their source,
-//! moved and written: [`decode`], [`shift_lrc`], ffmpeg's
+//! moved and written: [`decode`], [`shift_lrc`], [`until`], ffmpeg's
 //! [`LRC_ARGS`](crate::facts::LRC_ARGS) for a stream, and
 //! [`cues::write`](crate::cues::write). A plan records it, so a change to
 //! what these make writes every song's lyrics again, inside the song and
@@ -44,7 +53,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 3;
+pub const WRITING: u32 = 5;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +149,7 @@ pub(crate) enum Kind {
 /// Words that make a wholly bracketed line a cue: a section, a sound
 /// that is not sung, or a repeat. A line in brackets of other words, as
 /// `(Down by the river)`, is a backing vocal and sung.
-const CUES: [&str; 50] = [
+const CUES: [&str; 54] = [
     "instrumental",
     "music",
     "applause",
@@ -157,6 +166,10 @@ const CUES: [&str; 50] = [
     "bridge",
     "hook",
     "refrain",
+    "rap",
+    "strophe",
+    "breakdown",
+    "postchorus",
     "solo",
     "interlude",
     "repeat",
@@ -234,9 +247,10 @@ const CUE_ENDINGS: [&[&str]; 5] = [
 ];
 
 /// The pairs a cue or a credit may be wholly wrapped in.
-pub(crate) const WRAPPERS: [(char, char); 5] = [
+pub(crate) const WRAPPERS: [(char, char); 6] = [
     ('[', ']'),
     ('(', ')'),
+    ('{', '}'),
     ('（', '）'),
     ('【', '】'),
     ('*', '*'),
@@ -298,6 +312,49 @@ pub(crate) fn is_cue(inner: &str) -> bool {
     ends || words.iter().any(cue)
         && words.iter().all(|w| {
             cue(w) || CUE_FILLERS.contains(&w.as_str()) || w.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+/// Words that name a section of a song, which head it out of brackets
+/// too, as `Verse 1:`.
+const SECTIONS: [&str; 14] = [
+    "verse",
+    "chorus",
+    "prechorus",
+    "postchorus",
+    "bridge",
+    "hook",
+    "intro",
+    "outro",
+    "refrain",
+    "interlude",
+    "rap",
+    "strophe",
+    "breakdown",
+    "solo",
+];
+
+/// Whether `text` heads a section out of brackets: section words, as
+/// `pre`, `part`, a number or a count may go with them, closed by a colon
+/// or written in capitals, as `Verse 1:` or `CHORUS x2`.
+fn is_heading(text: &str) -> bool {
+    let (head, closed) = match text.strip_suffix([':', '：']) {
+        Some(head) => (head, true),
+        None => (text, false),
+    };
+    let words = cue_words(&head.replace('×', "x"));
+    let section = |w: &String| SECTIONS.contains(&w.as_str());
+    let shouted = head
+        .split_whitespace()
+        .filter(|w| !is_repeat(&w.to_lowercase()))
+        .all(|w| !w.chars().any(char::is_lowercase));
+    (closed || shouted)
+        && words.iter().any(section)
+        && words.iter().all(|w| {
+            section(w)
+                || is_repeat(w)
+                || matches!(w.as_str(), "pre" | "post" | "part")
+                || w.bytes().all(|b| b.is_ascii_digit())
         })
 }
 
@@ -425,7 +482,10 @@ fn is_name(rest: &str) -> bool {
 ///   brackets, a colon and a name: `Translation (English) : …`,
 ///   `Lyrics/music: …`, `English translation: …`;
 /// - credit words, at most two other words, `by` and a name, or nothing:
-///   `Composed and written by …`, `Lyrics posted by …`, `Arrangement by`;
+///   `Composed and written by …`, `Lyrics posted by …`, `Arrangement by`,
+///   `English translation by …`;
+/// - a copyright: `©`, `℗`, `(c)`, `(p)` or `Copyright`, then a year or a
+///   name;
 /// - a role of [`ROLES`] alone, or before up to four capitalized words:
 ///   `Voice Kasane Teto`;
 /// - an address: an e-mail, a URL or an `@handle`;
@@ -440,7 +500,15 @@ pub(crate) fn is_credit(text: &str) -> bool {
     {
         return true;
     }
-    is_address(t) || headed(t) || by_credit(t) || named(t)
+    is_address(t) || headed(t) || by_credit(t) || named(t) || is_copyright(t)
+}
+
+fn is_copyright(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    ["©", "℗", "(c) ", "(p) ", "copyright "].iter().any(|mark| {
+        let rest = t.get(mark.len()..).unwrap_or_default().trim();
+        lower.starts_with(mark) && rest.chars().next().is_some_and(|c| !c.is_lowercase())
+    })
 }
 
 fn is_address(t: &str) -> bool {
@@ -531,7 +599,10 @@ fn by_credit(t: &str) -> bool {
         .iter()
         .filter(|(w, _)| !is_credit_word(w) && !JOINERS.contains(&w.as_str()))
         .count();
-    is_credit_word(&before[0].0) && credits > 0 && others <= 2 && is_name(rest)
+    // A qualifier may open the credit, as `English translation by`.
+    let opened = is_credit_word(&before[0].0)
+        || before.len() == 2 && before.last().is_some_and(|(w, _)| is_credit_word(w));
+    opened && credits > 0 && others <= 2 && is_name(rest)
 }
 
 /// Credit words that never open a line sung, which may stand before a
@@ -576,7 +647,7 @@ pub(crate) fn kind(text: &str) -> Kind {
     if t.chars().all(|c| !c.is_alphanumeric()) {
         return Kind::Cue;
     }
-    if wrapped(t).is_some_and(is_cue) {
+    if wrapped(t).is_some_and(is_cue) || is_heading(t) {
         Kind::Cue
     } else if is_credit(t) {
         Kind::Credit
@@ -703,10 +774,22 @@ pub fn sung(text: &str) -> String {
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
-/// guessed as a browser guesses a page that names none. CRLF and CR
-/// line endings become LF.
+/// guessed as a browser guesses a page that names none; then read as
+/// [`as_read`] reads any lyrics.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
+    as_read(&decoded(bytes))
+}
+
+/// The lyrics of a file that reads as text ([`is_text`]), as [`decode`]
+/// reads them; none for a file of other data.
+#[must_use]
+pub fn read(bytes: &[u8]) -> Option<String> {
+    let text = decoded(bytes);
+    is_text(&text).then(|| as_read(&text))
+}
+
+fn decoded(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
         utf16
     } else if is_utf8(bytes) {
@@ -716,8 +799,51 @@ pub fn decode(bytes: &[u8]) -> String {
         detector.feed(bytes, true);
         detector.guess(None, chardetng::Utf8Detection::Deny)
     };
-    let (text, _, _) = encoding.decode(bytes);
-    text.replace("\r\n", "\n").replace('\r', "\n")
+    encoding.decode(bytes).0
+}
+
+/// Lyrics as muman reads them, from a file or a tag alike: CRLF and CR
+/// line endings LF, and no control character but a tab, so a DOS
+/// end-of-file mark, a bell or a stray NUL costs only itself; a
+/// terminal's colour code, as `ESC[31m`, goes whole.
+#[must_use]
+pub fn as_read(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1B}' && chars.next_if_eq(&'[').is_some() {
+            while chars
+                .next_if(|c| ('\u{20}'..='\u{3F}').contains(c))
+                .is_some()
+            {}
+            chars.next_if(|c| ('\u{40}'..='\u{7E}').contains(c));
+        } else if !c.is_control() || matches!(c, '\n' | '\t') {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// WebVTT without its `STYLE` and `REGION` blocks, each a block whose
+/// first line opens with the word: ffmpeg 6's demuxer reads no cue of a
+/// file holding one, though YouTube and other tools write them.
+#[must_use]
+pub fn webvtt_cues(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut opening, mut skipping) = (true, false);
+    for line in text.split_inclusive('\n') {
+        let blank = line.trim().is_empty();
+        if opening && !blank {
+            let word = line.split_whitespace().next();
+            skipping = matches!(word, Some("STYLE" | "REGION"));
+        }
+        opening = blank;
+        if blank || !skipping {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 /// UTF-16 with no byte-order mark, told by its zero bytes: an ASCII
@@ -743,15 +869,22 @@ fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     }
 }
 
-/// Whether `text` reads as text: almost none of it control characters or
-/// bytes that would not decode, as a file of other data holds.
+/// Whether `text` reads as text: almost none of it bytes that would not
+/// decode or control characters text never holds, as a file of other
+/// data holds them throughout. The controls an editor, a terminal or DOS
+/// leaves in text, as ESC, a bell or the end-of-file mark, are no sign,
+/// and any file may hold one stray byte.
 #[must_use]
 pub fn is_text(text: &str) -> bool {
+    const LEFT_IN_TEXT: [char; 11] = [
+        '\t', '\n', '\r', '\u{7}', '\u{8}', '\u{B}', '\u{C}', '\u{1A}', '\u{1B}', '\u{7F}',
+        '\u{85}',
+    ];
     let odd = text
         .chars()
-        .filter(|c| *c == '\u{FFFD}' || c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        .filter(|c| *c == '\u{FFFD}' || c.is_control() && !LEFT_IN_TEXT.contains(c))
         .count();
-    odd * 50 <= text.chars().count()
+    odd * 50 <= text.chars().count().max(50)
 }
 
 /// Whether `bytes` are UTF-8, perhaps damaged: fewer bytes in error
@@ -842,6 +975,40 @@ impl<'a> Lrc<'a> {
             offset_ms: offset_ms.unwrap_or(0),
         }
     }
+}
+
+/// How far past a song's audio a timed line may start and still be its
+/// lyrics: a fade or a rip's tail apart.
+pub const END_GRACE_MS: i64 = 2_000;
+
+/// LRC without the times past `end_ms`, where the song ends, and its
+/// [`END_GRACE_MS`], and how many lines of words were left out for
+/// keeping none: such a line is never heard, and as the last cue it
+/// would hold the line before it on screen until it came. A word's time
+/// is left as it is, as is a line of no time.
+#[must_use]
+pub fn until(text: &str, end_ms: i64) -> (String, usize) {
+    let last = end_ms.saturating_add(END_GRACE_MS);
+    let mut out = String::with_capacity(text.len());
+    let mut left_out = 0;
+    for line in text.lines() {
+        let opened = opened(line);
+        if opened.damaged || opened.times.iter().all(|ms| *ms <= last) {
+            out.push_str(line);
+        } else {
+            let kept: Vec<i64> = opened.times.into_iter().filter(|ms| *ms <= last).collect();
+            if kept.is_empty() {
+                left_out += usize::from(!without_word_times(opened.rest).trim().is_empty());
+                continue;
+            }
+            for ms in kept {
+                stamp(&mut out, ms, '[', ']');
+            }
+            out.push_str(opened.rest);
+        }
+        out.push('\n');
+    }
+    (out, left_out)
 }
 
 /// The value of the line `line` if it is the ID tag `name`, as `[offset:+500]`.
@@ -1195,7 +1362,50 @@ mod tests {
         let noise: Vec<u8> = (0..4000_u32)
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
-        assert!(!is_text(&decode(&noise)));
+        assert!(read(&noise).is_none());
+    }
+
+    #[test]
+    fn a_line_past_the_song_s_end_and_its_grace_is_left_out() {
+        let lrc = "[ar:Marlo Venn]\n[00:05.00]five\n[00:21.00][999999999:00.00]huge\n\
+                   [00:23.00]late\n[00:30.00]\n[00:19.00]<00:19.50>last\n";
+        let (kept, left_out) = until(lrc, 20_000);
+        assert_eq!(
+            kept,
+            "[ar:Marlo Venn]\n[00:05.00]five\n[00:21.00]huge\n[00:19.00]<00:19.50>last\n"
+        );
+        assert_eq!(left_out, 1);
+    }
+
+    #[test]
+    fn webvtt_loses_its_style_and_region_blocks_alone() {
+        let vtt = "WEBVTT\n\nSTYLE\n::cue { color: red }\n\nREGION\nid:low\n\n\
+                   NOTE a STYLE word\n\n00:00:01.000 --> 00:00:02.000\nSTYLE of the night\n";
+        assert_eq!(
+            webvtt_cues(vtt),
+            "WEBVTT\n\n\n\nNOTE a STYLE word\n\n00:00:01.000 --> 00:00:02.000\nSTYLE of the night\n"
+        );
+    }
+
+    #[test]
+    fn a_control_character_costs_lyrics_only_itself() {
+        let sung = "[00:01.00]one\n[00:02.00]two\n";
+        for stray in [
+            "\u{1A}",
+            "\u{1B}[31m",
+            "\u{7}",
+            "\u{B}",
+            "\u{C}",
+            "\u{7F}",
+            "\0",
+            "\u{85}",
+        ] {
+            let lrc = format!("[00:01.00]one\r\n[00:02.00]two\r\n{stray}");
+            assert_eq!(read(lrc.as_bytes()).as_deref(), Some(sung), "{stray:?}");
+            let twice = format!("[00:01.00]one{stray}\r\n[00:02.00]two\r\n{stray}");
+            assert_eq!(as_read(&twice), sung, "{stray:?}");
+        }
+        assert_eq!(as_read("a\u{1B}[0;1;31mb\u{1B}c\td\n"), "abc\td\n");
     }
 
     #[test]
@@ -1357,8 +1567,28 @@ mod tests {
             "(x2)",
             "（間奏）",
             "Lyrics/music: Marlo Venn",
+            "Verse 1:",
+            "Pre-Chorus:",
+            "CHORUS",
+            "VERSE 2 x2",
+            "[Rap]",
+            "[Strophe 1]",
+            "{Chorus}",
+            "{Verse 2: Ada Quill}",
+            "[Chorus x2]",
         ] {
             assert_eq!(sung(no), "", "{no}");
+        }
+        for credit in [
+            "© 2024 Marlo Venn",
+            "(c) 2024 Marlo Venn",
+            "℗ 2024 Glass Orchard Records",
+            "Copyright 2024 Marlo Venn",
+            "English translation by Ada Quill",
+            "Translated by Ada Quill",
+            "Written by Marlo Venn",
+        ] {
+            assert_eq!(kind(credit), Kind::Credit, "{credit}");
         }
         for yes in [
             "Music fills the harbor",
@@ -1368,6 +1598,11 @@ mod tests {
             "(Down by the river, down by the shore)",
             "Music by the water plays all night",
             "Mix: the night and the morning light",
+            "Chorus of the gulls",
+            "Bridge",
+            "HOLD ON",
+            "Chorus: sing it louder",
+            "(c) is for the cold",
         ] {
             assert_eq!(sung(yes), format!("{yes}\n"), "{yes}");
         }

@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/13";
+pub const METHOD: &str = "tags/14";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -289,12 +289,17 @@ impl Kind {
                     Ok(v.to_string())
                 }
             }
+            Self::Count if below_one(v) => Err("below 1: a count starts at 1, as 12"),
             Self::Count => count(v)
                 .map(|n| n.to_string())
                 .ok_or("no count: give one as 12"),
             Self::Place => {
-                let read = match v.split_once('/') {
-                    Some((n, of)) => count(n).zip(count(of)).map(|(n, of)| format!("{n}/{of}")),
+                let (n, of) = v.split_once('/').map_or((v, None), |(n, of)| (n, Some(of)));
+                if below_one(n) || of.is_some_and(below_one) {
+                    return Err("below 1: tracks and discs count from 1, as 3 or 3/12");
+                }
+                let read = match of {
+                    Some(of) => count(n).zip(count(of)).map(|(n, of)| format!("{n}/{of}")),
                     None => count(v).map(|n| n.to_string()),
                 };
                 read.ok_or("no number: give one as 3, or 3/12")
@@ -315,6 +320,11 @@ impl Kind {
             Self::Language => language(v).ok_or("no language: give its code, as jpn or ja"),
         }
     }
+}
+
+/// Whether `text` is a whole number below 1, as `0` or `-2`.
+fn below_one(text: &str) -> bool {
+    text.trim().parse::<i64>().is_ok_and(|n| n < 1)
 }
 
 /// A count from 1, from digits alone.
@@ -1101,12 +1111,32 @@ pub fn vorbis_key(name: &str) -> String {
     Field::named(name).map_or_else(|| name.to_ascii_uppercase(), |f| f.vorbis().to_string())
 }
 
+/// The name a song list, a query and muman's messages give the tag
+/// `name`, by any spelling of it: a known field as the docs write it, as
+/// `album_artist`, `isrc` or `musicbrainz_trackid`, never an alias a file
+/// format reads it by, and any other lower-cased.
+#[must_use]
+pub fn song_list_name(name: &str) -> String {
+    match Field::named(name) {
+        Some(Field::AlbumArtist) => "album_artist".into(),
+        Some(Field::Track) => "track".into(),
+        Some(Field::Disc) => "disc".into(),
+        Some(Field::TrackTotal) => "track_total".into(),
+        Some(Field::DiscTotal) => "disc_total".into(),
+        Some(Field::ReleaseCountry) => "release_country".into(),
+        Some(f) => f.vorbis().to_ascii_lowercase(),
+        None => name.trim().to_ascii_lowercase(),
+    }
+}
+
 /// `value` of the tag `name` as a song list holds it when set by hand,
 /// read as its field's [`Kind`] says, or what is wrong with it: a name a
 /// Vorbis comment cannot carry (printable ASCII but `=`, as APEv2 keys
 /// are ASCII too), a number that is none, a date that is none, or a gain
 /// muman measures and writes over. An empty value sets nothing, so it is
-/// never wrong.
+/// never wrong. A field [`single_line`] names reads each line break or
+/// tab, with the spaces around it, as one space, wherever it was set;
+/// any other keeps its lines.
 pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     if name.is_empty()
         || !name
@@ -1122,6 +1152,11 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
         .chars()
         .filter(|c| !crate::portable::reorders(*c))
         .collect();
+    let value = if single_line(name) {
+        joined(&value)
+    } else {
+        value
+    };
     if value.trim().is_empty() {
         return Ok(String::new());
     }
@@ -1146,6 +1181,37 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     }
     kind.read(&value)
         .map_err(|why| format!("{name} = {value:?} is {why}"))
+}
+
+/// Whether the tag `name` holds one line: every field muman knows, which
+/// names a song, a person, a release or a path part, or holds a number,
+/// a date or an ID, but the comment, free text as a tag muman does not
+/// know may be too. One holds a line break as it was given, stored so,
+/// shown [`escaped`] and matched as a space.
+#[must_use]
+pub fn single_line(name: &str) -> bool {
+    Field::named(name).is_some_and(|f| f != Field::Comment)
+}
+
+/// `text` on one line: each line break or tab, with the spaces around
+/// it, one space.
+#[must_use]
+pub fn joined(text: &str) -> String {
+    text.split(['\n', '\r', '\t'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `text` as a listing shows a value, one line a song: each line break
+/// written `\n` and each tab `\t`, so text kept over lines is seen whole.
+#[must_use]
+pub fn escaped(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t")
 }
 
 /// Whether `t` is a time of day, as a date's tail: `HH:MM`, seconds and
@@ -1573,8 +1639,9 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
 
 /// The lyrics a file's own tags hold, as `lofty` reads them: `USLT` in
 /// `ID3v2`, `LYRICS` or else `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr`
-/// in MP4 and `Lyrics` in APEv2; with the ISO 639-2 language a `USLT`
-/// frame names, unless it names none, as `XXX` or `und`.
+/// in MP4 and `Lyrics` in APEv2, read as [`crate::lyrics::as_read`] reads
+/// a file's; with the ISO 639-2 language a `USLT` frame names, unless it
+/// names none, as `XXX` or `und`.
 #[must_use]
 pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
     use lofty::file::TaggedFileExt;
@@ -1592,7 +1659,9 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
                 .flat_map(|t| t.items())
                 .filter(|i| i.key() == *key)
                 .find_map(|i| match i.value() {
-                    ItemValue::Text(text) if !text.trim().is_empty() => Some((text, i.lang())),
+                    ItemValue::Text(text) => Some(crate::lyrics::as_read(text))
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| (text, i.lang())),
                     _ => None,
                 })
         })
@@ -1601,7 +1670,7 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
             let named = lang.len() == 3
                 && lang.bytes().all(|b| b.is_ascii_lowercase())
                 && !matches!(lang.as_str(), "xxx" | "und" | "zxx" | "mis" | "mul");
-            (text.clone(), named.then_some(lang))
+            (text, named.then_some(lang))
         })
 }
 
@@ -1872,12 +1941,31 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// Opus stream of mapping family 255, and a file's tags never need them.
 /// Its format is told by its bytes, as ffprobe tells it, its name only
 /// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
-/// and `song.opus.part` is a file being written.
+/// and `song.opus.part` is a file being written. An Ogg stream of a codec
+/// `lofty` does not read, as Ogg FLAC, it takes for MPEG by a frame sync
+/// inside its audio, and finds no tags in: such a file is refused as of
+/// no format `lofty` knows, so its tags are read as ffprobe reads them.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    lofty::probe::Probe::open(path)?
-        .guess_file_type()?
+    use lofty::file::FileType;
+    use std::io::Read;
+
+    let probe = lofty::probe::Probe::open(path)?.guess_file_type()?;
+    let ogg = matches!(
+        probe.file_type(),
+        Some(FileType::Vorbis | FileType::Opus | FileType::Speex)
+    );
+    let mut magic = [0; 4];
+    if !ogg
+        && std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut magic))
+            .is_ok()
+        && magic == *b"OggS"
+    {
+        return Err(lofty::error::UnknownFormatError.into());
+    }
+    probe
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
 }
@@ -2499,6 +2587,21 @@ mod tests {
     }
 
     #[test]
+    fn an_ogg_flac_is_no_file_lofty_reads_tags_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let oga = dir.path().join("a.oga");
+        std::fs::write(&oga, include_bytes!("../../../testdata/silence.oga")).unwrap();
+        assert!(
+            read_tagged(&oga).is_err_and(|e| e.is_unknown_format()),
+            "lofty takes it for MPEG and finds no tags"
+        );
+        assert_eq!(read_file(&oga), None);
+        let ogg = dir.path().join("a.ogg");
+        std::fs::write(&ogg, crate::testing::SILENCE_VORBIS).unwrap();
+        assert!(read_file(&ogg).is_some());
+    }
+
+    #[test]
     fn a_files_tags_read_alike_whatever_its_format_and_repeated_ones_apart() {
         use lofty::config::WriteOptions;
         use lofty::file::TaggedFileExt;
@@ -2698,6 +2801,28 @@ mod tests {
         );
         assert_eq!(by_hand("album", "\u{202E}\u{202C}").unwrap(), "");
         assert!(by_hand("date", "2019-07-04 extra").is_err());
+        for (name, value) in [("track", "0"), ("track", "-1"), ("disc", "1/0")] {
+            let why = by_hand(name, value).unwrap_err();
+            assert!(
+                why.contains("is below 1: tracks and discs count from 1"),
+                "{why}"
+            );
+        }
+        assert!(
+            by_hand("tracktotal", "0")
+                .unwrap_err()
+                .contains("a count starts at 1")
+        );
+        assert!(by_hand("track", "x").unwrap_err().contains("no number"));
+        assert_eq!(
+            by_hand("title", "line1\n line2\r\n\tend").unwrap(),
+            "line1 line2 end"
+        );
+        assert_eq!(by_hand("title", "\n\t").unwrap(), "");
+        assert_eq!(by_hand("comment", "one\ntwo").unwrap(), "one\ntwo");
+        assert_eq!(by_hand("liner_notes", "one\ntwo").unwrap(), "one\ntwo");
+        assert!(single_line("album_artist") && single_line("DATE") && !single_line("comment"));
+        assert_eq!(escaped("one\r\ntwo\tthree"), "one\\ntwo\\tthree");
         assert!(by_hand("date", "2019-07-04Tea").is_err());
         assert_eq!(
             by_hand("date", "2019-07-04T10:00:00Z").unwrap(),
@@ -2736,7 +2861,7 @@ mod tests {
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/13",
+        "tags/14",
         "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
     );
 

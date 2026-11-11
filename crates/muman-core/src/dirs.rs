@@ -1,11 +1,23 @@
 //! The folders a run works in: the home, with the song list, the state
 //! file and the sources, and the library it writes. Neither may hold the
-//! other, but for a library beside the sources in the home.
+//! other, but for a library beside the sources in the home: never in one
+//! of the folders muman keeps there ([`KEPT`]), whose files it reads back
+//! as sources, resumes, or deletes as their runs fall out of the history.
 
 use std::path::{Path, PathBuf};
 
 pub const MANIFEST: &str = "songs.toml";
 pub const STATE: &str = "state.json";
+/// The folder of the runs `undo` can take back.
+pub const HISTORY: &str = "history";
+/// The folder of unfinished downloads.
+pub const PARTIAL: &str = "partial";
+const SOURCES: &str = "sources";
+/// The folder of the manual sources `add` copies lyrics and pictures
+/// into: muman's copies of files the user keeps where they were.
+pub const ADDED: &str = "added";
+/// The folders muman keeps in the home, which no library may lie in.
+pub const KEPT: [&str; 3] = [SOURCES, HISTORY, PARTIAL];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dirs {
@@ -39,10 +51,13 @@ impl Dirs {
                 self.home.display()
             );
         }
-        if within(&self.library, &self.home.join("sources")) {
+        if let Some(kept) = KEPT
+            .iter()
+            .find(|k| within(&self.library, &self.home.join(k)))
+        {
             anyhow::bail!(
-                "the library {} is in the home's sources, where muman would read the songs it \
-                 writes back as new ones; choose a folder outside them",
+                "the library {} is in the home's {kept}, where muman reads, resumes or deletes \
+                 what it keeps for itself; choose a folder outside it",
                 self.library.display()
             );
         }
@@ -69,7 +84,7 @@ impl Dirs {
 
     #[must_use]
     pub fn ytdlp(&self) -> PathBuf {
-        self.home.join("sources").join("yt-dlp")
+        self.home.join(SOURCES).join("yt-dlp")
     }
 
     /// Torrents' metainfo and their files, each torrent's in a folder of
@@ -82,7 +97,7 @@ impl Dirs {
     /// A folder of sources, by its name in `sources`.
     #[must_use]
     pub fn sources(&self, folder: &str) -> PathBuf {
-        self.home.join("sources").join(folder)
+        self.home.join(SOURCES).join(folder)
     }
 
     #[must_use]
@@ -103,7 +118,7 @@ impl Dirs {
 
     #[must_use]
     pub fn manual(&self) -> PathBuf {
-        self.home.join("sources").join("manual")
+        self.home.join(SOURCES).join("manual")
     }
 
     #[must_use]

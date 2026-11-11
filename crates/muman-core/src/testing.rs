@@ -29,6 +29,7 @@
 #![expect(clippy::disallowed_methods)]
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -59,14 +60,14 @@ pub const ORIGINAL: &str = r#"{"streams": [
     {"index": 2, "codec_type": "subtitle", "tags": {"language": "eng", "title": "English"}},
     {"index": 3, "codec_type": "attachment", "tags": {"filename": "info.json", "mimetype": "application/json"}},
     {"index": 4, "codec_type": "attachment", "tags": {"filename": "cover.webp", "mimetype": "image/webp"}}
-], "format": {"duration": "200.0"}}"#;
+], "format": {"format_name": "matroska,webm", "duration": "200.0"}}"#;
 
 /// A manual FLAC with an embedded square cover.
 pub const FLAC: &str = r#"{"streams": [
     {"index": 0, "codec_type": "audio", "codec_name": "flac", "channels": 2, "sample_rate": "44100"},
     {"index": 1, "codec_type": "video", "codec_name": "mjpeg", "width": 64, "height": 64,
      "disposition": {"attached_pic": 1}}
-], "format": {"duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
+], "format": {"format_name": "flac", "duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
 
 pub const INFO: &str = r#"{"id": "aaaaaaaaaaa", "title": "Song / Wren", "uploader": "Hoshi7ne",
     "upload_date": "20260527", "subtitles": {"en": [{"name": "English"}]}}"#;
@@ -131,6 +132,8 @@ pub struct Fake {
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
     pub lines: Vec<String>,
+    /// Lines a streamed run writes to its errors, after those.
+    pub err_lines: Vec<String>,
     // A hook one test installs; a named type would be used once.
     #[expect(clippy::type_complexity)]
     pub on_stream: Option<Box<dyn Fn(&[String]) -> bool + Sync>>,
@@ -356,9 +359,9 @@ impl Fake {
                 flac[STREAMINFO_MD5].copy_from_slice(&stamp[..16]);
                 flac
             }
-            // A stream's packets, as many bytes as 200 s at 128 kbit/s,
-            // running as long as the audio its analysis decodes, unless the
-            // tables say otherwise.
+            // A stream's packets, a second each, as many bytes as 200 s at
+            // 128 kbit/s, running as long as the audio its analysis decodes,
+            // unless the tables say otherwise.
             "framecrc" => {
                 if let Some(list) = find(&self.timelines, &input) {
                     list.clone().into_bytes()
@@ -371,7 +374,14 @@ impl Fake {
                         },
                         |s| i64::from(*s) * 48_000,
                     );
-                    format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
+                    let mut list = "#tb 0: 1/48000\n".to_string();
+                    let mut size = bytes;
+                    for pts in (0..ticks.max(1)).step_by(48_000) {
+                        let duration = (ticks - pts).min(48_000);
+                        let _ = writeln!(list, "0, {pts}, {pts}, {duration}, {size}, 0x00000000");
+                        size = 0;
+                    }
+                    list.into_bytes()
                 }
             }
             // A stream hashes as its file's bytes and the stream mapped.
@@ -623,6 +633,9 @@ impl Runner for Fake {
         let args = self.record(cmd);
         for line in &self.lines {
             on_line(Line::Out(line));
+        }
+        for line in &self.err_lines {
+            on_line(Line::Err(line));
         }
         Ok(self.on_stream.as_ref().is_none_or(|f| f(&args)))
     }

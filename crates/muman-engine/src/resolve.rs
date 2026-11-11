@@ -8,11 +8,16 @@
 //! fewer such.
 //!
 //! - Audio: the song's recording before another ([`vet::recordings`]),
-//!   then least that is not the song (a video's intro or skit) or
-//!   is missing from it (past an excerpt's cut), then
+//!   then a whole copy before a damaged one, cut off, missing audio or
+//!   cut short ([`crate::integrity`]), however little it lacks: purity
+//!   counts audio lacked in steps, and a hole under a step would rank
+//!   the damage alike with the whole copy, which the order of `sources`
+//!   then decides; then least that is not the song (a video's intro or
+//!   skit) or is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
-//!   from the folder most of its album's audio comes from, then
-//!   lossless, then the most bits used, then the lowest rate.
+//!   lossless, then the most bits used, then the lowest rate, then
+//!   from the folder most of its album's audio comes from, which never
+//!   puts an album's lossy rip ahead of a lossless copy of it.
 //!   Lossless audio cut off as lossy audio is counts as lossy, padded
 //!   audio by the bits it uses, and upsampled audio by the rate it
 //!   declares, which its bytes take: ranked by the rate its sound needs,
@@ -39,7 +44,12 @@
 //!   believed first among those that agree spells it, so a file's typo
 //!   gives way to MusicBrainz's spelling while a file's `Song (Live)`
 //!   stays apart from MusicBrainz's `Song`, and of two such the one
-//!   naming the version wins whatever their order. A field won by the
+//!   naming the version wins whatever their order. Of sources believed
+//!   alike that spell a value alike in its letters, as `Night Ferry` and
+//!   `night ferry`, the spelling most of the song's sources write wins,
+//!   a tie going as an album's spellings tie ([`crate::album`]),
+//!   then by its text: never by the order of `sources`, which would move
+//!   the song's file as that order changes. A field won by the
 //!   order of `sources` alone over another value is contested, which
 //!   `status` and `check` name. The
 //!   release fields come together from one source so a song's release
@@ -56,14 +66,29 @@
 //!   most are a store's or an uploader's words, not the song's. A value
 //!   that says nothing of the song, a placeholder or a watermark, is
 //!   dropped before any offer is ranked ([`crate::detect`]), watermarks
-//!   found across the sources the song list names ([`Known`]). An
+//!   found across the sources the song list names ([`Known`]): as the
+//!   source wrote it, before cleaning, so `status` drops what it names,
+//!   and again as cleaned, where splitting a value made one. An
 //!   upload's date, the day it went up, dates the song only where the
 //!   upload's channel is the song's artist, set by hand or offered.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
 //! purity outweighs mono and any bandwidth up to 240 kHz together, mono
-//! any such bandwidth, and a step of bandwidth all of clipping. Mono
+//! any such bandwidth, and a step of bandwidth all of clipping. A lossy
+//! copy, or one clipping more, counts its bandwidth no wider than that of
+//! a lossless copy of its recording not made from lossy audio
+//! ([`bounded`]): what clipping splatters past a lowpass is no sound of
+//! the recording, and nor is what an encoder fills in above it. Opus
+//! codes the band from 15.6 to 20 kHz by its energy alone, filling it to
+//! its own lowpass. Of 56 game soundtrack pieces cut a minute long as
+//! FLAC, 34 measured as lossless audio does; of copies made from those,
+//! a 500 Hz step or more wider than their FLAC measured Opus at 96 kbit/s
+//! in 11, Opus at 160 kbit/s in 9, MP3 at 320 kbit/s in 2 and Vorbis at
+//! quality 5 in 1, and AAC at 192 kbit/s in none. A lossless copy made
+//! from lossy audio, as the other 22 were, bounds nothing: a lossy copy
+//! wider than it may come from a better source, though of these the Opus
+//! copies at 96 kbit/s measured wider in 17. Mono
 //! comes before bandwidth because it is the larger loss to a listener:
 //! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
 //! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
@@ -148,7 +173,10 @@
 //! title, without release fields but a date.
 //! The album artist is one a source names, else the first credited
 //! artist as finally set, a hand-set one included, never the joined
-//! `ARTIST`.
+//! `ARTIST`, and its lead credit alone: `Marlo Venn feat. Kiri Hoshino`
+//! read as one artist fills in `Marlo Venn`, whatever `[tags] featured`
+//! asks, so an album whose songs credit a guest each their own way stays
+//! one album.
 //!
 //! A plan is stored whole and compared whole, which is how a song renders
 //! again exactly when its sources' revisions, the picks, the tags or the
@@ -168,7 +196,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Chain, Codec, Container, Layout};
+use crate::codec::{Adapt, Chain, Codec, Layout};
 use crate::detect::{self, Watermarks};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
@@ -177,8 +205,9 @@ use crate::loudness::Gains;
 use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
+use crate::parts;
 use crate::picture::{self, Alike};
-use crate::quality::{ImageQuality, Rect};
+use crate::quality::{AudioQuality, ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
 use crate::source::SourceKey;
@@ -196,8 +225,9 @@ use crate::vet::{self, Verdict, Vets};
 pub fn render_version(codec: Codec) -> u32 {
     match codec {
         // Opus ended 312 samples late, its timestamps shifted by its delay;
-        // MP4 wrote a tag of several values as an atom each.
-        Codec::Opus | Codec::Aac | Codec::Alac => 4,
+        // MP4 wrote a tag of several values as an atom each; a FLAC copied
+        // from one stating no length stated none.
+        Codec::Opus | Codec::Aac | Codec::Alac | Codec::Flac => 4,
         _ => 3,
     }
 }
@@ -527,8 +557,9 @@ pub struct LyricsRef {
     /// word times.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside: Option<LyricsFile>,
-    /// Where the song ends, in ms, which ends the last cue of a file of
-    /// cues; none where no file holds cues.
+    /// Where the song ends, in ms, past which no line is kept and which
+    /// ends the last cue of a file of cues; none where its length is not
+    /// known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<i64>,
     /// The ISO 639-2 code of the language their source names them in.
@@ -872,6 +903,9 @@ pub struct Why {
     /// The release it was moved to and why ([`crate::release`]), as
     /// `<key>: <why>`.
     pub release: Option<String>,
+    /// Which of its audio's chapters its container leaves out
+    /// ([`crate::chapters::held`]), said whenever it is written.
+    pub chapters: Option<String>,
 }
 
 /// Something a song's picks leave in doubt, which `check` lists and
@@ -900,9 +934,24 @@ pub enum Doubt {
     /// An upload whose title reads more than one way, none clear of the
     /// rest ([`crate::readings`]).
     Reading { key: SourceKey, why: String },
+    /// A pin of its cover or lyrics, `part`, to a source measured to hold
+    /// none: the song has none of that part.
+    Pin { part: &'static str, key: SourceKey },
 }
 
 impl Doubt {
+    /// What a pin to nothing leaves the song without, as `status` and
+    /// `sync` say it; none for any other doubt.
+    #[must_use]
+    pub fn pinned_to_nothing(&self) -> Option<String> {
+        match self {
+            Self::Pin { part, key } => Some(format!(
+                "no {part}: pinned to {key}, which holds none; `muman set` with `{part}!` unpins it"
+            )),
+            _ => None,
+        }
+    }
+
     /// It in one line, as `check` and `review` say it.
     #[must_use]
     pub fn line(&self) -> String {
@@ -912,6 +961,7 @@ impl Doubt {
             Self::Recording { key, why } => format!("another recording: {key}: {why}"),
             Self::Length { key, why } => format!("another length: {key}: {why}"),
             Self::Reading { key, why } => format!("read two ways: {key}: {why}"),
+            Self::Pin { part, key } => format!("pinned to nothing: its {part} to {key}"),
         }
     }
 }
@@ -1194,6 +1244,11 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let contested = contested_unset(&candidates, &tag_why);
     let doubts = doubts_of(input, &vets, &recordings, &contested, ms_of(facts));
     let release = moved(input, &tag_why);
+    let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
+    let (chapters, chapters_why) = crate::chapters::held(
+        crate::chapters::within(&facts.chapters, length_ms),
+        format.codec().container(),
+    );
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1209,12 +1264,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             tags,
             loudness: None,
             tagging: TAGGING,
-            chapters: if format.codec().container() == Container::WavPack {
-                Vec::new()
-            } else {
-                let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
-                crate::chapters::within(&facts.chapters, length_ms)
-            },
+            chapters,
         },
         stem,
         why: Why {
@@ -1229,6 +1279,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             contested: contested.into_iter().map(|(_, _, why)| why).collect(),
             doubts,
             release,
+            chapters: chapters_why,
         },
     })
 }
@@ -1321,7 +1372,7 @@ type Rank = Vec<i64>;
 /// Where a [`Rank`] holds whether a source came from its album's folder,
 /// which sways the audio a song plays but not the audio a lookup was
 /// asked with.
-const FROM_ALBUM: usize = 2;
+const FROM_ALBUM: usize = 5;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
@@ -1404,7 +1455,7 @@ fn pick_audio(
             let unmatched = beyond
                 .map(|ms| ms + lacks.max(missing))
                 .or_else(|| any_missing.then_some(missing));
-            let q = facts.audio.as_ref().and_then(|a| a.quality);
+            let q = bounded(facts, &compared, &audible);
             let w = &input.audio.pick;
             let [unknown, sum] = score(&[
                 (
@@ -1429,11 +1480,12 @@ fn pick_audio(
                 ),
             ]);
             let rank: Rank = vec![
+                i64::from(facts.damage().is_some()),
                 unknown,
                 sum,
-                i64::from(!from_album(input, key)),
                 -tie_break(facts.audio.as_ref()),
                 facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
+                i64::from(!from_album(input, key)),
             ];
             Scored {
                 n,
@@ -1511,6 +1563,7 @@ fn recordings_of(
             ms: ms_of(s.facts),
             digest: s.facts.audio.as_ref().and_then(|a| a.digest.as_deref()),
             first: Some(unswayed(s)) == best,
+            whole: s.facts.damage().is_none(),
         })
         .collect();
     if audible.len() < 2 {
@@ -1614,12 +1667,41 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
     }
 }
 
-/// How far `facts`' true peak stands above its integrated loudness, in
-/// hundredths of a dB, as its loudness was measured.
+/// The quality `facts` measured, its bandwidth no wider than that of any
+/// lossless copy of its recording, among `compared`, not made from lossy
+/// audio, that clips less than it does or of which it is a lossy copy:
+/// what clipping adds above a lowpass is no sound of the recording, nor
+/// what an encoder fills in above it, and a step of bandwidth outweighs
+/// all of clipping and every tie-break.
+fn bounded(
+    facts: &Facts,
+    compared: &[&Aligned],
+    audible: &[(usize, &SourceKey, &Facts)],
+) -> Option<AudioQuality> {
+    let audio = facts.audio.as_ref()?;
+    let q = audio.quality?;
+    let lossy = !audio.is_lossless();
+    let cleaner = compared
+        .iter()
+        .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
+        .filter_map(|(_, _, facts)| facts.audio.as_ref())
+        .filter(|audio| audio.is_lossless() && !audio.flags().band_limited)
+        .filter_map(|audio| audio.quality)
+        .filter(|other| lossy || other.clipping < q.clipping)
+        .map(|other| other.bandwidth_hz)
+        .reduce(f64::max);
+    Some(AudioQuality {
+        bandwidth_hz: cleaner.map_or(q.bandwidth_hz, |hz| q.bandwidth_hz.min(hz)),
+        ..q
+    })
+}
+
+/// How far `facts`' peak ([`crate::dynamics`]) stands above its
+/// integrated loudness, in hundredths of a dB.
 fn dynamics_of(facts: &Facts) -> Option<i64> {
-    let measure = facts.audio.as_ref()?.analysis.loudness()?;
-    let peak = 20.0 * measure.true_peak.log10();
-    let range = (peak - measure.lufs()?) * 100.0;
+    let analysis = &facts.audio.as_ref()?.analysis;
+    let crate::dynamics::Measure { peak_db } = *analysis.dynamics()?;
+    let range = (peak_db - analysis.loudness()?.lufs()?) * 100.0;
     range.is_finite().then(|| range.round() as i64)
 }
 
@@ -1734,8 +1816,9 @@ struct Fitting {
 fn runs_past(timing: Option<lyrics::Timing>, offset: i64, duration_ms: f64) -> bool {
     // A song's milliseconds are far below 2^52, held exactly.
     duration_ms > 0.0
-        && timing
-            .is_some_and(|t| (t.last_ms - offset) as f64 > duration_ms + f64::from(FIT_GRACE_MS))
+        && timing.is_some_and(|t| {
+            (t.last_ms - offset) as f64 > duration_ms + lyrics::END_GRACE_MS as f64
+        })
 }
 
 /// Why lyrics of `role` and `timing` were taken, `own` none for lyrics
@@ -1755,10 +1838,6 @@ fn lyrics_why(role: Option<Role>, timing: Option<lyrics::Timing>, own: Option<i6
         Some(Role::Translation) => format!("a translation, {timing}"),
     }
 }
-
-/// How far past the song's audio a timed line may start and its lyrics
-/// still be the song's: a fade or a rip's tail apart.
-const FIT_GRACE_MS: i32 = 2_000;
 
 /// Whether `tags` say the song sings no words: MusicBrainz's language
 /// `zxx` alone, or a title whose decoration names an instrumental or a
@@ -2184,12 +2263,10 @@ fn lyrics_outputs(
     };
     let tag = outs.clone().find(|o| o.to == To::Tag);
     let files: Vec<LyricsFile> = outs.filter(|o| o.to == To::File).map(form).collect();
-    let cues = files.iter().any(|f| f.format.cues());
     let end_ms = input
         .facts
         .get(audio)
         .and_then(Facts::length)
-        .filter(|_| cues)
         .map(|s| (s * 1000.0).round() as i64);
     let inside = tag.map(form).filter(|f| *f != LyricsFile::default());
     let (placement, files) = LyricsRef::placed(tag.is_some(), files);
@@ -2386,7 +2463,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             if field == Field::Comment && !input.source_comments {
                 continue;
             }
-            let c = clean::clean(field, &raw, &ctx, input.clean);
+            let c = clean::clean(field, &heard(input, key, field, &raw), &ctx, input.clean);
             let values: Vec<String> = (c.values.into_iter())
                 .filter(|v| says_nothing(input, key, field, v).is_none())
                 .collect();
@@ -2409,6 +2486,18 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         }
     }
     all
+}
+
+/// `offer`, of `field` from `key`, without the values that say nothing of
+/// the song as the source wrote them, as `status` names them.
+fn heard<'o>(input: &Input<'_>, key: &SourceKey, field: Field, offer: &'o Offer) -> Cow<'o, Offer> {
+    let said = |v: &String| says_nothing(input, key, field, v).is_some();
+    if !offer.values.iter().any(said) {
+        return Cow::Borrowed(offer);
+    }
+    let mut kept = offer.clone();
+    kept.values.retain(|v| !said(v));
+    Cow::Owned(kept)
 }
 
 /// What `key`, a source with `facts`, offers, as the `[[tags.from]]`
@@ -2607,11 +2696,32 @@ fn best_offer_then<'c, 'a, K: Ord>(
     let group = groups(&offers, field);
     let ranked = ranked(&offers, &group, field, &then);
     let best = *ranked.first()?;
-    let spelled = (0..offers.len())
+    let standing = |i: usize| {
+        let c = offers[i];
+        (!c.offer.structured, c.rank, decorated(c), then(c.key))
+    };
+    let first = (0..offers.len())
         .filter(|&i| group[i] == group[best])
+        .min_by_key(|&i| (standing(i), offers[i].n))?;
+    let letters = |i: usize| tags::normalized(&offers[i].offer.values);
+    let offered = |i: usize| {
+        (0..offers.len())
+            .filter(|&j| {
+                group[j] == group[best] && offers[j].offer.values == offers[i].offer.values
+            })
+            .count()
+    };
+    let spelled = (0..offers.len())
+        .filter(|&i| group[i] == group[best] && standing(i) == standing(first))
+        .filter(|&i| letters(i) == letters(first))
         .min_by_key(|&i| {
-            let c = offers[i];
-            (!c.offer.structured, c.rank, decorated(c), then(c.key), c.n)
+            let values = &offers[i].offer.values;
+            (
+                std::cmp::Reverse(offered(i)),
+                crate::album::cased(values),
+                values,
+                offers[i].n,
+            )
         })?;
     Some(offers[spelled])
 }
@@ -2693,6 +2803,31 @@ fn contested_unset(
         .collect()
 }
 
+/// The song's pins of its cover and lyrics to a source measured to hold
+/// none, which leave it without that part.
+fn empty_pins(input: &Input<'_>) -> Vec<Doubt> {
+    let lyrics = match &input.song.lyrics {
+        Some(LyricsPin::From(key)) => Some(key),
+        _ => None,
+    };
+    let mut pins = Vec::new();
+    for (_, key, facts) in input.present() {
+        if input.song.cover.as_ref() == Some(key) && facts.covers.is_empty() {
+            pins.push(Doubt::Pin {
+                part: "cover",
+                key: key.clone(),
+            });
+        }
+        if lyrics == Some(key) && facts.lyrics.is_empty() {
+            pins.push(Doubt::Pin {
+                part: "lyrics",
+                key: key.clone(),
+            });
+        }
+    }
+    pins
+}
+
 /// What the song's picks leave in doubt: its fields contested, its
 /// sources set aside, its audio sources of another recording, and each
 /// record it believes whose length is [`vet::FAR_MS`] or more from
@@ -2723,6 +2858,7 @@ fn doubts_of(
         why: why.clone(),
     }));
     doubts.extend(readings_of(input));
+    doubts.extend(empty_pins(input));
     for (_, key, facts) in input.present() {
         let (Some(stated), Some(heard)) = (facts.length_ms, audio_ms) else {
             continue;
@@ -2820,12 +2956,16 @@ pub const SINGLE: &str = "a single, named for its title";
 /// artist's own source.
 const FIRST_ARTIST: &str = "the first artist of ";
 
+/// Where a loudness tag muman measured comes from, alone or before what
+/// it was measured over.
+pub const MEASURED: &str = "measured";
+
 /// Whether a tag from `from` is one muman fills in itself, which no
 /// source nor the song list gives: an album named for a single's title,
-/// or an album artist taken from the artist.
+/// an album artist taken from the artist, or a loudness it measured.
 #[must_use]
 pub fn derived(from: &str) -> bool {
-    from == SINGLE || from.starts_with(FIRST_ARTIST)
+    from == SINGLE || from.starts_with(FIRST_ARTIST) || from.starts_with(MEASURED)
 }
 
 /// Take the MusicBrainz recording IDs of `release`, the source the
@@ -2922,8 +3062,8 @@ impl Slot {
 }
 
 /// What the tags of a song, from its sources and its song list merged,
-/// lack and say all the same: an album artist, its first artist; and an
-/// album, for a song on none, its title, as a single. Derived once, from
+/// lack and say all the same: an album artist, its first artist less any
+/// featured names; and an album, for a song on none, its title, as a single. Derived once, from
 /// the tags as finally set, each at its field's place, so a hand-set
 /// artist or title names the song as one a source offered would.
 fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
@@ -2935,8 +3075,11 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
     if get(written, Field::AlbumArtist).is_none()
         && let (Some(artist), Some(first)) = (get(written, Field::Artist), artists.first())
     {
+        let lead = parts::credit(first)
+            .featured_at
+            .map_or(first.as_str(), |at| first[..at].trim_end());
         let slot = Slot {
-            values: vec![first.clone()],
+            values: vec![lead.to_string()],
             from: format!("{FIRST_ARTIST}{}", artist.from),
             cleaned: artist.cleaned,
         };
@@ -3098,7 +3241,8 @@ fn resolve_tags(
 }
 
 /// The title and artist in `input`'s style, its artists one by one with
-/// them, a name moved out of the credit left out and one moved in added;
+/// them, a name moved out of the credit left out and one moved in added,
+/// so the album artist filled from the first of them is styled too;
 /// a value restyled names `style` among the rules that changed it. No
 /// featured artist moves where the title or the artist is set by hand,
 /// so one is never written in both.
@@ -3122,7 +3266,14 @@ fn restyle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut 
     let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
     let styled = style.apply(&title, &artist);
     if styled.artist != artist {
-        artists.retain(|a| !styled.removed.iter().any(|r| r.eq_ignore_ascii_case(a)));
+        // A credit read as one artist, `Orrin Vale feat. Kiri Hoshino`, is
+        // its first artist, which the album artist is filled from.
+        if !styled.removed.is_empty() {
+            for a in artists.iter_mut().filter(|a| **a == artist) {
+                a.clone_from(&styled.artist);
+            }
+        }
+        artists.retain(|a| !styled.removed.iter().any(|r| similar::caseless(r, a)));
         artists.extend(styled.added.iter().cloned());
     }
     for (field, was, now) in [

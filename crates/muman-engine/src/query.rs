@@ -4,15 +4,22 @@
 //!
 //! A bare word matches when the title, artist, album or album artist
 //! holds it, or it is a key's ID or a manual file's name whole: never
-//! part of a key, which would take `man` for every manual song.
-//! `field:text` a field containing the text, `field:=text` one equal to
-//! it, `field::regex` one matching it; `^` before any term negates it. A
+//! part of a key, which would take `man` for every manual song. Bare
+//! text with spaces, as one argument quoted, is its words, each to match
+//! as one alone would, so a script passing `"$query"` finds what the
+//! words typed apart find; all of it may still name a file whole, as
+//! `"02 tide.flac"`. `field:text` a field containing the text, spaces
+//! and all, `field:=text` one equal to it, `field::regex` one matching
+//! it; `^` before any term negates it. A
 //! field that is no tag muman knows and that no song has is refused, so
 //! a misspelled one neither matches nothing nor, negated, every song.
 //! A source key, as `youtube.com:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case and
 //! accents are ignored throughout, as is how a name was composed: `cafe`
-//! matches "Café", written in either Unicode form.
+//! matches "Café", written in either Unicode form. A regex is matched
+//! against the field folded so, lower-cased and its accents taken off,
+//! and its own accents are taken off too, so `title::^cafe` finds
+//! "Café Noir"; `(?-i)\p{Lu}`, asking for upper case, finds nothing.
 //!
 //! `lyrics:` is yes, none, timed or untimed, `cover:` yes, none, sharp
 //! or small, `from:<provider>` holds when a source of the song is from
@@ -36,10 +43,9 @@ use std::path::PathBuf;
 use std::path::Path;
 
 use anyhow::Result;
-use unicode_normalization::UnicodeNormalization;
 
 use crate::facts::Facts;
-use crate::manifest::{Manifest, Removed, Song};
+use crate::manifest::{Manifest, Note, Removed, Song};
 use crate::provider::Provider;
 use crate::providers::ProviderRules;
 use crate::reconcile;
@@ -114,6 +120,18 @@ impl View {
     #[must_use]
     pub fn first(&self, field: &str) -> String {
         self.values(field).into_iter().next().unwrap_or_default()
+    }
+
+    /// How the song is named when it is removed: as in messages, its
+    /// title and artist kept apart too.
+    #[must_use]
+    pub fn note(&self) -> Note {
+        let field = |name: &str| Some(self.first(name)).filter(|v| !v.is_empty());
+        Note {
+            text: self.name(),
+            title: field("title"),
+            artist: field("artist"),
+        }
     }
 
     /// How a song is named in messages.
@@ -216,16 +234,26 @@ pub fn view_of(
             .and_then(|x| x.quality.as_ref())
             .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
     });
+    // A tag one of the song's sources offers is given, whatever muman
+    // writes for it: a measured gain stands in for the one a file holds.
+    let offered = |k: &str| {
+        song.sources.iter().filter_map(|s| facts.get(s)).any(|f| {
+            Field::ALL
+                .iter()
+                .any(|field| field.vorbis() == k && f.tags.contains_key(field))
+        })
+    };
     let given = r
         .plan
         .tags
         .iter()
         .map(|(k, _)| k)
         .filter(|k| {
-            !r.why
-                .tags
-                .iter()
-                .any(|t| &t.key == *k && crate::resolve::derived(&t.from))
+            offered(k)
+                || r.why
+                    .tags
+                    .iter()
+                    .any(|t| &t.key == *k && !crate::resolve::derived(&t.from))
         })
         .cloned()
         .collect();
@@ -278,18 +306,22 @@ pub fn source_view(key: &SourceKey, facts: Option<&Facts>) -> View {
     }
 }
 
-/// A removed song as a query reads it: its keys, and its note as its
-/// title.
+/// A removed song as a query reads it: with the tags it was given, the
+/// title and artist it was removed as, and the tags its sources offer,
+/// so `album:` finds it as it found the song listed and `artist:` once
+/// its sources are purged; titled by its note when nothing else names
+/// it.
 #[must_use]
-/// A removed song as a query reads it: titled by its note, with the
-/// tags it was given and those its sources offer, so `album:` finds it
-/// as it found the song listed.
 pub fn removed_view(removed: &Removed, state: &State) -> View {
     let mut tags: Vec<(String, Vec<String>)> = Vec::new();
+    let named = [("TITLE", &removed.title), ("ARTIST", &removed.artist)]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.to_string(), vec![v.clone()?])));
     let given = removed
         .tags
         .iter()
-        .map(|(k, v)| (tags::vorbis_key(k), v.clone()));
+        .map(|(k, v)| (tags::vorbis_key(k), v.clone()))
+        .chain(named);
     let offers = removed.sources.iter().find_map(|k| state.facts.get(k));
     let offered = Field::ALL.iter().filter_map(|field| {
         let offer = offers.and_then(|f| f.tags.get(field))?;
@@ -340,24 +372,11 @@ impl QueryMatch for Query {
     }
 
     fn check_fields(&self, views: &[View]) -> Result<()> {
-        for term in &self.0 {
-            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
-                &term.test
-            else {
-                continue;
-            };
-            let name = tags::vorbis_key(field);
-            let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
-            if !is_field(field) && !had {
-                return Err(crate::errors::Refused(format!(
-                    "No song has a field `{field}`: a tag such as title, artist, album, \
-                     album_artist, genre or date, or one of {}",
-                    DERIVED.join(", ")
-                ))
-                .into());
-            }
+        let had = |name: &str| views.iter().any(|v| v.tags.iter().any(|(k, _)| k == name));
+        match self.unknown_field(had) {
+            Some(field) => Err(crate::errors::Refused(crate::terms::no_field(field)).into()),
+            None => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -404,19 +423,19 @@ fn holds(term: &Test, view: &View) -> bool {
     let any =
         |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
     match term {
-        Test::Word(w) => {
-            ["title", "artist", "album", "album_artist"]
-                .iter()
-                .any(|f| any(f, &|v| v.contains(w.as_str())))
-                || view.keys.iter().any(|k| names_key(k, w))
+        Test::Word(text) => {
+            let word = |w: &str| {
+                ["title", "artist", "album", "album_artist"]
+                    .iter()
+                    .any(|f| any(f, &|v| v.contains(w)))
+                    || view.keys.iter().any(|k| names_key(k, w))
+            };
+            view.keys.iter().any(|k| names_key(k, text)) || text.split_whitespace().all(word)
         }
         Test::Key(k) => view.keys.contains(k),
         Test::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
         Test::Equals(f, text) => any(f, &|v| v == text),
-        Test::Matches(f, re) => view
-            .values(f)
-            .iter()
-            .any(|v| re.is_match(&v.nfc().collect::<String>())),
+        Test::Matches(f, re) => view.values(f).iter().any(|v| re.is_match(&fold(v))),
         Test::Is(c) => c.holds(view),
     }
 }
@@ -446,12 +465,13 @@ impl Holds for Closed {
     }
 }
 
-/// The key schemes a query treats as keys: `manual`, every site, alias
-/// and extractor `[sites]` names, built in or the song list's, as keys
-/// were once named, and every site the song list names.
+/// The key schemes a query treats as keys: every scheme that names no
+/// site ([`crate::source::schemes`]), every site, alias and extractor
+/// `[sites]` names, built in or the song list's, as keys were once
+/// named, and every site the song list names.
 #[must_use]
 pub fn extractors(manifest: &Manifest) -> BTreeSet<String> {
-    let mut found: BTreeSet<String> = ["manual".to_string()].into();
+    let mut found: BTreeSet<String> = crate::source::schemes().map(str::to_string).collect();
     found.extend(crate::sites::built_in().schemes().map(str::to_string));
     found.extend(manifest.settings.sites.schemes().map(str::to_string));
     let keys = manifest
@@ -489,10 +509,7 @@ pub fn format(template: &str, view: &View) -> String {
             view.values(field)
         };
         // One song a line, whatever its values hold, a file's name too.
-        let flat: Vec<String> = values
-            .iter()
-            .map(|v| v.replace(['\t', '\n', '\r'], " "))
-            .collect();
+        let flat: Vec<String> = values.iter().map(|v| tags::escaped(v)).collect();
         out.push_str(&flat.join("; "));
         rest = &after[close + 1..];
     }
@@ -547,6 +564,47 @@ mod tests {
             let q = query(&[term]);
             assert!(q.matches(&composed) && q.matches(&decomposed), "{term}");
         }
+    }
+
+    #[test]
+    fn a_regex_is_matched_against_the_field_folded() {
+        let composed = view("Caf\u{e9} Noir", "Lumo Fenn", "manual:a.flac");
+        let plain = view("Cafe Noir", "Lumo Fenn", "manual:b.flac");
+        for term in [
+            "title::^cafe",
+            "title::^caf\u{e9}",
+            "title::^CAFE\\s",
+            "title::^cafe\u{301}",
+        ] {
+            let q = query(&[term]);
+            assert!(q.matches(&composed) && q.matches(&plain), "{term}");
+        }
+        assert!(
+            !query(&["title::(?-i)\\p{Lu}afe"]).matches(&plain),
+            "lower-cased"
+        );
+        let quoted = view("Don\u{2019}t Wait", "Lumo Fenn", "manual:c.flac");
+        assert!(query(&["title::don't"]).matches(&quoted));
+    }
+
+    #[test]
+    fn bare_text_with_spaces_is_each_of_its_words() {
+        let v = view(
+            "Paper Comets",
+            "Marlo Venn",
+            "manual:Marlo Venn/02 Tide.flac",
+        );
+        for term in ["comets paper", "venn paper", "  paper   comets "] {
+            assert!(query(&[term]).matches(&v), "{term}");
+        }
+        assert!(!query(&["paper lantern"]).matches(&v));
+        assert!(query(&["^paper lantern"]).matches(&v));
+        assert!(query(&["02 tide.flac"]).matches(&v), "a file's name whole");
+        assert!(
+            !query(&["title:\"comets paper\""]).matches(&v),
+            "a field's text is a phrase"
+        );
+        assert!(Query::parse(&["  ".to_string()], &BTreeSet::new()).is_err());
     }
 
     #[test]
@@ -612,6 +670,25 @@ mod tests {
             "from::you",
         ] {
             assert!(Query::parse(&[bad.to_string()], &none).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn every_key_a_song_can_list_names_it_in_a_query() {
+        let home = tempfile::tempdir().unwrap();
+        let schemes = extractors(&Manifest::load(home.path()).unwrap());
+        for key in [
+            "manual:Tide/a.flac",
+            "torrent:0123456789abcdef0123456789abcdef01234567/Glass Hours/01.flac",
+            "lrclib:123",
+            "musicbrainz:00000000-0000-0000-0000-000000000001",
+            "coverart:00000000-0000-0000-0000-000000000002",
+            "youtube.com:vid00000001",
+        ] {
+            let q = Query::parse(&[key.to_string()], &schemes).unwrap_or_else(|e| panic!("{e:#}"));
+            assert!(q.names_keys(), "{key}");
+            let v = view("Tide", "Ada Quill", key);
+            assert!(q.matches(&v), "{key}");
         }
     }
 
@@ -730,7 +807,7 @@ mod tests {
         let odd = view("Tide", "Ada Quill", "manual:Ada\nQuill/02 Tide.flac");
         assert_eq!(
             format("{key}\t{title}", &odd),
-            "manual:Ada Quill/02 Tide.flac\tTide"
+            "manual:Ada\\nQuill/02 Tide.flac\tTide"
         );
     }
 }

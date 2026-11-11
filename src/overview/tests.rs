@@ -58,9 +58,15 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
     songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let mut out = Vec::new();
     assert!(
-        reconcile(&fake(), &dirs, Options::default(), None, &mut out)
-            .unwrap()
-            .ok
+        reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            crate::history::Recording::Test,
+            &mut out
+        )
+        .unwrap()
+        .ok
     );
     let text = info_text(&dirs, false);
     assert_eq!(value(&text, "Songs"), "2 (0 on 0 album(s), 2 single(s))");
@@ -81,9 +87,15 @@ fn an_emptied_file_is_to_write_as_status_says() {
     songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let mut out = Vec::new();
     assert!(
-        reconcile(&fake(), &dirs, Options::default(), None, &mut out)
-            .unwrap()
-            .ok
+        reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            crate::history::Recording::Test,
+            &mut out
+        )
+        .unwrap()
+        .ok
     );
     let file = crate::store::walk(&dirs.library, usize::MAX)
         .unwrap()
@@ -102,9 +114,15 @@ fn a_library_moved_counts_as_a_sync_would_take_it() {
     songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let mut out = Vec::new();
     assert!(
-        reconcile(&fake(), &dirs, Options::default(), None, &mut out)
-            .unwrap()
-            .ok
+        reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            crate::history::Recording::Test,
+            &mut out
+        )
+        .unwrap()
+        .ok
     );
     let moved = Dirs {
         library: dir.path().join("elsewhere"),
@@ -135,7 +153,14 @@ fn a_library_moved_counts_as_a_sync_would_take_it() {
         dry_run: true,
         ..Options::default()
     };
-    let _ = reconcile(&fake(), &moved, options, None, &mut said).unwrap();
+    let _ = reconcile(
+        &fake(),
+        &moved,
+        options,
+        crate::history::Recording::DryRun,
+        &mut said,
+    )
+    .unwrap();
     let said = crate::ui::plain(&String::from_utf8(said).unwrap());
     assert!(said.contains("1 left alone, 1 up to date"), "{said}");
 }
@@ -170,9 +195,15 @@ fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
     songs(&dirs, &["aaaaaaaaaaa"]);
     let mut out = Vec::new();
     assert!(
-        reconcile(&fake(), &dirs, Options::default(), None, &mut out)
-            .unwrap()
-            .ok
+        reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            crate::history::Recording::Test,
+            &mut out
+        )
+        .unwrap()
+        .ok
     );
     songs(&dirs, &["bbbbbbbbbbb", "ccccccccccc"]);
     let text = info_text(&dirs, true);

@@ -57,6 +57,11 @@
 //! lock at once. Windows deletes a file still open only once the last
 //! handle closes, refusing to open it meanwhile, which a run that locks
 //! it waits out as [`rename`] waits out a held file.
+//!
+//! On a folder muman may not write, as a home on a read-only mount, the
+//! lock file an earlier run left is opened read only and locked so,
+//! which every system allows, so a command that only reads, as `status`,
+//! still runs there; one that writes fails at its first write.
 
 use std::fs::{File, TryLockError};
 use std::io::{self, Write};
@@ -205,6 +210,14 @@ fn busy(e: &io::Error) -> bool {
     // ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION, the two a held
     // file is refused with.
     cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32))
+}
+
+/// Whether `e` says a folder may not be written: a read-only filesystem,
+/// or on Unix a folder of no write permission. Windows says a file being
+/// deleted is denied too, which [`retry`] waits out instead.
+fn unwritable(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::ReadOnlyFilesystem
+        || (cfg!(unix) && e.kind() == io::ErrorKind::PermissionDenied)
 }
 
 fn retry(mut op: impl FnMut() -> io::Result<()>) -> io::Result<()> {
@@ -365,17 +378,20 @@ impl Lock {
         }
     }
 
-    /// Lock `path`, guarding `dir`.
+    /// Lock `path`, guarding `dir`; read only where `dir` may not be
+    /// written and an earlier run left the file.
     fn at(path: &Path, dir: &Path) -> Result<Self> {
         let mut opened = None;
         retry(|| {
-            opened = Some(
-                File::options()
-                    .create(true)
-                    .truncate(false)
-                    .write(true)
-                    .open(path)?,
-            );
+            let writing = File::options()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path);
+            opened = Some(match writing {
+                Err(e) if unwritable(&e) && path.is_file() => File::open(path)?,
+                writing => writing?,
+            });
             Ok(())
         })
         .with_context(|| format!("locking {}", dir.display()))?;
@@ -526,6 +542,15 @@ mod tests {
 
     fn name(s: &str) -> Name {
         Name::new(s).unwrap()
+    }
+
+    #[test]
+    fn a_read_only_filesystem_is_unwritable_and_a_held_file_is_not() {
+        let read_only = io::Error::from(io::ErrorKind::ReadOnlyFilesystem);
+        assert!(unwritable(&read_only));
+        assert!(!unwritable(&io::Error::from(io::ErrorKind::NotFound)));
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(unwritable(&denied), cfg!(unix));
     }
 
     #[test]

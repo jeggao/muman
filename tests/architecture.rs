@@ -1,6 +1,7 @@
 //! The architecture the code keeps, checked over its source: where files
-//! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, where audio is mixed, where
+//! are changed, what records a save of the song list, which state lives
+//! for the whole process, where sites are named, which loop fits songs
+//! into a size, where audio is mixed, where
 //! a file beside a song is named, where ffmpeg is given a file to read,
 //! where what the user gives is walked and copied, where a provider is
 //! asked and named, and where text is written to a terminal. Each rule
@@ -238,6 +239,10 @@ const STATICS: &[(&str, &str)] = &[
         "kill.rs",
         "the kills and guarded libraries tests arm, compiled for tests alone",
     ),
+    (
+        "errors.rs",
+        "whether a thread catches a panic, and what the one caught said, for its error",
+    ),
 ];
 
 #[test]
@@ -318,6 +323,65 @@ fn the_song_list_is_written_by_the_manifest_and_undo_alone() {
         }
     }
     assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+/// Every recorder a save of the song list may take, where it is made,
+/// and why it records the save: a save takes one, so none is made
+/// outside a run but these.
+const RECORDERS: &[(&str, &str, &str)] = &[
+    (
+        "history.rs",
+        "Run",
+        "a run, begun and its record written before the save",
+    ),
+    (
+        "history.rs",
+        "Recording<'_>",
+        "a sync's run, or the undo's, which it saves as",
+    ),
+    (
+        "history.rs",
+        "Undone",
+        "the undo whose sync saves, its record marked and the runs lock held",
+    ),
+    (
+        "manifest.rs",
+        "Unrecorded",
+        "the list a new home starts with, before its first run, and tests",
+    ),
+];
+
+/// Where a save may take `Unrecorded`, which no run records, and why. A
+/// dry run's sync takes none: its recorder refuses a save.
+const UNRECORDED: &[(&str, &str)] = &[(
+    "manifest.rs",
+    "`start`, the list a new home starts with, before its first run",
+)];
+
+#[test]
+fn the_song_list_is_saved_only_as_a_begun_run_records() {
+    let mut made = Vec::new();
+    let mut unrecorded = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &["Recorder for "]) {
+            let of = line.split("Recorder for ").nth(1).unwrap_or_default();
+            made.push((file.clone(), of.trim_end_matches(" {").to_string()));
+        }
+        let uses = lines_with(&text, &["Unrecorded"])
+            .into_iter()
+            .filter(|l| !l.contains("struct ") && !l.contains("Recorder for "))
+            .count();
+        if uses > 0 {
+            unrecorded.push(file);
+        }
+    }
+    let allowed: Vec<(String, String)> = RECORDERS
+        .iter()
+        .map(|(f, of, _)| ((*f).to_string(), (*of).to_string()))
+        .collect();
+    assert_eq!(made, allowed, "recorders of a save, in place of a run");
+    let allowed: Vec<&str> = UNRECORDED.iter().map(|(f, _)| *f).collect();
+    assert_eq!(unrecorded, allowed, "saves no run records");
 }
 
 /// Every file that may mix or resample audio, and why. Anywhere else it
@@ -830,6 +894,7 @@ const WRITES: &[(&str, usize, &str)] = &[
     ),
     ("atomic.rs", 2, "a whole file's bytes, and a private file's"),
     ("ogg.rs", 1, "an Opus header's page, in its file"),
+    ("flac.rs", 1, "a STREAMINFO's sample count, in its file"),
     (
         "render.rs",
         3,

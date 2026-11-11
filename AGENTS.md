@@ -93,7 +93,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   analysis.rs       the whole of a source's audio, one decode, every analyzer
   integrity.rs      whether a source's audio is all there: cut off or missing
-  loudness.rs       EBU R128 loudness and a song's gains
+  loudness.rs, dynamics.rs   EBU R128 loudness and a song's gains; how high its peaks stand
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
   detect.rs         values that say nothing of a song: placeholders and watermarks
   genres.rs         the genres a MusicBrainz record gives, spelled as genres/spelled.txt says
@@ -104,7 +104,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names, through the path template
   quality.rs, align.rs   audio and picture measures; audio compared by loudness envelopes
-  codec.rs, ogg.rs  output codecs: names, containers, ffmpeg arguments; an Opus header's gain
+  codec.rs, ogg.rs, flac.rs   output codecs, their arguments; an Opus header's gain; a FLAC's length
   record.rs         the MusicBrainz record kept, and the answer it is read from
 crates/muman-core/src/   the lowest layer, which every other module builds on
   units.rs          sizes, bitrates, times, frequencies, shares (uom)

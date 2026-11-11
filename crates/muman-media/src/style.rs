@@ -112,7 +112,7 @@ impl Style {
         match self.featured {
             Featured::Title if !in_credit.is_empty() => {
                 let missing: Vec<&str> = (in_credit.iter())
-                    .filter(|n| !in_title.iter().any(|t| t.eq_ignore_ascii_case(n)))
+                    .filter(|n| !in_title.iter().any(|t| crate::similar::caseless(t, n)))
                     .copied()
                     .collect();
                 if !missing.is_empty() {
@@ -139,7 +139,7 @@ impl Style {
             }
             Featured::Artist if !in_title.is_empty() => {
                 let missing: Vec<&str> = (in_title.iter())
-                    .filter(|n| !credit.names.iter().any(|c| c.eq_ignore_ascii_case(n)))
+                    .filter(|n| !credit.names.iter().any(|c| crate::similar::caseless(c, n)))
                     .map(String::as_str)
                     .collect();
                 if !missing.is_empty() {

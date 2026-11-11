@@ -394,6 +394,56 @@ fn wider_bandwidth_wins_between_clean_recordings_and_a_transcode_cannot_fake_it(
     assert_eq!(r.plan.audio.key, opus, "a 16 kHz FLAC is a lossy transcode");
 }
 
+#[test]
+fn a_copy_clipped_louder_never_beats_the_clean_lossless_copy_by_its_splatter() {
+    let (clean, clipped, mp3) = (
+        manual("clean.flac"),
+        manual("loud.flac"),
+        manual("loud.mp3"),
+    );
+    let clips = |mut f: Facts, share: f64| {
+        let q = f.audio.as_mut().unwrap().quality.as_mut().unwrap();
+        q.clipping = share;
+        f
+    };
+    let facts = BTreeMap::from([
+        (clean.clone(), audio("flac", 20.3)),
+        (clipped.clone(), clips(audio("flac", 21.2), 1.2e-3)),
+        (mp3.clone(), audio("mp3", 20.3)),
+    ]);
+    let alignments = both(&facts, &clean, &clipped, 0, 0.99).to_vec();
+    for order in [[&clipped, &clean], [&clean, &clipped]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, clean, "{}", r.why.audio);
+    }
+    let r = run(&song(&[clipped.clone(), clean.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, clipped, "not known to be one recording");
+    let alignments = both(&facts, &mp3, &clipped, 0, 0.99).to_vec();
+    let r = run(&song(&[mp3, clipped.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, clipped, "a lossy copy caps no bandwidth");
+}
+
+#[test]
+fn a_lossy_copy_never_counts_wider_than_a_lossless_copy_of_its_recording() {
+    let (flac, opus, fake) = (manual("cd.flac"), manual("cd.opus"), manual("fake.flac"));
+    let facts = BTreeMap::from([
+        (flac.clone(), audio("flac", 20.3)),
+        (opus.clone(), audio("opus", 20.6)),
+        (fake.clone(), audio("flac", 18.6)),
+    ]);
+    let mut alignments = both(&facts, &flac, &opus, 0, 0.99).to_vec();
+    alignments.extend(both(&facts, &fake, &opus, 0, 0.99));
+    for order in [[&opus, &flac], [&flac, &opus]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, flac, "{}", r.why.audio);
+    }
+    let r = run(&song(&[fake, opus.clone()]), &facts, &alignments);
+    assert_eq!(
+        r.plan.audio.key, opus,
+        "a FLAC made from lossy audio bounds nothing"
+    );
+}
+
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
 /// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
 fn cut(
@@ -489,6 +539,25 @@ fn a_pin_overrides_the_measures() {
     assert_eq!(r.plan.audio.key, yt("vvvvvvvvvvv"));
     assert_eq!(r.why.audio, "pinned");
     assert!(r.plan.lyrics.is_none());
+}
+
+#[test]
+fn a_pin_to_a_source_that_holds_none_is_a_doubt() {
+    let (mut song, mut facts, alignments) = release_and_video();
+    let video = yt("vvvvvvvvvvv");
+    let f = facts.get_mut(&video).unwrap();
+    f.covers.clear();
+    f.lyrics.clear();
+    song.cover = Some(video.clone());
+    song.lyrics = Some(LyricsPin::From(video.clone()));
+    let r = run(&song, &facts, &alignments);
+    assert!(r.plan.cover.is_none() && r.plan.lyrics.is_none());
+    let pins: Vec<String> = (r.why.doubts.iter())
+        .filter_map(Doubt::pinned_to_nothing)
+        .collect();
+    assert_eq!(pins.len(), 2, "{pins:?}");
+    assert!(pins[0].starts_with(&format!("no cover: pinned to {video}")));
+    assert!(pins[1].starts_with(&format!("no lyrics: pinned to {video}")));
 }
 
 /// Facts of lossless audio cut at `khz`, `rate` Hz, declaring `bits` and
@@ -1729,6 +1798,7 @@ fn a_file_cut_off_is_encoded_however_it_is_coded() {
         method: crate::integrity::METHOD.into(),
         value: Some(crate::integrity::Measure {
             said: Some(40.0),
+            guessed: false,
             decoded: 22.0,
             span: Some((0.0, 22.0)),
             holes: 0.0,
@@ -1757,6 +1827,7 @@ fn measured(mut f: Facts, said: f64, span: f64, decoded: f64) -> Facts {
         method: crate::integrity::METHOD.into(),
         value: Some(crate::integrity::Measure {
             said: Some(said),
+            guessed: false,
             decoded,
             span: Some((0.0, span)),
             holes: span - decoded,
@@ -1794,6 +1865,46 @@ fn audio_missing_from_a_source_ranks_it_below_an_intact_one() {
         "encoding mends no hole"
     );
     assert!(r.why.audio.contains("11.0 s missing"), "{:?}", r.why);
+}
+
+#[test]
+fn a_copy_lacking_less_than_a_step_ranks_below_its_whole_copy_aligned_or_not() {
+    let holed = manual("a-holed.flac");
+    let cut = manual("a-cut.flac");
+    let whole = manual("b-whole.flac");
+    let facts = BTreeMap::from([
+        (
+            holed.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 198.1),
+        ),
+        (
+            cut.clone(),
+            measured(audio("flac", 22.0), 200.0, 198.5, 198.5),
+        ),
+        (
+            whole.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 200.0),
+        ),
+    ]);
+    let mut aligned = both(&facts, &holed, &whole, 0, 0.95).to_vec();
+    aligned.extend(both(&facts, &cut, &whole, 0, 0.95));
+    for damaged in [&holed, &cut] {
+        let s = song(&[damaged.clone(), whole.clone()]);
+        for alignments in [&[][..], &aligned[..]] {
+            let r = run(&s, &facts, alignments);
+            assert_eq!(r.plan.audio.key, whole, "{:?}", r.why);
+        }
+    }
+    let r = run(
+        &song(&[holed.clone(), cut.clone(), whole.clone()]),
+        &facts,
+        &[],
+    );
+    assert_eq!(
+        r.plan.audio.key, whole,
+        "outvoted by no damaged copy: {:?}",
+        r.why
+    );
 }
 
 #[test]
@@ -2573,7 +2684,7 @@ fn a_plan_s_loudness_tags_follow_its_format() {
     use crate::loudness::{Apply, Gains, Level};
     let plan = Plan {
         folder: None,
-        version: 3,
+        version: render_version(Codec::Flac),
         format: Format::Copy { codec: Codec::Flac },
         audio: AudioRef {
             key: SourceKey::youtube("vid00000001"),
@@ -2982,8 +3093,8 @@ fn every_format() -> Vec<Format> {
 /// Digests of the stored form and the plan key of a plan with every part
 /// in [`every_format`], as the last release kept them.
 const KEPT: (&str, &str) = (
-    "dda4384a5663bc870df337ef76afdaac12029381f3157e9d0ee42c89385bd1b5",
-    "a48d1582c48ae597bfdf336f9ecbe9105b31b7b99e0e6a234139fd592acf3ea9",
+    "6cc78d74a5cf6e7721b2dbf33b84dac4de68b5b6b825cd7cb45e3c045ff68e43",
+    "a46ea39b7888cd2c124745e8cc91d9dbc1e70b0d8868e5240c8542c63d739700",
 );
 
 #[test]
@@ -3137,6 +3248,31 @@ fn a_watermark_and_a_placeholder_say_nothing_and_status_names_them() {
 }
 
 #[test]
+fn a_placeholder_typography_would_respell_is_dropped_as_status_says() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Real Title"], true);
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    tag(&mut f, Field::Album, &["[non-album tracks]"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_knowing(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &Known::default(),
+        &Settings::default(),
+    );
+    assert_eq!(
+        r.why.dropped,
+        ["ALBUM “[non-album tracks]” from manual:a.flac: a placeholder"]
+    );
+    assert_eq!(
+        written(&r, Field::Album),
+        Some(&["Real Title".to_string()][..]),
+        "a single, named for its title"
+    );
+}
+
+#[test]
 fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
     let (file, upload) = (manual("a.flac"), yt("vid00000001"));
     let mut f = audio("flac", 22.0);
@@ -3279,6 +3415,62 @@ fn values_alike_spell_as_the_source_believed_first() {
         title(clean::Believe::Sources).as_deref(),
         Some("Lanterns Ovr the Harbor"),
         "the first of `sources`, as before"
+    );
+}
+
+#[test]
+fn a_value_alike_but_for_case_is_spelled_as_most_sources_spell_it_in_any_order() {
+    let spelled = |spellings: [(&str, &str); 3]| {
+        let keys = [manual("a.flac"), manual("b.flac"), manual("c.flac")];
+        let mut facts = BTreeMap::new();
+        for (key, (title, artist)) in keys.iter().zip(spellings) {
+            let mut f = audio("flac", 22.0);
+            f.rev = key.to_string();
+            tag(&mut f, Field::Title, &[title], true);
+            tag(&mut f, Field::Artist, &[artist], true);
+            facts.insert(key.clone(), f);
+        }
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let made: BTreeSet<(PathBuf, Option<String>, Option<String>)> = orders
+            .iter()
+            .map(|order| {
+                let s = song(&order.map(|i| keys[i].clone()));
+                let r = run(&s, &facts, &[]);
+                (
+                    r.stem.clone(),
+                    value(&r, Field::Title),
+                    value(&r, Field::Artist),
+                )
+            })
+            .collect();
+        assert_eq!(made.len(), 1, "{made:?}");
+        made.into_iter().next().unwrap()
+    };
+    let (_, title, artist) = spelled([
+        ("night ferry", "marlo venn"),
+        ("Night Ferry", "Marlo Venn"),
+        ("Night Ferry", "Marlo Venn"),
+    ]);
+    assert_eq!(
+        (title.as_deref(), artist.as_deref()),
+        (Some("Night Ferry"), Some("Marlo Venn"))
+    );
+    let (_, title, _) = spelled([
+        ("NIGHT FERRY", "Marlo Venn"),
+        ("night ferry", "Marlo Venn"),
+        ("Night Ferry", "Marlo Venn"),
+    ]);
+    assert_eq!(
+        title.as_deref(),
+        Some("Night Ferry"),
+        "a tie, as an album's"
     );
 }
 
@@ -3530,6 +3722,25 @@ fn audio_its_measures_rank_alike_comes_from_its_album_s_folder() {
         "{}",
         r.why.audio
     );
+}
+
+#[test]
+fn a_lossless_copy_beats_its_album_s_lossy_rip_of_the_same_audio() {
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{}/{p}", "a".repeat(40))).unwrap();
+    let (rip, copy) = (
+        key("Glass Weather/01 Song.mp3"),
+        key("Harbor Nights/01 Song.flac"),
+    );
+    let (mut f1, mut f2) = (audio("mp3", 22.0), audio("flac", 22.0));
+    f1.rev = "1".into();
+    f2.rev = "2".into();
+    let facts = BTreeMap::from([(rip.clone(), f1), (copy.clone(), f2)]);
+    let pick = crate::album::Pick {
+        audio_from: crate::album::origin_of(&rip),
+        ..crate::album::Pick::default()
+    };
+    let r = run_picked(&song(&[rip, copy.clone()]), &facts, &pick);
+    assert_eq!(r.plan.audio.key, copy, "{}", r.why.audio);
 }
 
 /// A song's file, sung in `language`, titled `title`, and a lyrics file
@@ -3802,20 +4013,32 @@ fn a_song_moved_to_another_release_takes_its_fields_in_place_of_its_record_s() {
     );
 }
 
-/// Facts of a FLAC whose true peak is `peak` of full scale and whose
+/// Facts of a FLAC whose peaks reach `peak` of full scale and whose
 /// blocks are all as loud, `momentary` giving the histogram as stored.
 fn mastered(rev: &str, peak: f64, momentary: &str) -> Facts {
-    let mut f = audio("flac", 22.0);
+    encoded(rev, "flac", peak, peak, momentary)
+}
+
+/// [`mastered`] in `codec`, its true peak `true_peak`.
+fn encoded(rev: &str, codec: &str, peak: f64, true_peak: f64, momentary: &str) -> Facts {
+    let mut f = audio(codec, 22.0);
     f.rev = rev.into();
     let measure = serde_json::json!({
         "momentary": momentary,
         "short_term": "",
-        "true_peak": peak,
-        "sample_peak": peak,
+        "true_peak": true_peak,
+        "sample_peak": true_peak.min(1.0),
     });
-    f.audio.as_mut().unwrap().analysis.loudness = Some(crate::analysis::Measured {
+    let analysis = &mut f.audio.as_mut().unwrap().analysis;
+    analysis.loudness = Some(crate::analysis::Measured {
         method: crate::loudness::METHOD.into(),
         value: Some(serde_json::from_value(measure).unwrap()),
+    });
+    analysis.dynamics = Some(crate::analysis::Measured {
+        method: crate::dynamics::METHOD.into(),
+        value: Some(crate::dynamics::Measure {
+            peak_db: 20.0 * peak.log10(),
+        }),
     });
     f
 }
@@ -3850,6 +4073,26 @@ fn a_master_squeezed_louder_loses_only_where_dynamics_count() {
         "{}",
         r.why.audio
     );
+}
+
+#[test]
+fn a_lossy_copy_whose_codec_overshoots_ranks_as_its_lossless_master() {
+    let (lossless, lossy) = (manual("open.flac"), manual("open.opus"));
+    let facts = BTreeMap::from([
+        (lossless.clone(), mastered("flac", 0.5, OPEN)),
+        (lossy.clone(), encoded("opus", "opus", 0.5, 0.7, OPEN)),
+    ]);
+    let mut audio = Audio::default();
+    audio.pick.dynamics.enabled = true;
+    for order in [[&lossy, &lossless], [&lossless, &lossy]] {
+        let s = song(&order.map(Clone::clone));
+        let r = resolve(&Input {
+            audio: &audio,
+            ..defaults(&s, &facts)
+        })
+        .unwrap();
+        assert_eq!(r.plan.audio.key, lossless, "{}", r.why.audio);
+    }
 }
 
 #[test]
@@ -4184,6 +4427,69 @@ fn a_featured_artist_moved_into_a_band_s_credit_leaves_the_band_whole() {
         Some("Night Ferry (feat. Ada Quill)"),
         "the artist set by hand, nothing moved"
     );
+}
+
+#[test]
+fn a_featured_artist_moved_into_the_title_leaves_the_album_artist_filled_from_the_artist() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Night Ferry"], true);
+    tag(
+        &mut f,
+        Field::Artist,
+        &["Orrin Vale feat. Kiri Hoshino"],
+        true,
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let s = song(std::slice::from_ref(&key));
+    let r = resolve(&Input {
+        style: style::Style {
+            featured: style::Featured::Title,
+            ..style::Style::default()
+        },
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry (feat. Kiri Hoshino)")
+    );
+    assert_eq!(get(&r, "ARTIST").as_deref(), Some("Orrin Vale"));
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Orrin Vale"));
+}
+
+#[test]
+fn the_album_artist_filled_from_a_credit_leaves_out_who_it_features_in_every_style() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Rain"], true);
+    tag(
+        &mut f,
+        Field::Artist,
+        &["Marlo Venn feat. Kiri Hoshino"],
+        true,
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let s = song(std::slice::from_ref(&key));
+    for featured in [
+        style::Featured::Keep,
+        style::Featured::Artist,
+        style::Featured::Title,
+    ] {
+        let r = resolve(&Input {
+            style: style::Style {
+                featured,
+                ..style::Style::default()
+            },
+            ..defaults(&s, &facts)
+        })
+        .unwrap();
+        assert_eq!(
+            get(&r, "ALBUMARTIST").as_deref(),
+            Some("Marlo Venn"),
+            "{featured:?}"
+        );
+    }
 }
 
 #[test]

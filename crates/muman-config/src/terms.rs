@@ -74,6 +74,20 @@ impl Query {
             .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
     }
 
+    /// The first field a term names that is no tag muman knows and that
+    /// `had`, given its Vorbis name, says no song has: a misspelling, which
+    /// would match nothing, or negated, every song.
+    pub fn unknown_field(&self, had: impl Fn(&str) -> bool) -> Option<&str> {
+        self.0.iter().find_map(|term| {
+            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
+                &term.test
+            else {
+                return None;
+            };
+            (!is_field(field) && !had(&tags::vorbis_key(field))).then_some(field.as_str())
+        })
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -104,7 +118,7 @@ impl Query {
                 Some(rest) => (true, rest),
                 None => (false, raw.as_str()),
             };
-            if body.is_empty() {
+            if body.trim().is_empty() {
                 bail!("`{raw}` is an empty term");
             }
             let test = match body.split_once(':') {
@@ -130,7 +144,7 @@ impl Query {
                         bail!("`{raw}`: {field} takes a name, not a pattern");
                     }
                     if let Some(pattern) = rest.strip_prefix(':') {
-                        let re = RegexBuilder::new(pattern)
+                        let re = RegexBuilder::new(&fold_pattern(pattern))
                             .case_insensitive(true)
                             .build()
                             .with_context(|| format!("`{raw}`"))?;
@@ -155,11 +169,15 @@ impl Query {
 }
 
 /// `text` as a query compares it: lower case, in one Unicode form, its
-/// accents taken off, and the punctuation typography respells written
-/// plain, so `twenty-five` finds `Twenty‐Five`.
+/// accents taken off, the punctuation typography respells written
+/// plain, so `twenty-five` finds `Twenty‐Five`, and on one line, so
+/// `comment:"one two"` finds a comment of two lines.
 #[must_use]
 pub fn fold(text: &str) -> String {
-    let plain: String = text.chars().map(crate::clean::plain_punctuation).collect();
+    let plain: String = tags::joined(text)
+        .chars()
+        .map(crate::clean::plain_punctuation)
+        .collect();
     plain
         .nfd()
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
@@ -167,6 +185,33 @@ pub fn fold(text: &str) -> String {
         .to_lowercase()
         .nfc()
         .collect()
+}
+
+/// A regular expression as [`fold`] folds the text it is matched
+/// against, its accents taken off and its typography written plain, its
+/// case kept: lower-cased, `\D` would read as `\d`, and the pattern is
+/// matched ignoring case anyway.
+fn fold_pattern(pattern: &str) -> String {
+    let plain: String = pattern
+        .chars()
+        .map(crate::clean::plain_punctuation)
+        .collect();
+    plain
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .nfc()
+        .collect()
+}
+
+/// Why a query naming `field`, as [`Query::unknown_field`] finds one, is
+/// refused.
+#[must_use]
+pub fn no_field(field: &str) -> String {
+    format!(
+        "No song has a field `{field}`: a tag such as title, artist, album, album_artist, \
+         genre or date, or one of {}",
+        DERIVED.join(", ")
+    )
 }
 
 #[must_use]
@@ -220,12 +265,7 @@ impl std::fmt::Display for Closed {
             Self::Lyrics(h) => write!(f, "lyrics:{}", have(h, "timed", "untimed")),
             Self::Cover(h) => write!(f, "cover:{}", have(h, "sharp", "small")),
             Self::From(p) => write!(f, "from:{p}"),
-            Self::Has(tag) => {
-                let name = Field::named(tag)
-                    .and_then(|x| x.aliases().first().copied())
-                    .map_or_else(|| tag.to_ascii_lowercase(), str::to_string);
-                write!(f, "has:{name}")
-            }
+            Self::Has(tag) => write!(f, "has:{}", tags::song_list_name(tag)),
         }
     }
 }

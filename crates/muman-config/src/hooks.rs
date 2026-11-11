@@ -3,7 +3,10 @@
 //! any file, an undo's files put back counting as written, and after
 //! the run has let go of the home and the library, so a hook may run
 //! muman there. Each is an argument list, run without a shell; its
-//! output is relayed and a failure is warned of, never fatal.
+//! output is relayed line by line as it comes, stdout and stderr in the
+//! order written, and a failure is warned of, never fatal. muman
+//! waits for the hook, not for a job it leaves running, as `mpc update &`
+//! does: once the hook exits, its pipes are let go (`runner`).
 //!
 //! A hook is given the library folder and how many files the run wrote,
 //! moved and removed, as `{library}`, `{written}`, `{moved}` and
@@ -22,7 +25,11 @@
 //! one: it changed a file muman had placed, outside the song's plan.
 //!
 //! Every hook is given [`HOOK_HOME`], and a muman it starts runs no
-//! hook, so a hook that syncs cannot run itself forever.
+//! hook, so a hook that syncs cannot run itself forever. It is given
+//! [`HOOK_LIBRARY`] too, the library its run wrote, which a muman it
+//! starts under another home refuses to write: not `MUMAN_LIBRARY`,
+//! which that muman reads as its own library's setting, so a hook that
+//! sets it to another library would be refused for that one.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -61,10 +68,10 @@ fn one(t: &toml_edit::Table) -> Hook {
     let run: Vec<String> = t
         .get("run")
         .and_then(Item::as_array)
-        .map(|a| {
+        .and_then(|a| {
             a.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
+                .map(|v| v.as_str().map(str::to_string))
+                .collect::<Option<_>>()
         })
         .unwrap_or_default();
     let refused = match t.get("on").and_then(Item::as_str) {
@@ -91,6 +98,10 @@ fn one(t: &toml_edit::Table) -> Hook {
 /// The variable a hook is given its run's home in, so a muman it starts
 /// runs no hook.
 pub const HOOK_HOME: &str = "MUMAN_HOOK_HOME";
+
+/// The variable a hook is given its run's library in, apart from
+/// `MUMAN_LIBRARY`, which a muman it starts may be given another in.
+pub const HOOK_LIBRARY: &str = "MUMAN_HOOK_LIBRARY";
 
 /// The hooks a command's runs made due, and what those runs changed,
 /// run once the command has let go of the home.
@@ -172,6 +183,12 @@ fn run<R: Runner, W: Write>(
             )
         })
         .chain([(HOOK_HOME.to_string(), home.to_string_lossy().into_owned())])
+        .chain(
+            values
+                .iter()
+                .filter(|(name, _)| *name == "library")
+                .map(|(_, v)| (HOOK_LIBRARY.to_string(), (*v).to_string())),
+        )
         .collect();
     for (n, hook) in hooks.iter().enumerate() {
         if let Some(why) = &hook.refused {
@@ -197,14 +214,14 @@ fn run<R: Runner, W: Write>(
             .iter()
             .map(|word| fill(word, values).into())
             .collect();
-        let mut lines = Vec::new();
+        let mut relayed = Ok(());
         let ran = runner.stream_env(&argv, &env, &mut |line| {
             let (Line::Out(l) | Line::Err(l)) = line;
-            lines.push(l.to_string());
+            if relayed.is_ok() {
+                relayed = crate::ui::relayed(out, &format!("hook: {l}"));
+            }
         });
-        for line in lines {
-            crate::ui::relayed(out, &format!("hook: {line}"))?;
-        }
+        relayed?;
         match ran {
             Ok(true) => {}
             Ok(false) => {
@@ -329,6 +346,7 @@ mod tests {
                 .map(|(_, v)| v.clone())
         };
         assert_eq!(var(HOOK_HOME).as_deref(), Some("home"));
+        assert_eq!(var(HOOK_LIBRARY).as_deref(), Some("lib"));
         assert_eq!(var("MUMAN_LIBRARY").as_deref(), Some("lib"));
         assert_eq!(var("MUMAN_WRITTEN").as_deref(), Some("2"));
     }
@@ -363,6 +381,7 @@ mod tests {
             "[[hook]]\non = \"sometimes\"\nrun = [\"x\"]\n",
             "[[hook]]\non = \"changed\"\nrun = []\n",
             "[[hook]]\non = \"changed\"\nrun = \"x y\"\n",
+            "[[hook]]\non = \"changed\"\nrun = [\"prog\", \"-n\", 5, true, \"x\"]\n",
             "[[hook]]\non = \"changed\"\nrun = [\"x\"]\nshell = true\n",
         ] {
             assert!(refused(bad).is_some(), "{bad}");

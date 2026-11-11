@@ -82,7 +82,8 @@ fn clear_read(store: &Store, keys: &BTreeSet<SourceKey>, state: &mut State) {
 /// Measure every source in `keys` the store holds whose facts are not
 /// current, into `state`, kept by the checkpoint as it goes and at the
 /// end. A file that cannot be read is said so, and is not read again
-/// until it changes.
+/// until it changes or muman reads its kind otherwise
+/// ([`facts::reading`]): a reading mended reads what it failed on.
 pub fn measure<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
@@ -99,7 +100,7 @@ pub fn measure<R: Runner, W: Write>(
             !state
                 .facts
                 .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()))
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
         })
         .collect();
     let moved = moved(&outdated, state);
@@ -111,10 +112,9 @@ pub fn measure<R: Runner, W: Write>(
     let now = state::now_secs();
     let (due, failed): (Vec<Located>, Vec<Located>) = outdated.into_iter().partition(|l| {
         how.retry
-            || state
-                .failures
-                .get(&l.key)
-                .is_none_or(|f| f.step != Step::Measure || f.due(Some(&l.rev()), now))
+            || state.failures.get(&l.key).is_none_or(|f| {
+                f.step != Step::Measure || f.due_to_read(&l.rev(), &facts::reading(l.kind), now)
+            })
     });
     if how.say_unread && !failed.is_empty() {
         crate::ui::warning(
@@ -209,10 +209,10 @@ fn unread<W: Write>(
         .map_err(Into::into);
     }
     crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;
-    state.record_failure(
+    state.record_unread(
         &located.key,
-        Step::Measure,
-        Some(located.rev()),
+        located.rev(),
+        facts::reading(located.kind),
         format!("{e:#}"),
     );
     Ok(())
@@ -254,6 +254,13 @@ pub(super) fn unkept_warning(key: &SourceKey, unkept: crate::facts::Unkept) -> S
             "{key}: a cue sheet beside it splits it into tracks, which muman does not; \
              it is one song"
         ),
+        crate::facts::Unkept::Picture => format!(
+            "{key}: a picture in it does not decode whole; \
+             it is no cover of its song"
+        ),
+        crate::facts::Unkept::Lyrics => {
+            format!("{key}: the lyrics beside it read as no text; its song has none from them")
+        }
     }
 }
 
@@ -521,20 +528,22 @@ pub(super) fn analyze<R: Runner, W: Write>(
     Ok(true)
 }
 
-/// Analyze the audio of every source in `keys` that `audio` mixes into
+/// Analyze the audio of every source in `keys` that `settings` mix into
 /// another layout, as mixed, where it is not already: into the layout of
-/// its best format, and under `[library] max_size` into the one it is
-/// lowered into, whether or not fitting lowers it, so what is measured
-/// never hangs on the fit. Returns whether any was.
-pub(super) fn analyze_mixes<R: Runner, W: Write>(
+/// its best format, and when songs are `fitted` into a size, as under
+/// `[library] max_size`, into the one it is lowered into, whether or not
+/// fitting lowers it, so what is measured never hangs on the fit. Returns
+/// whether any was.
+pub fn analyze_mixes<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
     keys: &BTreeSet<SourceKey>,
     state: &mut State,
-    settings: &crate::settings::Settings,
+    (settings, fitted): (&crate::settings::Settings, bool),
     out: &mut W,
 ) -> Result<bool> {
-    let mut wanted = crate::analysis::wanted(&settings.loudness);
+    let mut wanted =
+        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
     wanted.retain(|k| k.mixed());
     if wanted.is_empty() {
         return Ok(false);
@@ -553,7 +562,7 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
         })
         .flat_map(|(l, audio, rev)| {
             let best = crate::resolve::Format::encoded(audio, &settings.audio).mix();
-            let lowered = (settings.library.max_size.is_some())
+            let lowered = fitted
                 .then(|| crate::fit::lowered_mix(&audio.shape(), &settings.audio))
                 .flatten();
             let layouts: BTreeSet<crate::codec::Layout> = best.into_iter().chain(lowered).collect();
@@ -638,11 +647,20 @@ pub fn compare<R: Runner, W: Write>(
         }))
         .filter_map(|(k, e)| Some((k.clone(), e?)))
         .collect();
+    let lost = |k: &SourceKey| {
+        let damage = state.facts.get(k).and_then(Facts::damage);
+        damage.map_or(0, |d| d.lost_ms())
+    };
     let compared = parallel::map(&due, parallel::builds(), |(a, b, revs)| {
         let (ea, eb) = (envelopes.get(a)?, envelopes.get(b)?);
-        let found = align::align(ea, eb).unwrap_or(align::Alignment {
+        let lost = align::Lost {
+            upload_ms: lost(a),
+            track_ms: lost(b),
+        };
+        let found = align::align_lacking(ea, eb, lost).unwrap_or(align::Alignment {
             offset_ms: 0,
             stretch_ppm: 0,
+            stepped_ms: 0,
             score: 0.0,
             coverage: 0.0,
         });

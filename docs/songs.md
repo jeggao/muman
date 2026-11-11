@@ -9,8 +9,8 @@ made from its sources in [making the library](library.md).
 
 ## Queries
 
-`list`, `remove`, `restore`, `set`, `edit`, `status` and `duplicates`
-take a query. muman answers it from what earlier runs resolved, without
+`list`, `remove`, `restore`, `set`, `edit`, `review`, `status` and
+`duplicates` take a query. muman answers it from what earlier runs resolved, without
 fetching or measuring anything. Every term must match, and case,
 accents and how a character was composed are ignored, so `cafe`
 matches "Café":
@@ -22,7 +22,16 @@ matches "Café":
 | `artist:="Marlo Venn"` | A field equal to the text |
 | `title::^paper` | A field matching a regular expression |
 | `^lyrics:yes` | Songs the term does not match |
-| `youtube.com:vid00000001` | The song listing that key |
+| `youtube.com:vid00000001` | The song listing that key; any key `list --keys` writes, a torrent's or a record's too |
+
+Words quoted together, as `"paper comets"`, are still each a word of
+its own, so a script passing a query as one argument finds what the
+words typed apart find; all of them together may also name a file
+whole, as `"02 Tide.flac"`. A field's text is one phrase:
+`title:"paper comets"` finds that title, not "Comets of Paper". A
+regular expression is matched against the field lower-cased and with
+its accents taken off, and its own accents are taken off too, so
+`title::^cafe` and `title::^café` both find "Café Noir".
 
 A field is any tag, or one of these:
 
@@ -39,22 +48,34 @@ A field is any tag, or one of these:
 `lyrics`, `cover`, `from` and `has` compare their value whole, so
 `lyrics:timed` never matches "untimed". An album artist muman takes
 from the artist, or an album named after a single's title, is no tag
-for `has`. muman refuses a field that is no tag it knows and that no
-song has, so a misspelled field never quietly matches nothing, or every
-song when negated.
+for `has`. muman refuses a field, here or in a provider's `skip`, that
+is no tag it knows and that no song has, so a misspelled field never
+quietly matches nothing, or every song when negated.
 
 ## Changing songs
 
 - **`list`** writes each song's first key, artist, title and album,
   separated by tabs. `-f` takes a template of `{field}`s instead,
   `--keys` writes the first key alone, and `--removed` lists the songs
-  `remove` took out.
+  `remove` took out, each by the title and artist it had, which its
+  `[[removed]]` entry keeps once `--purge` deleted its sources.
 - **`set`** sets tags, pins and the lyrics offset. `genre=Folk` sets a
   tag, and given twice sets two values; `genre!` clears it so the
   sources' value shows. `audio=<key>` pins the audio to a source and
-  `audio!` unpins it; `lyrics=false` takes no lyrics. `set` refuses a
-  track or disc that is no number, a date that is none, and a ReplayGain
-  gain or peak.
+  `audio!` unpins it; `lyrics=false` takes no lyrics. A `cover` or
+  `lyrics` pinned to a source that holds none leaves the song without
+  it, which `sync`, `status` and `check` say. `release=<ID>` puts the
+  song on that MusicBrainz release of its recording, out of its
+  album's choice, and `release!` lets the album choose again. A field
+  a query reads that is no tag, as `from`, `has`, `key` or `path`, is
+  refused, as is a release ID that is none. `set` refuses a
+  track or disc that is no number or below 1, as they count from 1, a
+  date that is none, and a ReplayGain gain or peak. A field muman
+  knows, which names the song or holds a number, date or ID, is one
+  line: a line break or tab in it reads as a space, set by `set`,
+  `edit` or a tag file. A `comment`, or a tag muman does not know,
+  keeps its lines; `list`, `status` and `remove -n` show each break as
+  `\n`, and a query matches it as a space.
 - **`set` with a query alone**, on a terminal, steps through the songs
   field by field. Each field shows its value and where it came from;
   opened, it shows what each source offers, for you to keep, take, type
@@ -64,7 +85,9 @@ song when negated.
   on one album, you can set an album field, such as the genre or date,
   on the album itself, for its songs and any added later, which clears
   each song's own. Nothing is saved until "Review and save", which says
-  each change and asks.
+  each change and asks. A choice that leaves the songs as they are, as
+  an empty offset left empty, is no change: it is neither marked nor
+  counted, and a field set on the album counts once.
 - **`review`**, on a terminal, steps through each song whose picks
   `muman check` finds in doubt, a query limiting it, and shows why:
   a title won by the order of `sources`, a source set aside, two
@@ -73,7 +96,8 @@ song when negated.
   AcoustID found its recording on, its `release` key, which takes it
   out of its album's choice; or leave the contested field out of
   everything its torrent or channel offers, a `[[tags.from]]`. Each
-  change is saved as you make it, and `undo` takes back the run.
+  change is saved as you make it, and one `undo` takes back them all,
+  of a review stopped partway too.
 - **`edit`** opens the songs' entries in `$VISUAL`, else `$EDITOR`,
   else `vi`, or Notepad on Windows. Delete a table to remove its song.
   Move a key into another table to join two songs, or into a new table
@@ -100,8 +124,10 @@ muman set artist:="Marlo Venn" album="Lantern Weather"
 `undo` brings back the files a run wrote over or removed, and moves
 back the files it moved. A file you had changed comes back still yours.
 A file `add` copied into the sources goes: deleted while it holds what
-was copied, moved to the trash once changed. A hand edit to the song
-list is undone with the run that applied it.
+was copied, wherever you moved it within `sources/manual`, and moved to
+the trash once changed. A hand edit to the song list is undone with the
+run that applied it. A file of yours in `sources/manual` stays where you
+moved it, and the song list put back names it there.
 
 A run stopped partway, by a crash or Ctrl-C, can be undone, and so can
 an undo stopped partway. An undo ends with a sync, and until that sync
@@ -110,7 +136,9 @@ goes no further back, and `check` names it. An undo stopped before it
 put the song list back is finished by `undo` alone: until then a command
 that changes the library or the song list refuses, and says so.
 
-`undo` refuses when the song list changed since the run. After `remove
+`undo` refuses when the song list changed since a run that ended. One
+stopped partway may have saved it after its last record, so `undo` takes
+the song list back as it stands, and says so first. After `remove
 --purge`, it refuses until you take back from the trash the files it
 names. `[history]` sets how many runs are kept and how much space their
 files may take together. When space runs short the oldest runs' files
@@ -137,16 +165,19 @@ can put back, and asks by name, as "Remove 2 songs?":
 
 `-n` says what would change and stops. A query of keys alone takes
 every song it names. `edit` needs a terminal for its editor and takes
-no `-y`. A song changed meanwhile, by hand or by another run, refuses
+no `-y`. A question waiting for your answer holds no other run back,
+and a song changed meanwhile, by hand or by another run, refuses
 the save of `remove`, `restore` or `set NAME=VALUE`. `edit` opens again
-and says so: save again to apply your edit over the change, or quit
-without saving to keep it. `set` stepping through fields applies your
+on the songs as they are now, naming each field the change set, with
+your edits over them: a field you changed stays as you made it, any
+other shows the change. Save again to apply your edits, or quit
+without saving to keep the change alone. `set` stepping through fields applies your
 choices to the song as it is now.
 
 ## Giving songs lyrics, pictures and tags
 
-`muman add` also takes files that are no song, and gives each to the
-songs it belongs to:
+`muman add` also takes files that are no song, named or in a folder
+given, and gives each to the songs it belongs to:
 
 | File | Is |
 |---|---|
@@ -174,8 +205,8 @@ muman matches each file by the strongest evidence it shows:
 1. Its fields: an `.lrc`'s `[ti:]`, `[ar:]`, `[al:]` and `[length:]`,
    a tag file's, or its own name read as `03 - Artist - Title`,
    `Artist - Title` or `Title`.
-1. What it holds: lyrics against the words the song's lyrics sing, and
-   a picture against the song's covers by how they look, whatever its
+1. What it holds: lyrics against the words the song's lyrics sing,
+   from any source, a song file's own lyrics tag too, and a picture against the song's covers by how they look, whatever its
    size, compression or bars.
 
 Names are compared within their own script. Accents, case, width and
@@ -222,20 +253,21 @@ muman add album.cue rips/*.flac --new
 
 A picture that looks like the covers of more than three songs on more
 than one album is asked about rather than given to all. A cover given
-with songs from its folder goes to those songs. Several songs may list
-one picture of yours, but each song must still list a file of its own:
-a song whose every source another song lists too is refused. Lyrics
-belong to one song, so the same lyrics given to a second song are
-copied for it. A picture or `.lrc` moved within `sources/manual` is
-followed, as a song file is.
+with songs from its folder, or from the disc folders in it, goes to
+those songs. Several songs may list one picture of yours, but each song
+must still list a file of its own: a song whose every source another
+song lists too is refused. Lyrics belong to one song, so the same lyrics
+given to a second song are copied for it. A picture or `.lrc` moved
+within `sources/manual` is followed, as a song file is.
 
 ## Duplicates
 
 `muman duplicates` lists songs listed apart that are one recording, by
 their audio fingerprints. First come files an album holds twice, then
 tracks with copies on other albums, which a library of whole albums
-keeps on purpose. An album is told by its album artist and name. A
-query picks the groups shown. Listing changes nothing.
+keeps on purpose. An album is told as its songs' tags [agree on
+one](metadata.md#tags), and a single is on none. A query picks the
+groups shown. Listing changes nothing.
 
 `duplicates --resolve` steps through the groups on a terminal. Each
 group is shown side by side, a column for each song: key, album and

@@ -32,6 +32,19 @@
 //! still listed as it was: a song changed meanwhile, by hand or by
 //! another run, refuses the save and nothing is written.
 //!
+//! Every save takes a [`Recorder`], so `undo` can take it back: the run
+//! the save is part of, begun before it, told of the list once it is
+//! written. The engine's run is that recorder, and as a run records
+//! itself as it begins, a save stopped anywhere is one a record covers;
+//! this crate, below the engine, names only the trait. [`Unrecorded`]
+//! records nothing, for the list a new home starts with, before its
+//! first run and holding nothing to take back, and for tests.
+//!
+//! A byte-order mark and CRLF line endings, as Windows editors may
+//! write, are read past and written back as the file had them when
+//! saved: CRLF when most of its lines end so, so a file an editor wrote
+//! whole keeps its form and one muman never saw stays LF.
+//!
 //! Every write puts the usage comment atop the file, replacing one an
 //! earlier version wrote, while the user's own comments below it stay;
 //! and it gives each song the common `tags.<name>` keys it lacks, added
@@ -225,22 +238,22 @@ impl Song {
         self.sources.contains(key)
     }
 
-    /// `from` named `to` wherever the song names it, as a file that moved.
-    pub fn rename(&mut self, from: &SourceKey, to: &SourceKey) {
+    /// Each key `moved` names written as the key it names, all at once,
+    /// wherever the song names it, its record kept: files that moved.
+    pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
         let follow = |k: &mut SourceKey| {
-            if k == from {
+            if let Some(to) = moved.get(k) {
                 k.clone_from(to);
             }
         };
         self.sources.iter_mut().for_each(follow);
+        self.album.iter_mut().for_each(follow);
         self.audio.iter_mut().for_each(follow);
         self.cover.iter_mut().for_each(follow);
         if let Some(LyricsPin::From(k)) = &mut self.lyrics {
             follow(k);
         }
-        if let Some(held) = self.held.remove(from) {
-            self.held.insert(to.clone(), held);
-        }
+        self.held = rekeyed(std::mem::take(&mut self.held), moved);
     }
 
     /// The key that names this song alone, by [`id_of`].
@@ -257,8 +270,24 @@ pub struct Removed {
     pub sources: Vec<SourceKey>,
     /// How the song was named when it was removed.
     pub note: String,
+    /// The title and artist it resolved to when it was removed, which
+    /// name it once its sources are gone, as after `remove --purge`.
+    pub title: Option<String>,
+    pub artist: Option<String>,
     /// The tags it was given by hand.
     pub tags: Tags,
+    /// What each source held when the song was last built.
+    pub held: BTreeMap<SourceKey, crate::held::Held>,
+}
+
+/// `held` with each key `moved` names under the key it names.
+fn rekeyed<T>(
+    held: BTreeMap<SourceKey, T>,
+    moved: &BTreeMap<SourceKey, SourceKey>,
+) -> BTreeMap<SourceKey, T> {
+    held.into_iter()
+        .map(|(k, h)| (moved.get(&k).cloned().unwrap_or(k), h))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,7 +346,7 @@ pub enum Edit {
         drop: Vec<String>,
     },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
-    Remove { key: SourceKey, note: String },
+    Remove { key: SourceKey, note: Note },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
     /// `note`, as a song taken out by hand.
     Tombstone { key: SourceKey, note: String },
@@ -345,6 +374,11 @@ pub enum Edit {
     /// What `key` held forgotten by every song listing it, so each is
     /// built from what it holds now: a record a lookup kept anew.
     Unhold(SourceKey),
+    /// Each key named written as the key it names, all at once, wherever
+    /// a song, an album or a removed song names it, its record kept:
+    /// manual files followed to where they moved, two of which may have
+    /// traded names.
+    Moved(BTreeMap<SourceKey, SourceKey>),
 }
 
 /// What an edited song became.
@@ -352,8 +386,40 @@ pub enum Edit {
 pub enum Rewritten {
     Table(SongTable),
     /// Removed, named by the note.
-    Removed(String),
+    Removed(Note),
 }
+
+/// How a song removed is named under `[[removed]]`: the text said, and
+/// the title and artist it was made of, each kept apart so a query
+/// still reads them as fields once its sources are gone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Note {
+    pub text: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+}
+
+impl From<&str> for Note {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<String> for Note {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
+/// The keys under `[[removed]]` that name the song, which a song listed
+/// again does not keep.
+const NAMING: [&str; 3] = ["note", "title", "artist"];
 
 /// A `[[song]]` table as written, compared by its text.
 #[derive(Debug, Clone)]
@@ -393,9 +459,40 @@ pub struct Manifest {
     pub respelled: BTreeMap<String, String>,
     edits: Vec<Edit>,
     stale: bool,
-    /// The file's text as this was read from it or last wrote it; `None`
-    /// for a home without one.
+    /// The file's text as this was read from it or last wrote it, with
+    /// LF endings and no byte-order mark; `None` for a home without one.
     text: Option<String>,
+}
+
+/// What a song list's text holds besides its TOML, kept by a write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Form {
+    bom: bool,
+    crlf: bool,
+}
+
+impl Form {
+    fn of(raw: &str) -> Self {
+        let crlf = raw.matches("\r\n").count();
+        Self {
+            bom: raw.starts_with('\u{feff}'),
+            crlf: crlf > 0 && crlf * 2 >= raw.matches('\n').count(),
+        }
+    }
+
+    /// `text`, with LF endings and no mark, in this form.
+    fn apply(self, text: &str) -> String {
+        let text = if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_string()
+        };
+        if self.bom {
+            format!("\u{feff}{text}")
+        } else {
+            text
+        }
+    }
 }
 
 /// The top-level keys the song list reads besides the settings'
@@ -478,18 +575,45 @@ fn needed_version(parsed: &Parsed) -> i64 {
     }
 }
 
+/// What records a save of the song list: a run begun before the save,
+/// so a save stopped anywhere is one its record covers, told of the list
+/// once it is written.
+pub trait Recorder {
+    /// Whether the save may go on, asked before anything is read; a
+    /// recorder of nothing, as a dry run's, refuses.
+    fn ahead(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Note `manifest` as just written, the folder's lock still held: it
+    /// takes no lock of the folder.
+    fn saved(&mut self, manifest: &Manifest) -> Result<()>;
+}
+
+/// The recorder of a save no run records: the list a new home starts
+/// with, and tests.
+#[derive(Debug, Default)]
+pub struct Unrecorded;
+
+impl Recorder for Unrecorded {
+    fn saved(&mut self, _: &Manifest) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Write the song list a new home starts with, every setting written
 /// out to edit, when `home` has none: `sync` on a new home makes it, so
 /// lookups can be turned off before the first `add`. A list gone missing
 /// from a home muman wrote songs from is refused before this, by
-/// `state::present`.
+/// `state::present`. No run records it: it comes before the first, which
+/// takes it as its list before, and holds nothing to take back.
 pub fn start(home: &Path) -> Result<()> {
     if home.join(MANIFEST).exists() {
         return Ok(());
     }
     let mut m = Manifest::load(home)?;
     m.stale = true;
-    m.save()
+    m.save(&mut Unrecorded)
 }
 
 impl Manifest {
@@ -521,7 +645,7 @@ impl Manifest {
     /// stating a newer version than its songs need is stale, so the next
     /// save writes it down and an older muman reads it again.
     pub fn load(home: &Path) -> Result<Self> {
-        let (doc, text) = read_text(home)?;
+        let (doc, text, _) = read_text(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
         let stale = file.exists()
@@ -583,6 +707,28 @@ impl Manifest {
             .collect()
     }
 
+    /// Each key `moved` names written as the key it names, all at once,
+    /// wherever a song, an album or a removed song names it, here alone;
+    /// [`Edit::Moved`] writes it in the file.
+    pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
+        for song in &mut self.songs {
+            song.rekey(moved);
+        }
+        for album in &mut self.albums {
+            if let Some(to) = moved.get(&album.source) {
+                album.source.clone_from(to);
+            }
+        }
+        for removed in &mut self.removed {
+            for k in &mut removed.sources {
+                if let Some(to) = moved.get(k) {
+                    k.clone_from(to);
+                }
+            }
+            removed.held = rekeyed(std::mem::take(&mut removed.held), moved);
+        }
+    }
+
     /// Every key a removed song lists that no song lists.
     #[must_use]
     pub fn removed_keys(&self) -> BTreeSet<SourceKey> {
@@ -621,35 +767,38 @@ impl Manifest {
     }
 
     /// Apply what was recorded to the file as it is now, so a run that
-    /// finished meanwhile keeps its own changes. The folder is locked for
-    /// the read and the write, and the file replaced through a rename.
-    pub fn save(&mut self) -> Result<()> {
+    /// finished meanwhile keeps its own changes, `run` told once it is
+    /// written. The folder is locked for the read and the write, and the
+    /// file replaced through a rename.
+    pub fn save(&mut self, run: &mut dyn Recorder) -> Result<()> {
         if self.edits.is_empty() && !self.stale {
             return Ok(());
         }
         let lock = Lock::folder(&self.dir)?;
-        self.save_locked(&lock)
+        self.save_locked(&lock, run)
     }
 
     /// [`Self::save`] under a lock the caller already holds.
-    pub fn save_locked(&mut self, lock: &Lock) -> Result<()> {
-        self.save_expecting(lock, &[], &[]).map(drop)
+    pub fn save_locked(&mut self, lock: &Lock, run: &mut dyn Recorder) -> Result<()> {
+        self.save_expecting(lock, &[], &[], run).map(drop)
     }
 
     /// Apply what was recorded only while each song in `expected` is
     /// still listed as it was, by any of its keys, and each album in
     /// `albums` as it was. Returns the first key of each song, and the
     /// source of each album, that changed meanwhile; when any did,
-    /// nothing is written and the edits are kept.
-    pub fn save_expecting(
+    /// nothing is written, the edits are kept and `run` is told nothing.
+    fn save_expecting(
         &mut self,
         _lock: &Lock,
         expected: &[Song],
         albums: &[Album],
+        run: &mut dyn Recorder,
     ) -> Result<Vec<SourceKey>> {
         if self.edits.is_empty() && !self.stale {
             return Ok(Vec::new());
         }
+        run.ahead()?;
         let file = self.dir.join(MANIFEST);
         if self.text.is_some() && !file.exists() {
             return Err(crate::errors::Refused(format!(
@@ -659,7 +808,7 @@ impl Manifest {
             ))
             .into());
         }
-        let mut doc = read(&self.dir)?;
+        let (mut doc, _, form) = read_text(&self.dir)?;
         let now = parse(&doc)?;
         let changed: Vec<SourceKey> = expected
             .iter()
@@ -692,7 +841,8 @@ impl Manifest {
         }
         let text = doc.to_string();
         let text = with_header(&text).unwrap_or(text);
-        atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, text.as_bytes())?;
+        let written = form.apply(&text);
+        atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, written.as_bytes())?;
         self.text = Some(text);
         self.edits.clear();
         (self.songs, self.albums, self.removed) = (parsed.songs, parsed.albums, parsed.removed);
@@ -701,12 +851,17 @@ impl Manifest {
         self.torrents = parsed.torrents;
         (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
         self.stale = false;
+        run.saved(self)?;
         Ok(Vec::new())
     }
 
     /// [`Self::save_expecting`] under a lock of its own.
-    pub fn save_if_unchanged(&mut self, expected: &[Song]) -> Result<Vec<SourceKey>> {
-        self.save_if_unchanged_with(expected, &[])
+    pub fn save_if_unchanged(
+        &mut self,
+        expected: &[Song],
+        run: &mut dyn Recorder,
+    ) -> Result<Vec<SourceKey>> {
+        self.save_if_unchanged_with(expected, &[], run)
     }
 
     /// [`Self::save_expecting`] under a lock of its own, albums too.
@@ -714,9 +869,10 @@ impl Manifest {
         &mut self,
         expected: &[Song],
         albums: &[Album],
+        run: &mut dyn Recorder,
     ) -> Result<Vec<SourceKey>> {
         let lock = Lock::folder(&self.dir)?;
-        self.save_expecting(&lock, expected, albums)
+        self.save_expecting(&lock, expected, albums, run)
     }
 
     /// Whether `edits` would leave a song list that reads, applied to the
@@ -765,25 +921,51 @@ fn with_header(text: &str) -> Option<String> {
     (new != text).then_some(new)
 }
 
-fn read(dir: &Path) -> Result<DocumentMut> {
-    read_text(dir).map(|(doc, _)| doc)
+/// The song list `text` with each key `moved` names written as the key it
+/// names, all at once, as [`Edit::Moved`] writes them, and nothing else
+/// changed; `text` as it is when it does not read.
+#[must_use]
+pub fn moved_in(text: &str, moved: &BTreeMap<SourceKey, SourceKey>) -> String {
+    let Ok(mut doc) = text.parse::<DocumentMut>() else {
+        return text.to_string();
+    };
+    if moved.is_empty() || apply(&mut doc, &Edit::Moved(moved.clone())).is_err() {
+        return text.to_string();
+    }
+    doc.to_string()
 }
 
-/// The song list in `dir` and its text as read, `None` for none.
-fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
+/// Every key a song or a removed song lists in the song list `text`;
+/// none when it does not read.
+#[must_use]
+pub fn keys_in(text: &str) -> Option<BTreeSet<SourceKey>> {
+    let parsed = parse(&text.parse().ok()?).ok()?;
+    Some(
+        (parsed.songs.iter().flat_map(|s| &s.sources))
+            .chain(parsed.removed.iter().flat_map(|r| &r.sources))
+            .cloned()
+            .collect(),
+    )
+}
+
+fn read(dir: &Path) -> Result<DocumentMut> {
+    read_text(dir).map(|(doc, ..)| doc)
+}
+
+/// The song list in `dir`, its text as read with LF endings and no mark,
+/// `None` for none, and the form it was read in.
+fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>, Form)> {
     let file = dir.join(MANIFEST);
     let raw = match std::fs::read_to_string(&file) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
-    // Windows editors may add a byte-order mark and CRLF endings; the
-    // file is written back with neither, rather than with both mixed.
-    let text = raw.as_deref().map_or_else(
-        || NEW.to_string(),
-        |t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
-    );
-    let doc: DocumentMut = text
+    let form = raw.as_deref().map(Form::of).unwrap_or_default();
+    let raw = raw.map(|t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"));
+    let doc: DocumentMut = raw
+        .as_deref()
+        .unwrap_or(NEW)
         .parse()
         .with_context(|| format!("{} is not valid TOML", file.display()))?;
     match doc.get("version").and_then(Item::as_integer) {
@@ -814,7 +996,7 @@ fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
             );
         }
     }
-    Ok((doc, raw))
+    Ok((doc, raw, form))
 }
 
 fn key_at(t: &Table, name: &str, what: &str) -> Result<Option<SourceKey>> {
@@ -863,6 +1045,19 @@ fn keys_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
         .collect()
 }
 
+/// The whole number of 1 or more `key` sets in `t`, if it sets one: a
+/// song's place on its album, or how many songs the album holds.
+fn numbered(t: &Table, key: &str, what: &str) -> Result<Option<u32>> {
+    t.get(key)
+        .map(|item| {
+            item.as_integer()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n > 0)
+                .with_context(|| format!("{what}: `{key}` must be a whole number of 1 or more"))
+        })
+        .transpose()
+}
+
 /// The keys song `n`'s table lists, refused when another song lists one
 /// of its files: `owner` has every file's song so far.
 fn owned_keys(
@@ -874,6 +1069,9 @@ fn owned_keys(
     let keys = keys_of(t, what)?;
     for key in keys.iter().filter(|k| !shareable(k)) {
         if let Some(other) = owner.insert(key.clone(), n) {
+            if other == n {
+                bail!("{key} is listed twice by song {}", n + 1);
+            }
             bail!(
                 "{key} is listed by both song {} and song {}",
                 other + 1,
@@ -882,6 +1080,22 @@ fn owned_keys(
         }
     }
     Ok(keys)
+}
+
+/// Refuse a song on an album no `[[album]]` lists.
+fn refuse_albumless(songs: &[Song], albums: &[Album]) -> Result<()> {
+    for (n, song) in songs.iter().enumerate() {
+        if let Some(album) = &song.album
+            && !albums.iter().any(|a| &a.source == album)
+        {
+            bail!(
+                "song {} ({}) is on album {album}, which no [[album]] lists as its `source`",
+                n + 1,
+                song.sources[0]
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a song whose every key another song lists too: a song is named
@@ -974,7 +1188,8 @@ const MAX_OFFSET_MS: u64 = 3_600_000;
 /// What `doc` holds, read as the current edition writes it.
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut current = doc.clone();
-    let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
+    let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)
+        .map_err(crate::errors::invalid)?;
     let respelled = respell(&mut current, &spelled_now);
     let doc = no_misspelled_list(&current)?;
     let mut songs = Vec::new();
@@ -993,10 +1208,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         };
         let song = Song {
             album: key_at(t, "album", &what)?,
-            track: t
-                .get("track")
-                .and_then(Item::as_integer)
-                .and_then(|i| u32::try_from(i).ok()),
+            track: numbered(t, "track", &what)?,
             audio: key_at(t, "audio", &what)?,
             cover: key_at(t, "cover", &what)?,
             lyrics,
@@ -1038,24 +1250,31 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         };
         albums.push(Album {
             source,
-            tracks: t
-                .get("tracks")
-                .and_then(Item::as_integer)
-                .and_then(|i| u32::try_from(i).ok()),
+            tracks: numbered(t, "tracks", &what)?,
             tags: tags_of(t.get("tags"), &what)?,
         });
     }
+    refuse_albumless(&songs, &albums)?;
     let removed = removed_of(doc)?;
     let settings = crate::settings::read(doc)?;
+    let providers = providers::read(doc)?;
+    // A song's tags are those muman knows and those the song list gives
+    // it or its album, as a query reads them.
+    providers.check_fields(|name| {
+        (songs.iter().map(|s| &s.tags))
+            .chain(albums.iter().map(|a| &a.tags))
+            .any(|t| t.iter().any(|(k, _)| tags::vorbis_key(k) == name))
+    })?;
+    let clean = clean_of(doc).map_err(crate::errors::invalid)?;
     refuse_unsited(&settings.sites, &songs, &albums, &removed)?;
     Ok(Parsed {
         songs,
         albums,
         torrents: torrents_of(doc)?,
         removed,
-        providers: providers::read(doc)?,
+        providers,
         hooks: hooks::read(doc),
-        clean: clean_of(doc)?,
+        clean,
         settings,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,
@@ -1121,6 +1340,14 @@ fn torrents_of(doc: &DocumentMut) -> Result<BTreeMap<String, Torrent>> {
     Ok(torrents)
 }
 
+/// The text of a removed song's `key`, as its title, when it has some.
+fn named_by(t: &Table, key: &str) -> Option<String> {
+    (t.get(key).and_then(Item::as_str))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 /// The songs `[[removed]]` lists, each kept to be restored.
 fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
     let mut removed = Vec::new();
@@ -1133,7 +1360,10 @@ fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
                 .and_then(Item::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            title: named_by(t, "title"),
+            artist: named_by(t, "artist"),
             tags: tags_of(t.get("tags"), &what)?,
+            held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
         });
     }
     Ok(removed)
@@ -1487,14 +1717,17 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         Edit::Tombstone { key, note } => {
             let mut song = Table::new();
             song.insert("sources", key_array(std::slice::from_ref(key)));
-            tables_mut(doc, "removed")?.push(tombstone(song, note, Near::default()));
+            let note = Note::from(note.as_str());
+            tables_mut(doc, "removed")?.push(tombstone(song, &note, Near::default()));
         }
         Edit::Restore(key) => {
             let Some(mut song) = take(doc, "removed", key) else {
                 return Ok(());
             };
             let removed = song.clone();
-            song.remove("note");
+            for key in NAMING {
+                song.remove(key);
+            }
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
             let taken =
@@ -1584,6 +1817,12 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             let (from, to) = (from.to_string(), to.to_string());
             respell(doc, &|k| (k == from).then(|| to.clone()));
         }
+        Edit::Moved(moved) => {
+            let moved: BTreeMap<String, String> = (moved.iter())
+                .map(|(from, to)| (from.to_string(), to.to_string()))
+                .collect();
+            respell(doc, &|k| moved.get(k).cloned());
+        }
         Edit::Unhold(key) => {
             let text = key.to_string();
             for song in doc
@@ -1617,11 +1856,19 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
     Ok(())
 }
 
-/// A song's table as `[[removed]]` keeps it, its note first.
-fn tombstone(mut song: Table, note: &str, near: Near) -> Table {
+/// A song's table as `[[removed]]` keeps it, its note, title and artist
+/// first.
+fn tombstone(mut song: Table, note: &Note, near: Near) -> Table {
     let mut gone = Table::new();
-    gone.insert("note", value(note));
-    song.remove("note");
+    gone.insert("note", value(note.text.as_str()));
+    for (key, named) in [("title", &note.title), ("artist", &note.artist)] {
+        if let Some(named) = named.as_deref().filter(|n| !n.is_empty()) {
+            gone.insert(key, value(named));
+        }
+    }
+    for key in NAMING {
+        song.remove(key);
+    }
     gone.extend(song.iter().map(|(k, v)| (k.to_string(), v.clone())));
     for (name, key) in [("next", near.next), ("prev", near.prev)] {
         match key {
@@ -2084,8 +2331,24 @@ fn override_of(table: &Table) -> Result<crate::overrides::Override> {
         })
         .transpose()?;
     let (torrent, channel) = (text("torrent")?, text("channel")?);
-    if torrent.is_none() && channel.is_none() {
-        bail!("a `[[tags.from]]` names no `torrent` or `channel`");
+    match (&torrent, &channel) {
+        (None, None) => bail!("a `[[tags.from]]` names no `torrent` or `channel`"),
+        (Some(_), Some(_)) => bail!(
+            "a `[[tags.from]]` names both a `torrent` and a `channel`; give each a table of its own"
+        ),
+        _ => {}
+    }
+    if let Some(hash) = &torrent
+        && !crate::torrent::is_hash(&hash.trim().to_ascii_lowercase())
+    {
+        bail!(
+            "`[[tags.from]] torrent`: `{hash}` is no info hash, {} or {} hex digits",
+            crate::torrent::V1_HEX,
+            crate::torrent::V2_HEX
+        );
+    }
+    if channel.as_deref().is_some_and(|c| c.trim().is_empty()) {
+        bail!("`[[tags.from]] channel` names no channel");
     }
     Ok(crate::overrides::Override {
         torrent,

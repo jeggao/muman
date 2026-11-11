@@ -17,9 +17,9 @@ both are.
 | Path in the home | Holds |
 |---|---|
 | `songs.toml` | The song list: every song, its sources, tags and pins, and the settings |
-| `state.db` | The library files muman wrote and what each was made from, and what it measured of every source; the `state.json` an earlier muman kept is read into it once and kept as `state.json.bak` |
+| `state.db` | The library files muman wrote and what each was made from, and what it measured of every source; the `state.json` an earlier muman kept is read into it once and kept as `state.json.bak`. Every home holds a small `state.json` saying the state is in `state.db`, so an earlier muman refuses the home rather than read it as empty |
 | `sources/yt-dlp/<site>/` | What yt-dlp fetched, each at a path made from its key: audio, thumbnail, subtitles and metadata in one file |
-| `sources/manual/` | Files of your own, at any depth, with the lyrics and pictures beside them |
+| `sources/manual/` | Files of your own, at any depth, with the lyrics and pictures beside them; a file or folder whose name starts with a dot is hidden, and never read |
 | `sources/torrent/` | Each torrent's metainfo, `<hash>.torrent`, and its files in the folder `<hash>/` |
 | `sources/lrclib/` | Lyrics found on LRCLIB |
 | `sources/musicbrainz/` | Tags found on MusicBrainz: a recording and the release picked for it |
@@ -71,8 +71,11 @@ its own. Anything else in the library folder stays as it is:
 - A file muman wrote that you changed since, as a tagger changes a
   song or an editor its `.lrc`, stays with a warning. A new path
   template still moves it, your change with it, but a change to the
-  song leaves it alone. `sync --force` writes the song again over your
-  change, and `undo` brings your change back.
+  song leaves it alone: a song whose `.lrc` you changed keeps its old
+  name when retitled, and a folder's cover you changed stays in its
+  folder when the song that holds it moves to another. `sync --force`
+  writes the song again over your change, and `undo` brings your
+  change back.
 - muman knows its files by their size and modification time, else by
   their bytes, so a restored backup or a copy without its times is
   still muman's. A file whose bytes changed under the same size and
@@ -131,13 +134,13 @@ tags.genre = ""
 |---|---|
 | `version` | The file's format; muman refuses a newer one |
 | `sources` | Every source the song may be made from. A file belongs to one song; a lookup's record may be listed by every song of its recording |
-| `album`, `track` | The `[[album]]` the song is on, and its place there |
+| `album`, `track` | The `source` of the `[[album]]` the song is on, which must be listed, and its place there, from 1 |
 | `audio`, `cover`, `lyrics` | A pin: that part from that source, whatever the measures say. `lyrics = false` takes none |
 | `lyrics_offset` | Moves the lyrics later by this time, on top of the offset measured; a negative time moves them earlier |
 | `lookups` | `false` asks no provider anything for the song; `lookups.<provider> = false` asks that one nothing ([lookups](library.md#lookups)) |
 | `tags.<name>` | A tag set over what the sources offer; an empty value sets nothing |
 | `held."<key>"` | What a source held when the song was built, written by muman ([a source that changes](#a-source-that-changes)) |
-| `[[album]]` | A YouTube Music album added whole, with `tags.<name>` over what its tracks offer |
+| `[[album]]` | A YouTube Music album added whole: its key as `source`, as `youtube.com:playlist/<id>`, how many songs it holds as `tracks`, and `tags.<name>` over what its tracks offer |
 | `[torrents."<hash>"]` | A torrent whose files songs list: its `name`, `trackers` and `v2` hash, from which it is fetched again ([torrents](#torrents)) |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it ([removed songs](#removed-songs)) |
 
@@ -176,7 +179,9 @@ by its page's domain, without `www.`.
 A torrent's file is named by the torrent's v1 hash, or its v2 hash if
 it has no v1, then its path inside the torrent without the torrent's
 own folder: `torrent:<hash>/CD1/01 Paper Comets.flac`. A torrent of one
-file names it by its name. The hash covers every byte, so a torrent's
+file names it by its name. A part starting with a letter and a colon,
+which Windows reads as a drive, is named with the colon's lookalike:
+`a:b.flac` is `a：b.flac`. The hash covers every byte, so a torrent's
 files never change.
 
 An earlier muman named sources by yt-dlp's extractor, as
@@ -227,18 +232,18 @@ ASCII.
 
 ### Chapters
 
-A song keeps the chapters of the source its audio comes from, as an
-M4B audiobook or a video in parts has them. The song stays one file,
-and a player skips from chapter to chapter within it. MP4 holds them as
-MP4 chapters, FLAC, Ogg and Opus as `CHAPTER000` and `CHAPTER000NAME`
-comments, and MP3 as `CTOC` and `CHAP` frames. WavPack holds none.
+A song keeps its audio source's chapters, as an M4B audiobook or a
+video in parts has them, in one file a player skips through: MP4 as MP4
+chapters, MP3 as `CTOC` and `CHAP` frames, and FLAC, Ogg and Opus as
+`CHAPTER000` to `CHAPTER999` comments, so writing a song says it drops
+any past the 1000th. WavPack holds none.
 
 ### How muman edits the song list
 
-muman edits `songs.toml` in place. Comments, order and keys it does not
-know survive every write, and two runs at once keep each other's
-songs. Each write fills in the common `tags.<name>` keys a song lacks,
-empty, so you can see what to set.
+muman edits `songs.toml` in place. Comments, order, keys it does not
+know, CRLF line endings and a byte-order mark survive every write, and
+two runs at once keep each other's songs. Each write fills in the common
+`tags.<name>` keys a song lacks, empty, so you can see what to set.
 
 These stop a run before anything is written: a key that does not
 parse, a file two songs list, and a pin to a source the song does not
@@ -252,15 +257,15 @@ picture of yours `version = 3`, and a song listing a torrent's file
 
 `muman remove` moves a song to `[[removed]]`, with `next` and `prev`
 naming the songs it stood between. A key there that no song lists is a
-tombstone: no playlist or dropped file adds it again. `muman restore`,
-adding its video alone by URL, or deleting the table by hand lets it
-back in; `restore` puts it back where it stood, so two songs at one
-path keep the paths they had.
+tombstone: no playlist or dropped file adds what it held again; other
+audio at its file's name is a new file. `muman restore`, adding its
+video alone by URL, or deleting the table lets it back in; `restore`
+puts it back where it stood, so two songs of one name keep their paths.
 
-A song you delete from the list by hand is kept out the same way. The
-next `sync` puts its files in `sources/manual` under `[[removed]]`
-rather than listing them again as files dropped in, and `status` says
-so first.
+A song you delete from the list by hand is kept out the same way: the
+next `sync` puts its files in `sources/manual` under `[[removed]]`, and
+`status` says so first. A file of yours deleted beside another of its
+song's, as one encoded anew, it takes out of the song, for `undo`.
 
 ## Sources
 
@@ -308,11 +313,10 @@ waits the same way when that fails. Only runs that fetch need yt-dlp.
 
 `muman add <magnet link|FILE.torrent>` fetches a torrent's song files
 with aria2c, each with the `.lrc` and pictures named as it is and its
-folder's cover, by the rules for [files of your
-own](#files-of-your-own). Scans, logs and the rest stay with the
-torrent's peers. Each song file is listed as a song, or joins the song
-it is the same recording as, and is tagged and looked up as a file of
-your own is.
+folder's cover, by the rules for [files of your own](#files-of-your-own).
+Scans, logs and the rest stay with the torrent's peers. Each song file
+is listed as a song, or joins the song it is the same recording as, and
+is tagged and looked up as a file of your own is.
 
 The metainfo is kept in the store, and the torrent's name, trackers and
 v2 hash in the song list's `[torrents."<hash>"]`. A private torrent's
@@ -343,36 +347,45 @@ piece reaching into a file muman does not keep is checked by one fetch.
 
 Each file is kept in the torrent's folder at its path in the torrent,
 with what Windows refuses in a name replaced by a lookalike. Where two
-files land at one place that way, or differ only by case, the first
-the torrent lists is kept and the other is left with a warning. While a
-listed torrent's metainfo is gone, its folder is kept and its song
-files are read without the lyrics and pictures they bring.
+files land at one place or one name that way, or differ only by case,
+the first the torrent lists is kept and the other left with a warning.
+While a listed torrent's metainfo is gone, its folder is kept and its
+song files are read without the lyrics and pictures they bring.
 
 ### Files of your own
 
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`. You can
 also drop files there yourself; the next `sync` lists them. muman reads
 a dropped file only 10 s after it arrived, whatever modification time
-the copy kept, so it never reads a file still being copied. A listed
-file you move within the folder is followed, not listed again.
+the copy kept. Any command that syncs follows a file you move within
+the folder, a removed song's too, by its bytes, else once settled by its
+audio: files that trade names keep their songs, as do copies of one song
+moved together. One two files could be is named, not guessed, and its
+song kept as built. While gone as a file copies in, its song waits.
 
 A song file brings what sits beside it:
 
 - the `.lrc` named as it is, in any case: `Paper Comets.flac` brings
   `Paper Comets.lrc`;
 - the JPEG, PNG or WebP pictures named as it is, as `paper comets.jpg`;
-- its folder's `cover`, `folder`, `front` or `album` picture.
+- its folder's `cover`, `folder`, `front` or `album` picture, else, in a
+  disc's folder as `CD1`, that of the folder above it, a torrent's own
+  too, where that holds no song file and is not `sources/manual` itself.
 
 A `.lrc` may be in UTF-8 or UTF-16, or in an older encoding such as
 GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.
 
-A folder given to `add` is copied except for what is no song, lyrics or
-picture, as a booklet `.pdf`, which is left out and named. A file
-yt-dlp fetched elsewhere, named `<title> [<id>]` with yt-dlp's metadata
-inside, goes into `sources/yt-dlp` under its key instead. If the store
-holds that key already, the file joins its song and is not copied
-again. A lyrics file, picture or tag file given alone goes to the songs
-it belongs to: see [giving songs lyrics, pictures and
+A folder given to `add` is copied but for what is no song, lyrics or
+picture, and for lyrics and pictures no song file in it brings, as
+above. Those, a tag file, cue sheet or subtitles in it go to their songs
+as they would given alone; a `.txt` of plain lyrics does only when named
+as a song file beside it, since a rip's notes are plain text too, and
+yt-dlp's `.info.json` never. The rest, as a booklet `.pdf`, is left out
+and named. A file yt-dlp fetched elsewhere, named `<title> [<id>]` with
+yt-dlp's metadata inside, goes into `sources/yt-dlp` under its key
+instead. If the store holds that key already, the file joins its song
+and is not copied again. A lyrics file, picture or tag file given alone
+goes to the songs it belongs to: see [giving songs lyrics, pictures and
 tags](songs.md#giving-songs-lyrics-pictures-and-tags).
 
 Links in `sources/manual` are read as what they lead to, except a link
@@ -425,13 +438,19 @@ of damage:
 - **Cut off:** the audio's packets end before its stream says, as a
   copy or download stopped short leaves them. The length a file states
   counts every stream in it, so a subtitle running past the audio is no
-  cut.
+  cut. Only a format known to state its length is held to it, as FLAC,
+  MP4, Matroska or WavPack, an MP3 only with a Xing or VBRI header, and a
+  WAVE only of PCM or with a `fact` chunk. Any other, as a raw AAC or AC-3
+  stream, is never cut off, and plays as long as its packets run.
 - **Missing:** less audio decodes than the packets span, as from holes
   a download that lost pieces leaves, or packets too corrupt to decode.
 
 A cut-off source is encoded rather than copied, so its song ends
-cleanly. A source missing audio ranks below any whole copy of the
-recording. A damaged download is fetched again, at once and then less
+cleanly. A damaged source ranks below any whole copy of the recording,
+however little it lacks. Audio a hole lost plays as if never there, so
+everything after it comes early; muman compares a damaged copy with
+the others allowing for that, and it stays the same recording. A
+damaged download is fetched again, at once and then less
 often, up to five times or until `sync --retry`. A torrent's file is
 not when the torrent itself holds the damage ([torrents](#torrents)).
 The whole copy a fetch brings is taken without `--accept`, since
@@ -439,9 +458,10 @@ nobody chose the damage. A damaged file of your own is named and left
 for you to replace.
 
 When a source's audio changed and the new audio is damaged, muman does
-not follow it. The song keeps its file and fails, with exit code 4,
-until you put the whole file back or `sync --force` writes the song
-from what the source holds.
+not follow it. The song keeps its file, or stays unwritten where none
+is left, as one you deleted or `max_size` left out, and fails, with
+exit code 4, until you put the whole file back or `sync --force` writes
+the song from what the source holds.
 
 ### New sources
 

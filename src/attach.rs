@@ -15,7 +15,9 @@
 //!    `fromfilename` reads one; compared by [`crate::similar`] against
 //!    every name each song is known by, its tags and every source's.
 //! 1. **Its content**: lyrics against the words the song's own lyrics
-//!    sing; a picture against the song's covers, by [`crate::picture`].
+//!    sing, from every source that holds them, a song file's lyrics tag
+//!    as a file of lyrics; a picture against the song's covers, by
+//!    [`crate::picture`].
 //!
 //! Fields are weighed as beets weighs them, title and artist 3, album 2,
 //! length 2, track 1, and their distance is `Σ weight × distance / Σ
@@ -30,7 +32,8 @@
 //!
 //! A title alone weighs 3, so it never decides: a hundred songs are
 //! called `Intro`. A version word on one side only (live, instrumental,
-//! remix…) or another number keeps a match at maybe.
+//! remix…) or another number keeps a match at maybe, between names at
+//! least maybe alike; between names unlike, it says nothing.
 //!
 //! Lyrics are refused by a song they cannot be the words of: one whose
 //! last line comes more than 2 s after the song ends, or whose `[length:]`
@@ -91,7 +94,7 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{self, Kind, Store};
 use crate::tagfile::{self, Sheet, Tags};
-use crate::tags::Field;
+use crate::tags::{Field, song_list_name};
 use crate::ui::{self, Prompter};
 
 const STRONG: i64 = 40;
@@ -120,7 +123,7 @@ const PER_TRACK: usize = 8;
 const UNMATCHED: i64 = 500;
 const NO_MATCH: i64 = 10_000;
 /// Where accepted files are copied, inside the manual folder.
-pub const ADDED: &str = "added";
+pub use crate::dirs::ADDED;
 
 /// Files given to songs, each with what it holds.
 pub type Loose = Vec<(PathBuf, What)>;
@@ -182,11 +185,11 @@ pub fn sort(path: &Path) -> Result<Option<What>> {
         return Ok(Some(What::Lyrics));
     }
     if LOOSE.contains(&ext.as_str()) {
-        let text = read_text(path)?;
-        if tagfile::format_of(path, &text).is_some() {
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        if tagfile::format_of(path, &lyrics::decode(&bytes)).is_some() {
             return Ok(Some(What::Tags));
         }
-        if ext == "txt" && !text.trim().is_empty() && lyrics::is_text(&text) {
+        if ext == "txt" && lyrics::read(&bytes).is_some_and(|t| !t.trim().is_empty()) {
             return Ok(Some(What::Lyrics));
         }
     }
@@ -224,6 +227,8 @@ pub struct How {
 pub struct Attached {
     pub songs: Vec<SourceKey>,
     pub left_out: usize,
+    /// Those of them `-y` would have placed.
+    pub by_yes: usize,
     /// The files that could not be read or used, each with why.
     pub unread: Vec<String>,
     /// The copies made in the manual folder's `added/`, for `undo`.
@@ -246,11 +251,38 @@ struct Candidate {
     ids: BTreeSet<String>,
     looks: Vec<Look>,
     digests: BTreeSet<String>,
-    lyrics: Vec<PathBuf>,
+    lyrics: Vec<Held>,
     /// The subtitle streams its sources hold, read only when it is among
     /// the likeliest songs for lyrics.
     streams: Vec<(PathBuf, u32)>,
     view: View,
+}
+
+/// Lyrics a song holds, whose words a file of lyrics is compared with.
+#[derive(Debug)]
+enum Held {
+    /// A file of them: a lyrics file, one beside a song file, or a
+    /// subtitle stream converted.
+    File(PathBuf),
+    /// The lyrics tag of the song file at the path.
+    Tag(PathBuf),
+}
+
+impl Held {
+    /// The lyrics at `at` of `source`, but a stream's.
+    fn of(at: &LyricsAt, source: &store::Located) -> Option<Self> {
+        match at {
+            LyricsAt::Tag => Some(Self::Tag(source.path.clone())),
+            at => crate::render::lyrics_file(at, source).map(Self::File),
+        }
+    }
+
+    fn text(&self) -> Option<String> {
+        match self {
+            Self::File(path) => read_text(path).ok(),
+            Self::Tag(path) => crate::tags::lyrics_in(path).map(|(text, _)| text),
+        }
+    }
 }
 
 /// What a file or a track says of its song.
@@ -323,19 +355,6 @@ fn thousandths(d: f64) -> i64 {
 
 fn ms_f(ms: i64) -> f64 {
     ms as f64
-}
-
-/// The tag file name a song list writes a Vorbis comment as.
-fn song_list_name(vorbis: &str) -> String {
-    match Field::named(vorbis) {
-        Some(Field::AlbumArtist) => "album_artist".into(),
-        Some(Field::Track) => "track".into(),
-        Some(Field::Disc) => "disc".into(),
-        Some(Field::TrackTotal) => "track_total".into(),
-        Some(Field::DiscTotal) => "disc_total".into(),
-        Some(Field::ReleaseCountry) => "release_country".into(),
-        _ => vorbis.to_ascii_lowercase(),
-    }
 }
 
 fn values<'a>(tags: &'a [(String, Vec<String>)], name: &str) -> impl Iterator<Item = &'a String> {
@@ -432,7 +451,7 @@ fn candidates(
                 digests.extend(l.digest.clone());
                 match (&l.at, &located) {
                     (LyricsAt::Stream { index }, Some(s)) => streams.push((s.path.clone(), *index)),
-                    (at, Some(s)) => lyrics.extend(crate::render::lyrics_file(at, s)),
+                    (at, Some(s)) => lyrics.extend(Held::of(at, s)),
                     (_, None) => {}
                 }
             }
@@ -445,10 +464,14 @@ fn candidates(
         }
         stems.remove("");
         let album = view.first("album");
-        let album_key = format!("{}\u{1f}{album}", view.first("albumartist"));
+        let album_key = format!(
+            "{}\u{1f}{}",
+            similar::fold(&view.first("albumartist")),
+            similar::fold_title(&album)
+        );
         out.push(Candidate {
             label: view.name(),
-            album_key: similar::fold(&album_key),
+            album_key,
             album,
             titles,
             artists,
@@ -601,7 +624,9 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         let d = thousandths(d);
         if d < distance {
             distance = d;
-            conflicts = found;
+            // A version word or a number tells apart names that are alike;
+            // between names that are not, it says nothing.
+            conflicts = if d <= ASK { found } else { Vec::new() };
             let fields = if d <= STRONG && weight >= MIN_WEIGHT {
                 Verdict::Same
             } else if d <= ASK {
@@ -692,8 +717,8 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
     if let (Some((ours, script)), false) = (&clues.words, c.lyrics.is_empty()) {
         let mut best: Option<f64> = None;
         let mut contradicted = false;
-        for path in &c.lyrics {
-            let Ok(text) = read_text(path) else { continue };
+        for held in &c.lyrics {
+            let Some(text) = held.text() else { continue };
             let sung = lyrics::sung(&text);
             let theirs = similar::shingles(&similar::tokens(&sung), 3);
             let share = similar::containment(ours, &theirs);
@@ -804,13 +829,20 @@ fn ids_of(tags: &Tags) -> BTreeSet<String> {
 
 /// The subtitles at `path` converted to LRC at `lrc`, its bytes. ffmpeg
 /// reads subtitles as UTF-8 and drops each cue that is not, so they reach
-/// it as the text [`lyrics::decode`] makes of them, written beside `lrc`.
+/// it as the text [`lyrics::decode`] makes of them, written beside `lrc`;
+/// WebVTT without its style and region blocks, after which ffmpeg reads
+/// no cue ([`lyrics::webvtt_cues`]).
 fn subtitles_as_lrc<R: Runner>(runner: &R, path: &Path, lrc: &Path) -> Result<Vec<u8>> {
     let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let scratch = lrc.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
-    let name = crate::atomic::Name::new(format!("subtitles.{}", extension(path)))?;
-    crate::atomic::write(scratch, &name, lyrics::decode(&raw).as_bytes())?;
+    let ext = extension(path);
+    let mut text = lyrics::decode(&raw);
+    if ext == "vtt" {
+        text = lyrics::webvtt_cues(&text);
+    }
+    let name = crate::atomic::Name::new(format!("subtitles.{ext}"))?;
+    crate::atomic::write(scratch, &name, text.as_bytes())?;
     let args: Vec<std::ffi::OsString> = facts::LRC_ARGS.iter().map(Into::into).collect();
     let output = crate::ffmpeg::Output::new(args, lrc);
     let decoded = scratch.join(name.as_str());
@@ -849,9 +881,12 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
                 bytes = Some(converted);
                 text
             } else {
-                read_text(path)?
+                let raw =
+                    std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                lyrics::read(&raw)
+                    .with_context(|| format!("{} reads as no text", path.display()))?
             };
-            if text.trim().is_empty() || !lyrics::is_text(&text) {
+            if text.trim().is_empty() {
                 bail!("{} holds no lyrics", path.display());
             }
             let h = lyrics::headers(&text);
@@ -956,7 +991,7 @@ fn read_streams<R: Runner>(runner: &R, cands: &mut [Candidate], items: &[Item], 
                     std::slice::from_ref(&output),
                 );
                 if ran.into_iter().all(|r| r.is_ok()) {
-                    c.lyrics.push(lrc);
+                    c.lyrics.push(Held::File(lrc));
                 }
             }
         }
@@ -972,10 +1007,14 @@ enum Decision {
     Tagged {
         songs: Vec<(usize, Tags)>,
         left_out: bool,
+        by_yes: bool,
     },
     Already,
     Declined,
-    LeftOut,
+    /// Left out; `by_yes` when `-y` would have placed it.
+    LeftOut {
+        by_yes: bool,
+    },
 }
 
 /// The asking side: the songs, how they are named, and the prompter.
@@ -1072,6 +1111,7 @@ impl<W: Write> Asking<'_, '_, W> {
                     next.verdict == Verdict::Different || next.distance - j.distance >= LEAD
                 })
         };
+        let by_yes = !self.yes && top.as_ref().is_some_and(leads);
         if self.yes
             && let Some(j) = top.filter(leads)
         {
@@ -1113,15 +1153,15 @@ impl<W: Write> Asking<'_, '_, W> {
                     "{item_label} may be {} {}; not added. Name its song with --to{}",
                     what.of(),
                     maybe.join(" or "),
-                    if self.yes {
-                        ", or run on a terminal"
-                    } else {
+                    if by_yes {
                         ", add it again with -y, or run on a terminal"
+                    } else {
+                        ", or run on a terminal"
                     }
                 )
             };
             self.warn(&said)?;
-            return Err(LeftOut.into());
+            return Err(LeftOut { by_yes }.into());
         }
         let lines: Vec<String> = offered.iter().map(|j| self.line(j)).collect();
         let songs: Vec<usize> = offered.iter().map(|j| j.song).collect();
@@ -1226,9 +1266,12 @@ enum Searched {
     Back,
 }
 
-/// A file left out for want of a terminal to ask on.
+/// A file left out for want of a terminal to ask on; `by_yes` when `-y`
+/// would have placed it.
 #[derive(Debug)]
-struct LeftOut;
+struct LeftOut {
+    by_yes: bool,
+}
 
 impl std::fmt::Display for LeftOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1239,7 +1282,8 @@ impl std::fmt::Display for LeftOut {
 impl std::error::Error for LeftOut {}
 
 /// Match each of `paths`, files `sort` found loose, to its songs, ask
-/// where needed, copy what is accepted and record the edits. `beside` are
+/// where needed, `prompter` answering, copy what is accepted and record
+/// the edits, saved as `run` records. `beside` are
 /// the song files the same command added, by where they came from, for a
 /// folder's cover.
 // The steps read in the order they run; split up, the order would be in the call sites.
@@ -1250,7 +1294,7 @@ pub fn attach<R: Runner, W: Write>(
     paths: &[(PathBuf, What)],
     beside: &[(PathBuf, SourceKey)],
     how: &How,
-    prompter: Option<&mut dyn Prompter>,
+    (prompter, run): (Option<&mut dyn Prompter>, &mut dyn manifest::Recorder),
     out: &mut W,
 ) -> Result<Attached> {
     if paths.is_empty() {
@@ -1268,7 +1312,10 @@ pub fn attach<R: Runner, W: Write>(
             retry: false,
             say_unread: false,
             checkpoint: &mut |s: &State| s.keep_since(home, &mut base),
-            analyses: crate::analysis::wanted(&manifest.settings.loudness),
+            analyses: crate::analysis::wanted(
+                &manifest.settings.loudness,
+                manifest.settings.audio.pick.dynamics.enabled,
+            ),
         };
         reconcile::measure(
             runner,
@@ -1345,12 +1392,16 @@ pub fn attach<R: Runner, W: Write>(
         }
         let decision = match decide(&mut ask, item, pool.as_deref()) {
             Ok(d) => d,
-            Err(e) if e.is::<LeftOut>() => Decision::LeftOut,
-            Err(e) => {
-                ui::warning(ask.out, &format!("{e:#}"))?;
-                attached.unread.push(item.path.display().to_string());
-                Decision::Declined
-            }
+            Err(e) => match e.downcast::<LeftOut>() {
+                Ok(left) => Decision::LeftOut {
+                    by_yes: left.by_yes,
+                },
+                Err(e) => {
+                    ui::warning(ask.out, &format!("{e:#}"))?;
+                    attached.unread.push(item.path.display().to_string());
+                    Decision::Declined
+                }
+            },
         };
         decisions.push(decision);
     }
@@ -1377,8 +1428,13 @@ pub fn attach<R: Runner, W: Write>(
                     attached.songs.push(id);
                 }
             }
-            Decision::Tagged { songs, left_out } => {
+            Decision::Tagged {
+                songs,
+                left_out,
+                by_yes,
+            } => {
                 attached.left_out += usize::from(left_out);
+                attached.by_yes += usize::from(by_yes);
                 for (n, tags) in songs {
                     let id = cands[n].id.clone();
                     let named: Vec<String> = tags
@@ -1432,10 +1488,13 @@ pub fn attach<R: Runner, W: Write>(
             Decision::Already => {}
             Decision::Declined if attached.unread.contains(&item.path.display().to_string()) => {}
             Decision::Declined => ui::info(ask.out, &format!("{}: not added", item.label))?,
-            Decision::LeftOut => attached.left_out += 1,
+            Decision::LeftOut { by_yes } => {
+                attached.left_out += 1;
+                attached.by_yes += usize::from(by_yes);
+            }
         }
     }
-    manifest.save()?;
+    manifest.save(run)?;
     Ok(attached)
 }
 
@@ -1498,6 +1557,7 @@ fn decide<W: Write>(
         Decision::Tagged {
             songs: vec![(n, tags)],
             left_out: false,
+            by_yes: false,
         }
     };
     if let Some(pool) = pool {
@@ -1521,7 +1581,7 @@ fn decide<W: Write>(
                         item.label,
                         lines.join("\n  ")
                     ))?;
-                    return Ok(Decision::LeftOut);
+                    return Ok(Decision::LeftOut { by_yes: false });
                 }
                 ask.pick(
                     &format!("{}: {}", item.label, item.what.whose()),
@@ -1579,22 +1639,33 @@ fn decide<W: Write>(
                 ))?;
                 return Ok(Decision::Already);
             }
-            if !sure.is_empty() {
-                let album = &cands[sure[0]].album;
-                let whose = if sure.len() > 1
-                    && !album.is_empty()
-                    && sure.iter().all(|&n| cands[n].album == *album)
+            let whose = |of: &[usize]| {
+                let album = &cands[of[0]].album;
+                if of.len() > 1 && !album.is_empty() && of.iter().all(|&n| cands[n].album == *album)
                 {
-                    format!("{} songs of {album}", sure.len())
+                    format!("{} songs of {album}", of.len())
                 } else {
-                    sure.iter()
+                    of.iter()
                         .map(|&n| cands[n].label.clone())
                         .collect::<Vec<_>>()
                         .join(", ")
-                };
+                }
+            };
+            let (looked, matched): (Vec<usize>, Vec<usize>) = sure
+                .iter()
+                .partition(|&&n| alike.iter().any(|j| j.song == n));
+            if !looked.is_empty() {
                 ask.info(&format!(
-                    "{}: alike to the covers of {whose}; adding it to each",
-                    item.label
+                    "{}: alike to the covers of {}; adding it to each",
+                    item.label,
+                    whose(&looked)
+                ))?;
+            }
+            if !matched.is_empty() {
+                ask.info(&format!(
+                    "{}: matches {}; adding it to each",
+                    item.label,
+                    whose(&matched)
                 ))?;
             }
             if !asked.is_empty() {
@@ -1624,7 +1695,7 @@ fn decide<W: Write>(
                             item.label,
                             asked.len()
                         ))?;
-                        return Ok(Decision::LeftOut);
+                        return Ok(Decision::LeftOut { by_yes: false });
                     }
                     None => ask.warn(&format!(
                         "{}: {} more song(s) have a cover somewhat like it; not added to those",
@@ -1759,13 +1830,14 @@ fn decide_sheet<W: Write>(
     let all_sure = fits
         .iter()
         .all(|(_, j)| j.as_ref().is_some_and(|j| j.verdict == Verdict::Same));
-    let tagged = |chosen: &[(usize, usize)], left_out: bool| {
+    let tagged = |chosen: &[(usize, usize)], left_out: bool, by_yes: bool| {
         if chosen.is_empty() && left_out {
-            return Decision::LeftOut;
+            return Decision::LeftOut { by_yes };
         }
         Decision::Tagged {
             songs: chosen.iter().map(|&(r, n)| (n, sheet.tags_of(r))).collect(),
             left_out,
+            by_yes,
         }
     };
     let sure: Vec<(usize, usize)> = fits
@@ -1777,7 +1849,7 @@ fn decide_sheet<W: Write>(
         })
         .collect();
     if all_sure {
-        return Ok(tagged(&sure, false));
+        return Ok(tagged(&sure, false, false));
     }
     for (r, j) in &fits {
         let to = j.as_ref().map_or_else(
@@ -1811,18 +1883,18 @@ fn decide_sheet<W: Write>(
             "{}: no track fits a song; not added. Name the songs it is of with --to",
             item.label
         ))?;
-        return Ok(Decision::LeftOut);
+        return Ok(Decision::LeftOut { by_yes: false });
     }
+    let led: Vec<(usize, usize)> = fits
+        .iter()
+        .filter_map(|(r, j)| {
+            let j = j.as_ref()?;
+            let next = per_track[*r].iter().find(|o| o.song != j.song);
+            let leads = next.is_none_or(|o| o.distance - j.distance >= LEAD);
+            (j.verdict == Verdict::Same || leads).then_some((*r, j.song))
+        })
+        .collect();
     if ask.yes {
-        let led: Vec<(usize, usize)> = fits
-            .iter()
-            .filter_map(|(r, j)| {
-                let j = j.as_ref()?;
-                let next = per_track[*r].iter().find(|o| o.song != j.song);
-                let leads = next.is_none_or(|o| o.distance - j.distance >= LEAD);
-                (j.verdict == Verdict::Same || leads).then_some((*r, j.song))
-            })
-            .collect();
         let unsure = fitting.len() - led.len();
         if unsure > 0 {
             ask.warn(&format!(
@@ -1831,18 +1903,20 @@ fn decide_sheet<W: Write>(
                 item.label
             ))?;
         }
-        return Ok(tagged(&led, unsure > 0));
+        return Ok(tagged(&led, unsure > 0, false));
     }
     let Some(p) = ask.prompter.as_deref_mut() else {
         let unsure = fitting.len() - sure.len();
+        let by_yes = led.len() > sure.len();
         if unsure > 0 {
             ask.warn(&format!(
                 "{}: {unsure} track(s) are not surely a song's; their tags are not set. \
-                 Run on a terminal, or give -y",
-                item.label
+                 Run on a terminal{}",
+                item.label,
+                if by_yes { ", or give -y" } else { "" }
             ))?;
         }
-        return Ok(tagged(&sure, unsure > 0));
+        return Ok(tagged(&sure, unsure > 0, by_yes));
     };
     let album = values(&sheet.album, "ALBUM")
         .next()
@@ -1870,7 +1944,7 @@ fn decide_sheet<W: Write>(
         )?
     };
     match picked {
-        Some(0) => Ok(tagged(&fitting, false)),
+        Some(0) => Ok(tagged(&fitting, false, false)),
         Some(1) => {
             let mut chosen: Vec<(usize, usize)> = Vec::new();
             for (r, judged) in per_track.iter().enumerate() {
@@ -1894,7 +1968,7 @@ fn decide_sheet<W: Write>(
                     chosen.push((r, n));
                 }
             }
-            Ok(tagged(&chosen, false))
+            Ok(tagged(&chosen, false, false))
         }
         _ => Ok(Decision::Declined),
     }

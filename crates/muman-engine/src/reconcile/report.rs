@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -92,8 +92,19 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
     if let Some(why) = &r.why.release {
         line(out, format!("  release  {why}"))?;
     }
+    if let Some(why) = &r.why.chapters {
+        line(out, format!("  {why}"))?;
+    }
     for why in &r.why.set_aside {
         line(out, format!("  set aside  {why}"))?;
+    }
+    for said in r
+        .why
+        .doubts
+        .iter()
+        .filter_map(crate::resolve::Doubt::pinned_to_nothing)
+    {
+        line(out, format!("  {said}"))?;
     }
     for why in &r.why.dropped {
         line(out, format!("  dropped  {why}"))?;
@@ -112,7 +123,7 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
             out,
             format!(
                 "  {key:<width$} {} ({}{cleaned})",
-                values.join("; "),
+                crate::tags::escaped(&values.join("; ")),
                 why.from
             ),
         )?;
@@ -260,9 +271,13 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
                 whose(*edited)
             ),
         ),
-        Doing::Held { .. } => (
+        Doing::Held { file: Some(_) } => (
             Fate::Alone,
             "left as built, a source holding otherwise".to_string(),
+        ),
+        Doing::Held { file: None } => (
+            Fate::Alone,
+            "not written, its source damaged since it was built".to_string(),
         ),
         Doing::Retag | Doing::Write => match before {
             Some(p) if p == plan => (Fate::Again, "written again".to_string()),
@@ -361,7 +376,10 @@ pub(super) fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } = d {
+        if let Doing::Guard { file }
+        | Doing::Held { file: Some(file) }
+        | Doing::Blocked { file, .. } = d
+        {
             path.clone_from(file);
         }
         let (fate, verdict) = verdict(d, before, &r.plan);
@@ -425,17 +443,22 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
-    let (mut unlisted, mut settling) = store.unlisted(&known, SystemTime::now(), settling);
-    settling.retain(|path| {
-        let key = SourceKey::Manual(path.into());
-        let was_listed = state.listed.contains(&key);
-        if was_listed {
-            unlisted.push(key);
-        }
-        !was_listed
-    });
+    let mut found = super::Unlisted::of(manifest, state, store, settling);
+    let followed = super::moved(manifest, state, store, &mut found, |_| None);
+    for key in super::deleted(manifest, store, &followed, &found) {
+        crate::ui::info(
+            out,
+            &format!(
+                "Deleted from sources/manual by hand, taken out of its song by the next \
+                 sync: {key}"
+            ),
+        )?;
+    }
+    let super::Unlisted {
+        ready: unlisted,
+        settling,
+        ..
+    } = found;
     for key in unlisted {
         let line = if state.listed.contains(&key) {
             format!("Taken out of the song list by hand, kept out by the next sync: {key}")
@@ -453,13 +476,10 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    // A manual file not listed is added by the next sync; only fetched
-    // and kept files can lie unused.
-    for path in store
-        .unused(listed)
-        .iter()
-        .filter(|p| !p.starts_with(dirs.manual()))
-    {
+    // As `purge` deletes them: a removed song's sources stay for `restore`.
+    let mut known = listed.clone();
+    known.extend(manifest.removed_keys());
+    for path in store.purgeable(dirs, &known) {
         crate::ui::info(out, &format!("Unused: {}", path.display()))?;
     }
     Ok(())
