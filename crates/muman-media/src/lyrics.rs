@@ -771,6 +771,14 @@ pub fn sung(text: &str) -> String {
     out
 }
 
+/// Whether lyrics or a subtitle sing any word ([`sung`]): what makes them
+/// lyrics at all, wherever they come from. ID tags, cues and credits
+/// alone sing none.
+#[must_use]
+pub fn sings(text: &str) -> bool {
+    !sung(text).trim().is_empty()
+}
+
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,

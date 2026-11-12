@@ -94,6 +94,12 @@ const BUILT_TABLE: &str = "
     );
 ";
 
+/// The copies `add` made in the manual folder, a table a store made
+/// before it lacks, so made on every open.
+const COPIES_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS copies (key TEXT PRIMARY KEY, digest TEXT NOT NULL);
+";
+
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
 const TABLES: &str = "
@@ -171,6 +177,7 @@ impl Db {
                 }
                 tx.execute_batch(SONG_FAILURES)?;
                 tx.execute_batch(BUILT_TABLE)?;
+                tx.execute_batch(COPIES_TABLE)?;
                 Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
@@ -178,6 +185,7 @@ impl Db {
             db.conn
                 .execute_batch(SONG_FAILURES)
                 .and_then(|()| db.conn.execute_batch(BUILT_TABLE))
+                .and_then(|()| db.conn.execute_batch(COPIES_TABLE))
                 .and_then(|()| db.conn.execute_batch(RENAMINGS))
                 .with_context(|| format!("opening {}", db.file.display()))?;
         }
@@ -204,6 +212,7 @@ impl Db {
             for (name, made) in [
                 ("song_failures", SONG_FAILURES),
                 ("built", BUILT_TABLE),
+                ("copies", COPIES_TABLE),
                 ("renamings", RENAMINGS),
             ] {
                 let held: i64 = conn.query_row(
@@ -362,6 +371,7 @@ const REPLACED: Table = table("replaced", &["old"], Some("new"), false);
 const LISTED: Table = table("listed", &["key"], None, false);
 const DAMAGED: Table = table("damaged", &["key"], Some("audio"), false);
 const TRUSTED: Table = table("trusted", &["name"], Some("digest"), false);
+const COPIES: Table = table("copies", &["key"], Some("digest"), false);
 const FACTS: Table = table("facts", &["key"], Some("row"), true);
 const ALIGNMENTS: Table = table(
     "alignments",
@@ -391,13 +401,14 @@ const fn table(
 }
 
 /// Every table, in the order a snapshot reads them.
-const TABLES_OF_STATE: [&Table; 14] = [
+const TABLES_OF_STATE: [&Table; 15] = [
     &META,
     &OUTPUTS,
     &REPLACED,
     &LISTED,
     &DAMAGED,
     &TRUSTED,
+    &COPIES,
     &SONGS_FAILED,
     &BUILT,
     &FACTS,
@@ -491,6 +502,11 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
     }
     for row in parse(&TRUSTED) {
         state.trusted.insert(row.keys[0].clone(), value(row));
+    }
+    for row in parse(&COPIES) {
+        if let Some(k) = key_of(&row.keys[0]) {
+            state.copies.insert(k, value(row));
+        }
     }
     for row in parse(&FACTS) {
         if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
@@ -605,6 +621,14 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
             .trusted
             .iter()
             .map(|(name, digest)| Row::new(vec![name.clone()], Some(digest.clone())))
+            .collect(),
+    ));
+    tables.push((
+        &COPIES,
+        state
+            .copies
+            .iter()
+            .map(|(k, digest)| Row::new(vec![key(k)], Some(digest.clone())))
             .collect(),
     ));
     tables.push((
@@ -1063,6 +1087,7 @@ mod tests {
         state.listed.push(manual.clone());
         state.damaged.insert(key.clone(), "a1".into());
         state.trusted.insert("hooks".into(), "t1".into());
+        state.copies.insert(manual.clone(), "c1".into());
         state.songs_failed([(key.clone(), "no audio".to_string())]);
         state
             .facts

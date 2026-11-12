@@ -1474,3 +1474,42 @@ fn a_language_no_iso_639_table_names_is_left_out_of_a_list_and_refused_anew() {
     };
     m.trial(&[other]).unwrap();
 }
+
+#[test]
+fn a_file_moved_is_followed_alike_in_the_file_and_in_memory_wherever_a_key_names_it() {
+    let manual = |rel: &str| SourceKey::Manual(rel.into());
+    let body = "[[album]]\nsource = \"manual:in/a.flac\"\n\n\
+         [[song]]\nsources = [\"manual:in/a.flac\", \"manual:in/a.lrc\"]\n\
+         album = \"manual:in/a.flac\"\ntrack = 1\naudio = \"manual:in/a.flac\"\n\
+         cover = \"manual:in/a.flac\"\nlyrics = \"manual:in/a.lrc\"\n\
+         held.\"manual:in/a.flac\" = { audio = \"0123456789abcdef\" }\n\n\
+         [[removed]]\nnote = \"Lantern Weather\"\nsources = [\"manual:in/b.flac\"]\n\
+         trashed = [\"manual:in/b.flac\", \"manual:in/b.lrc\"]\n\
+         held.\"manual:in/b.flac\" = { audio = \"fedcba9876543210\" }\n";
+    let moved: BTreeMap<SourceKey, SourceKey> = ["a.flac", "a.lrc", "b.flac", "b.lrc"]
+        .into_iter()
+        .map(|f| (manual(&format!("in/{f}")), manual(&format!("back/{f}"))))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), body);
+    let mut in_memory = Manifest::load(dir.path()).unwrap();
+    in_memory.rekey(&moved);
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        moved_in(&text(dir.path()), &moved),
+    )
+    .unwrap();
+    assert!(
+        !text(dir.path()).contains("manual:in/"),
+        "{}",
+        text(dir.path())
+    );
+    let in_file = Manifest::load(dir.path()).unwrap();
+    assert_eq!(in_file.songs, in_memory.songs);
+    assert_eq!(in_file.albums, in_memory.albums);
+    assert_eq!(in_file.removed, in_memory.removed);
+    assert_eq!(
+        in_memory.removed[0].trashed,
+        [manual("back/b.flac"), manual("back/b.lrc")]
+    );
+}

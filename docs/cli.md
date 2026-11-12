@@ -45,7 +45,7 @@ Exit codes:
 * `set` — Set tags, pins, the release or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
-* `purge` — Delete fetched sources, lookup records and copies `add` made in `sources/manual/added` no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
+* `purge` — Delete fetched sources, lookup records and copies `add` made in `sources/manual/added` no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched, a copy you changed included. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing, unreadable or damaged; and picks in doubt: a title won by the order of sources, a source set aside, a song holding two recordings or playing another length than its record, a video's title read two ways, a name spelled two ways
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip, or with --folder into a new folder: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the export fits. The library and the song list are left as they are
@@ -320,7 +320,7 @@ Put the song list and the library back as they were before the last run that cha
 
 ### `muman purge`
 
-Delete fetched sources, lookup records and copies `add` made in `sources/manual/added` no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
+Delete fetched sources, lookup records and copies `add` made in `sources/manual/added` no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched, a copy you changed included. A source listed again is fetched again
 
 **Usage:** `muman purge [OPTIONS]`
 

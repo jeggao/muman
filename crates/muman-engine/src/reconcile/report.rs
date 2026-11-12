@@ -497,8 +497,8 @@ pub(super) fn status<W: Write>(
     // As `purge` deletes them: a removed song's sources stay for `restore`.
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    for unused in store.purgeable(dirs, &known) {
-        crate::ui::info(out, &format!("Unused: {}", unused.display()))?;
+    for path in store.purgeable(dirs, &known, &state.copies) {
+        crate::ui::info(out, &format!("Unused: {}", path.display()))?;
     }
     Ok(())
 }

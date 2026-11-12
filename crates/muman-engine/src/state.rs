@@ -21,6 +21,7 @@
 //! | `song_failures` | Yes: `check` names a song the last sync could not write only after the next sync fails it again |
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
 //! | `trusted` | Yes: the song list's commands and servers are asked about again (`trust`) |
+//! | `copies` | Yes: a copy `add` made is then the user's, and no purge deletes it |
 //!
 //! Each file beside an output, as its lyrics, is recorded as the output
 //! is, by its size, time and digest ([`Sidecar`]), so one changed since is
@@ -329,6 +330,15 @@ pub struct State {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub trusted: BTreeMap<String, String>,
+    /// Each copy `add` made in the manual folder's `added/`, by its key,
+    /// with the digest of its bytes as copied: a purge deletes it only
+    /// while it holds them ([`crate::store::Store::purgeable`]).
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub copies: BTreeMap<SourceKey, String>,
     /// Sources whose failures this process cleared, for a merge to clear
     /// on disk.
     #[serde(skip)]
@@ -928,6 +938,24 @@ impl State {
         let _lock = atomic::Lock::folder(home)?;
         let mut state = Self::load(home)?;
         state.trusted.clone_from(trusted);
+        state.save(home)
+    }
+
+    /// Record each copy of `made` in [`Self::copies`] and forget each of
+    /// `gone`, under the folder's lock, every other row left as the
+    /// store holds it.
+    pub fn keep_copies(
+        home: &Path,
+        made: &BTreeMap<SourceKey, String>,
+        gone: &BTreeSet<SourceKey>,
+    ) -> Result<()> {
+        if made.is_empty() && gone.is_empty() {
+            return Ok(());
+        }
+        let _lock = atomic::Lock::folder(home)?;
+        let mut state = Self::load(home)?;
+        state.copies.retain(|k, _| !gone.contains(k));
+        state.copies.extend(made.clone());
         state.save(home)
     }
 

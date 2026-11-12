@@ -99,7 +99,7 @@ A quantity takes its unit after the number; the space is optional:
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
-Every unit but `LUFS` and `LKFS` may be spelled out, as `"2 gibibytes"`
+Every unit but `LUFS` and `LKFS` may be spelled out, in any case, as `"2 gibibytes"`
 or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary sizes; `KB`,
 `MB` and `GB` decimal, `Mb` too: a size is never in bits. A bare number
 is bytes, hertz or a fraction; a bitrate, time, loudness or level needs its unit.

@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/15";
+pub const METHOD: &str = "tags/16";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -2014,6 +2014,36 @@ pub fn reads_as(path: &std::path::Path, probed: &crate::probe::Probed) -> bool {
             .any(|(format, types)| *format == probed.format && types.contains(&read))
 }
 
+/// A file's own tags, as both readers read them: `lofty`'s reading,
+/// `read`, where it read the file as the format it is ([`reads_as`]), and
+/// with it each tag ffprobe read, `probed`, of a field none of its names
+/// sets; all of ffprobe's where `lofty`'s reading is not the file's. So
+/// neither hides a field the other found: `lofty` reads no MP4 item keyed
+/// through a `keys` atom, as ffmpeg writes every tag with
+/// `use_metadata_tags`, and ffprobe joins a field given twice into one
+/// value, which `lofty` keeps apart, so for a field both read, `lofty`'s
+/// values stand.
+#[must_use]
+pub fn of_both(
+    read: Option<BTreeMap<String, Vec<String>>>,
+    probed: &BTreeMap<String, String>,
+) -> BTreeMap<String, Vec<String>> {
+    let field = |key: &str| r128(key).or_else(|| Field::named(key));
+    let Some(mut tags) = read else {
+        return (probed.iter())
+            .map(|(k, v)| (k.clone(), vec![v.clone()]))
+            .collect();
+    };
+    let found: Vec<Field> = tags.keys().filter_map(|k| field(k)).collect();
+    for (key, value) in probed {
+        if field(key).is_some_and(|f| !found.contains(&f)) {
+            tags.entry(key.clone())
+                .or_insert_with(|| vec![value.clone()]);
+        }
+    }
+    tags
+}
+
 /// A track or disc written `3/12` offers its total too, unless the file
 /// names the total in a tag of its own.
 #[must_use]
@@ -2932,12 +2962,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_field_either_reader_finds_is_read_and_lofty_s_values_stand_where_both_do() {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            (pairs.iter())
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let probed = map(&[
+            ("title", "Keyed Song"),
+            ("artist", "Marlo Venn"),
+            ("album", "Odd Boxes"),
+            ("track", "3/12"),
+            ("major_brand", "M4A "),
+        ]);
+        // As `lofty` reads an MP4 whose items are all keyed through `keys`.
+        let mdta = of_both(Some(BTreeMap::new()), &probed);
+        let offers = from_container(&mdta);
+        assert_eq!(offers[&Field::Title].values, ["Keyed Song"], "{mdta:?}");
+        assert_eq!(offers[&Field::Album].values, ["Odd Boxes"], "{mdta:?}");
+        assert!(
+            !mdta.contains_key("major_brand"),
+            "names no field: {mdta:?}"
+        );
+
+        let lofty: BTreeMap<String, Vec<String>> = [
+            ("title", vec!["Paper Comets", "Paper Comets (Live)"]),
+            ("tracknumber", vec!["3"]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect();
+        let both = of_both(Some(lofty), &probed);
+        let offers = from_container(&both);
+        assert_eq!(
+            offers[&Field::Title].values,
+            ["Paper Comets", "Paper Comets (Live)"]
+        );
+        assert_eq!(offers[&Field::Artist].values, ["Marlo Venn"]);
+        assert!(!both.contains_key("track"), "a field lofty read: {both:?}");
+
+        let alone = of_both(None, &probed);
+        assert_eq!(alone.len(), probed.len(), "ffprobe's whole reading");
+    }
+
     /// What every format's tags and lyrics offer once `lofty` writes them,
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/15",
-        "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
+        "tags/16",
+        "5867e0cfc67f5bc7fe9430cc4f2437e695a13e6010b58d2fc11c02142afceb90",
     );
 
     #[test]
@@ -2971,6 +3045,15 @@ mod tests {
             (ItemKey::ReplayGainTrackPeak, "0.98"),
         ];
         let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+        let probed: BTreeMap<String, String> = [
+            ("TITLE", "Lantern Weather"),
+            ("album_artist", "Ada Quill"),
+            ("lyricist", "Odile Marsh"),
+            ("encoder", "Lavf60.16.100"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         let formats = [
             (
                 "a.flac",
@@ -3022,7 +3105,8 @@ mod tests {
             digest
                 .debug(&read)
                 .debug(&from_container(&read))
-                .debug(&lyrics_in(&path));
+                .debug(&lyrics_in(&path))
+                .debug(&of_both(Some(read), &probed));
         }
         let release = r#"{"title": "Paper Comets (Official Video)", "track": "Paper Comets",
             "artists": ["Marlo Venn", "Ada Quill"], "album": "The Glass Orchards",

@@ -1428,7 +1428,8 @@ fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
         .unwrap();
     let (ok, text) = s.run(&flacs(), &["add", &song]);
     assert!(ok, "{text}");
-    let written = s.dir.path().join("lib/Unknown Artist/Song/Song.lrc");
+    // Named too by what the faked ffprobe reads and the file lacks.
+    let written = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
     assert_eq!(
         std::fs::read_to_string(&written).ok().as_deref(),
         Some(lrc),
@@ -2662,6 +2663,23 @@ fn a_path_named_that_is_no_file_or_folder_is_refused_before_it_is_read() {
         );
     }
     assert!(s.songs().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_socket_inside_a_folder_given_is_named_as_left_out() {
+    let s = Setup::new();
+    s.file("rips/a.flac");
+    let path = s.dir.path().join("rips/b.flac");
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let rips = s.dir.path().join("rips");
+    let (ok, text) = s.run(&flacs(), &["add", &rips.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Left out of") && text.contains("which muman never reads: b.flac"),
+        "{text}"
+    );
+    assert_eq!(s.songs().len(), 1, "{text}");
 }
 
 #[test]
@@ -6756,6 +6774,57 @@ fn restore_of_a_purged_song_waits_for_its_files_back_from_the_trash() {
     assert_eq!(s.songs().len(), 2, "{text}");
     let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
     assert!(!list.contains("trashed"), "{list}");
+}
+
+#[test]
+fn restore_follows_a_purged_file_put_back_in_another_folder() {
+    let s = Setup::new();
+    s.file("home/sources/manual/in/a.flac");
+    s.file("home/sources/manual/in/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:in/a.flac"]);
+    assert!(ok, "{text}");
+    // What the trash gives back: the file's own bytes, in another folder.
+    s.written(
+        "home/sources/manual/back/a.flac",
+        "home/sources/manual/in/a.flac",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("manual:back/a.flac"), "{text}");
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(!list.contains("manual:in/a.flac"), "{list}");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:back/a.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
+}
+
+#[test]
+fn undo_of_a_purge_follows_its_file_put_back_in_another_folder() {
+    let s = Setup::new();
+    s.file("home/sources/manual/in/a.flac");
+    s.file("home/sources/manual/in/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:in/a.flac"]);
+    assert!(ok, "{text}");
+    s.written(
+        "home/sources/manual/back/a.flac",
+        "home/sources/manual/in/a.flac",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("manual:back/a.flac"), "{text}");
+    for _ in 0..2 {
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "{text}");
+    }
+    assert_eq!(s.songs().len(), 2);
+    assert!(
+        s.songs()
+            .contains(&vec![SourceKey::Manual("back/a.flac".into())]),
+        "{:?}",
+        s.songs()
+    );
 }
 
 const MBID: &str = "00000000-0000-4000-8000-000000000001";

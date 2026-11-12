@@ -50,6 +50,8 @@ fields come from that source too.
 
 muman reads a file's tags by their Vorbis names, or by the names Picard
 gives them in MP3 and MP4; a track written `3/12` offers its total too.
+It reads them twice, with its tag reader and with ffprobe, and takes a
+field from whichever found it, the tag reader's values where both did.
 In MP3, MP4 and WavPack it writes each field where Picard writes it, so
 muman and Picard agree on a library. A value its field cannot hold, as
 a date that is none, or a value over 4 KiB, counts as offered by no

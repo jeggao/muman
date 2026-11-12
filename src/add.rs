@@ -27,7 +27,7 @@
 //! file is in it. Read after each file, the store's walk took longer than
 //! measuring the files did.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -148,6 +148,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             .copied
             .iter()
             .for_each(|f| run.copied(&dirs.home, f));
+        keep_copies(dirs, &attached.copied)?;
         give_tags(dirs, &attached.songs, &how, listed, &mut run, out)?;
         // The copies attaching made, noted ahead of the steps after.
         run.checkpoint(&dirs.home)?;
@@ -169,6 +170,19 @@ pub(crate) fn run<R: Runner, W: Write>(
     }
     not_added(&unread, left_out)?;
     Ok(ok)
+}
+
+/// Record each of `copied`, the copies attaching made in the manual
+/// folder, as made, so a purge deletes one only while it holds what was
+/// copied ([`crate::state::State::copies`]).
+fn keep_copies(dirs: &Dirs, copied: &[PathBuf]) -> Result<()> {
+    let made: BTreeMap<SourceKey, String> = (copied.iter())
+        .filter_map(|f| {
+            let rel = f.strip_prefix(dirs.manual()).ok()?;
+            Some((SourceKey::Manual(rel.into()), crate::hash::digest_file(f)?))
+        })
+        .collect();
+    crate::state::State::keep_copies(&dirs.home, &made, &BTreeSet::new())
 }
 
 /// What attaching the loose files did: a refusal is held in `refused`
@@ -457,6 +471,7 @@ fn import_all<R: Runner, W: Write>(
             others |= loose.len() > given;
             say_left_out(path, &left, out)?;
             crate::given::say_outside(path, &walked.outside, out)?;
+            crate::given::say_special(path, &walked.special, out)?;
             for (file, key) in &originals {
                 let given = (&folder, file.as_path());
                 originals_in.bring_into(dirs, given, key.clone(), (out, copied), &mut brought)?;

@@ -99,7 +99,9 @@
 //! next sync, and a file of the user's own is in the desktop's trash,
 //! which muman cannot take it back from on every platform. The run
 //! records each it trashed, and `undo` refuses until the user puts them
-//! back, rather than list their songs again with nothing to make them.
+//! back, rather than list their songs again with nothing to make them:
+//! where each was, or where a run since followed it, as the list put back
+//! names it there.
 //! What `add` copied into the sources is recorded with a digest of it,
 //! and `undo` takes each copy out with its song, else the next sync
 //! would list it again as a file dropped in: a copy as made is deleted,
@@ -1316,12 +1318,24 @@ impl UndoPlan {
 }
 
 /// Refuse until every file of the user's the run trashed is back: its
-/// song would be listed again with no file to make it from.
-fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
+/// song would be listed again with no file to make it from. One put back
+/// elsewhere in the manual folder, and followed there by a run since, is
+/// back where the list put back names it ([`Record::put_back`]).
+fn all_trashed_back(dirs: &Dirs, record: &Record) -> Result<()> {
+    let home = &dirs.home;
+    let followed = |rel: &Path| {
+        let manual = dirs.manual();
+        let from = home.join(rel);
+        let key = SourceKey::Manual(from.strip_prefix(&manual).ok()?.into());
+        let SourceKey::Manual(to) = record.followed.get(&key)? else {
+            return None;
+        };
+        crate::relpath::on_disk(&manual, to.path())
+    };
     let gone: Vec<String> = record
         .trashed
         .iter()
-        .filter(|rel| crate::relpath::on_disk(home, rel).is_none())
+        .filter(|rel| crate::relpath::on_disk(home, rel).is_none() && followed(rel).is_none())
         .map(|rel| format!("  {}", home.join(rel).display()))
         .collect();
     if !gone.is_empty() {
@@ -1438,7 +1452,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     refuse_another_library(&record, &state, dirs)?;
     refuse_writing_over(&record, &state, dirs)?;
-    all_trashed_back(home, &record)?;
+    all_trashed_back(dirs, &record)?;
     let mut lines = Vec::new();
     if record.undoing {
         lines.push("Finish the undo stopped partway".to_string());

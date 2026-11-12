@@ -694,11 +694,6 @@ impl LyricsFacts {
     }
 }
 
-/// Whether lyrics or a subtitle sing any word.
-fn sings(text: &str) -> bool {
-    !lyrics::sung(text).trim().is_empty()
-}
-
 /// Whether the letters lyrics or a subtitle sing are Latin alone.
 fn latin(text: &str) -> bool {
     crate::clean::latin_only(&lyrics::sung(text))
@@ -890,7 +885,7 @@ pub fn relyric<R: Runner>(
             }
         };
         if let Some(text) = file.and_then(|f| read_text(f).ok()) {
-            found.push((place.clone(), sings(&text)));
+            found.push((place.clone(), lyrics::sings(&text)));
         }
     }
     let outputs: Vec<Output> = streams
@@ -911,7 +906,7 @@ pub fn relyric<R: Runner>(
         .zip(ffmpeg::run(runner, &inputs, &outputs))
     {
         if let Some(text) = result.ok().and_then(|()| read_text(&output.path).ok()) {
-            found.push((LyricsAt::Stream { index: *index }, sings(&text)));
+            found.push((LyricsAt::Stream { index: *index }, lyrics::sings(&text)));
         }
     }
     Ok(found)
@@ -936,20 +931,14 @@ fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
     }
 }
 
-/// A media file's own tags, as `lofty` reads them, or as ffprobe does,
-/// `probed`, for a file `lofty` does not read as the format it is
-/// ([`tags::reads_as`]).
+/// A media file's own tags, as `lofty` and ffprobe, `probed`, read them
+/// together ([`tags::of_both`]); as ffprobe alone does for a file `lofty`
+/// does not read as the format it is ([`tags::reads_as`]).
 fn own_tags(probed: &Probed, path: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
-    tags::reads_as(path, probed)
+    let read = (tags::reads_as(path, probed))
         .then(|| tags::read_file(path))
-        .flatten()
-        .unwrap_or_else(|| {
-            probed
-                .tags
-                .iter()
-                .map(|(k, v)| (k.clone(), vec![v.clone()]))
-                .collect()
-        })
+        .flatten();
+    tags::of_both(read, &probed.tags)
 }
 
 fn read_text(path: &Path) -> Result<String> {
@@ -985,7 +974,7 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
         timing: lyrics::timing(&lyrics::clean_lrc(text)),
         stated_ms: lyrics::stated_length(text),
         digest: None,
-        sings: Some(sings(text)),
+        sings: Some(lyrics::sings(text)),
         latin: Some(latin(text)),
     }
 }
@@ -1500,7 +1489,7 @@ fn media<R: Runner>(
                         timing: lyrics::timing(&lyrics::clean_lrc(&text)),
                         stated_ms: None,
                         digest: None,
-                        sings: Some(sings(&text)),
+                        sings: Some(lyrics::sings(&text)),
                         latin: Some(latin(&text)),
                     });
                 }

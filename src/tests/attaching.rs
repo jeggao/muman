@@ -202,6 +202,40 @@ fn purge_deletes_the_lyrics_add_copied_once_no_song_lists_them() {
 }
 
 #[test]
+fn purge_leaves_a_file_of_yours_in_added_and_a_copy_you_changed() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let lrc = s.written("elsewhere/Lantern Weather.lrc", "[00:01.00]first light\n");
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok, "{text}");
+    let added = s.dir.path().join("home/sources/manual/added");
+    std::fs::write(added.join("draft.lrc"), "[00:01.00]still writing\n").unwrap();
+    std::fs::write(added.join("my-photo.png"), b"not muman's").unwrap();
+    std::fs::write(
+        added.join("Lantern Weather.lrc"),
+        "[00:01.00]first light, my way\n",
+    )
+    .unwrap();
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let key = ", \"manual:added/Lantern Weather.lrc\"";
+    assert!(listed.contains(key), "{listed}");
+    std::fs::write(&songs, listed.replace(key, "")).unwrap();
+    s.run(&fake, &["sync"]);
+    let (_, said) = s.report(&fake, &["status"]);
+    assert!(!said.contains("Unused:"), "{said}");
+    let (ok, text) = s.run(&fake, &["purge", "-y"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Nothing unused to delete"), "{text}");
+    assert_eq!(
+        s.added(),
+        ["Lantern Weather.lrc", "draft.lrc", "my-photo.png"],
+        "{text}"
+    );
+}
+
+#[test]
 fn lyrics_tags_name_their_song_and_a_length_far_off_keeps_them_out() {
     let s = Setup::new();
     let fake = library();
@@ -635,7 +669,7 @@ fn lyrics_of_a_song_s_own_words_find_it_by_its_lyrics_tag() {
     let same = s.written("dl/same.lrc", words[0].1);
     let (ok, text) = s.run(&fake, &["add", &same]);
     assert!(
-        ok && text.contains("Lantern Weather.flac already holds it"),
+        ok && text.contains("Lantern Weather — Marlo Venn already holds it"),
         "{text}"
     );
     let lrc = s.written(
@@ -803,6 +837,37 @@ fn a_loose_file_left_out_still_lets_the_songs_added_with_it_be_written() {
         format!("{e:#}").contains("1 file(s) could not be added"),
         "{e:#}"
     );
+}
+
+#[test]
+fn lyrics_of_id_tags_or_cues_alone_are_no_lyrics_and_not_added() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    for (name, text) in [
+        ("tags.lrc", "[ti:Lantern Weather]\n[ar:Marlo Venn]\n"),
+        ("cues.lrc", "[00:01.00][Chorus]\n[00:05.00]\u{266a}\n"),
+        ("blank.lrc", "\n"),
+    ] {
+        let lrc = s.written(&format!("dl/{name}"), text);
+        let mut out = Vec::new();
+        let e = run_with(
+            &s.job(&["add", &lrc, "--to", "Lantern Weather"]),
+            &fake,
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        let said = crate::ui::plain(&String::from_utf8(out).unwrap());
+        assert!(said.contains("holds no lyrics"), "{name}: {said}");
+        assert!(
+            format!("{e:#}").contains("1 file(s) could not be added"),
+            "{name}: {e:#}"
+        );
+    }
+    assert!(s.added().is_empty(), "{:?}", s.added());
 }
 
 #[test]

@@ -12,6 +12,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A size is bytes however its unit is cased**: `max_size = "240Mb"`,
   `"2 Gb"` or `--max-size 1kb` read as megabytes, gigabytes and
   kilobytes, where they read as bits; a unit of bits is refused.
+- **A unit spelled out is read in any case**: `"2 Bytes"`, `"1 Kilobyte"`
+  or `"14 Days"` read as their small letters do, where they were refused.
+- **`purge` deletes only the copies `add` made, as it made them**: a
+  lyrics file or picture you put in `sources/manual/added/`, or a copy
+  there you changed, is yours and stays, where it was deleted outright.
+  A copy an earlier muman made is kept as yours too.
+- **A purged file you put back in another folder is followed by
+  `restore` and `undo`**: once a sync follows it there, neither asks for
+  it at its old place any more.
+- **`add` refuses lyrics that sing no line**, as an `.lrc` of ID tags
+  alone, as it refuses an empty one: they were listed and gave the song
+  nothing.
+- **`add` names a pipe, a device or a socket inside a folder it is
+  given** as left out, as it names a `.pdf` beside it.
+- **An MP4 whose tags ffmpeg wrote with `use_metadata_tags` is named by
+  them**, where it was "Untitled": a field ffprobe reads and the tag
+  reader does not is taken from ffprobe.
 - **`add` refuses a pipe, a device or a socket named on its command
   line** before reading it, where one named as a song or lyrics held the
   run up for ever.

@@ -242,9 +242,9 @@ when it is clearly the nearest.
 Without a terminal, a file not surely a song's is left out, and `add`
 exits with code 5 once the rest is done. A file that cannot be used is
 not added, and `add` exits with code 4 after writing the songs given
-with it: a `.pdf`, an empty `.lrc`, a picture that does not decode
-whole, a song file with no audio, or a cue sheet that splits one song's
-file into tracks.
+with it: a `.pdf`, an `.lrc` that sings no line, as one of ID tags or
+cues alone, a picture that does not decode whole, a song file with no
+audio, or a cue sheet that splits one song's file into tracks.
 
 `--to` names the songs with a query instead of matching; quote the
 query as one word. For a picture it names every song to give it to,

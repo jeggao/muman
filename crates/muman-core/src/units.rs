@@ -21,6 +21,9 @@
 //! a plan can compare exactly.
 //!
 //! `uom` reads a number, one space and a unit exactly as it spells it.
+//! A unit's name spelled out is read here in any case, `"2 Gibibytes"`
+//! as `"2 gibibytes"`; an abbreviation only as `uom` cases it, which
+//! tells `Ms`, megaseconds, from `ms`, milliseconds, by case alone.
 //! What muman read before it came stays readable on top: no space, any
 //! case, `K`, `M`, `G` and `T` alone as binary sizes (`KiB`) where `uom`
 //! has no such unit, `kbps`, `k` for kilobits a second, as ffmpeg writes
@@ -106,23 +109,30 @@ fn split(text: &str) -> (&str, &str) {
 }
 
 /// `text` read as a quantity of `Q`: as `uom` spells its units, if
-/// `takes` that spelling, else by one of `aliases`, matched in any case,
-/// which names a unit `uom` knows and how many of it one of the alias makes.
+/// `takes` that spelling; else by one of `names`, each unit's singular
+/// and plural, in any case; else by one of `aliases`, matched in any
+/// case, which names a unit `uom` knows and how many of it one of the
+/// alias makes. Only a name is matched in any case, as `uom` tells `Ms`
+/// from `ms` and `Mb` from `MB` by their case alone.
 fn quantity<Q: std::str::FromStr + std::ops::Mul<f64, Output = Q>>(
     text: &str,
     takes: impl Fn(&str) -> bool,
+    names: impl IntoIterator<Item = [&'static str; 2]>,
     aliases: &[(&str, &str, f64)],
 ) -> Option<Q> {
     let (number, unit) = split(text);
     if number.is_empty() {
         return None;
     }
-    if takes(unit)
-        && let Ok(q) = format!("{number} {unit}").parse::<Q>()
-    {
-        return Some(q);
-    }
     let lower = unit.to_lowercase();
+    let by_name = (names.into_iter().flatten()).find(|n| n.to_lowercase() == lower);
+    for spelled in [Some(unit), by_name].into_iter().flatten() {
+        if takes(spelled)
+            && let Ok(q) = format!("{number} {spelled}").parse::<Q>()
+        {
+            return Some(q);
+        }
+    }
     let &(_, to, times) = aliases.iter().find(|(from, _, _)| *from == lower)?;
     format!("{number} {to}")
         .parse::<Q>()
@@ -137,6 +147,13 @@ fn names_bytes(unit: &str) -> bool {
         [u.abbreviation(), u.singular(), u.plural()].contains(&unit)
             && (u.singular().ends_with("byte") || u.singular() == "octet")
     })
+}
+
+/// The singular and plural of each unit of the `uom` kind `$kind`.
+macro_rules! names {
+    ($kind:ident) => {
+        $kind::units().map(|u| [u.singular(), u.plural()])
+    };
 }
 
 /// Every spelling `uom` gives a unit of another kind.
@@ -214,7 +231,7 @@ fn kept<Q, T>(
 pub fn parse_size(text: &str) -> Result<u64, String> {
     kept(
         text,
-        |t| quantity::<Information>(t, names_bytes, SIZES),
+        |t| quantity::<Information>(t, names_bytes, names!(information), SIZES),
         |q| whole(q.get::<information::byte>()),
         "a size, such as \"4 GiB\" or \"700 MB\"",
     )
@@ -234,7 +251,7 @@ impl std::str::FromStr for Bitrate {
     fn from_str(text: &str) -> Result<Self, String> {
         kept(
             text,
-            |t| quantity::<InformationRate>(t, any, BITRATES),
+            |t| quantity::<InformationRate>(t, any, names!(information_rate), BITRATES),
             |q| whole(q.get::<information_rate::kilobit_per_second>()),
             "a bitrate, such as \"160 kb/s\"",
         )
@@ -248,7 +265,7 @@ impl std::str::FromStr for Time {
     fn from_str(text: &str) -> Result<Self, String> {
         kept(
             text,
-            |t| quantity::<Seconds>(t, any, TIMES),
+            |t| quantity::<Seconds>(t, any, names!(time), TIMES),
             |q| whole(q.get::<time::millisecond>()),
             "a length of time, such as \"14 days\" or \"2 s\"",
         )
@@ -262,7 +279,7 @@ impl std::str::FromStr for Frequency {
     fn from_str(text: &str) -> Result<Self, String> {
         kept(
             text,
-            |t| quantity::<Hertz>(t, any, FREQUENCIES),
+            |t| quantity::<Hertz>(t, any, names!(frequency), FREQUENCIES),
             |q| whole(q.get::<frequency::hertz>()),
             "a frequency, such as \"500 Hz\"",
         )
@@ -274,7 +291,7 @@ impl std::str::FromStr for Share {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, String> {
-        quantity::<Ratio>(text, any, SHARES)
+        quantity::<Ratio>(text, any, names!(ratio), SHARES)
             .map(|q| (q.get::<ratio::ratio>() * 1e12).round() / 1e12)
             .filter(|f| f.is_finite())
             .map(Self)
@@ -664,6 +681,24 @@ mod tests {
             assert!(parse_size(bits).is_err(), "{bits}");
         }
         assert_eq!("240Mb".parse::<Size>(), Ok(Size(240_000_000)));
+    }
+
+    #[test]
+    fn a_unit_spelled_out_is_read_in_any_case() {
+        assert_eq!(parse_size("2 Bytes"), Ok(2));
+        assert_eq!(parse_size("1 Kilobyte"), Ok(1000));
+        assert_eq!(parse_size("3 MEGABYTES"), Ok(3_000_000));
+        assert_eq!(parse_size("2 Gibibytes"), Ok(2 << 30));
+        assert!(parse_size("2 Megabits").is_err());
+        assert_eq!("14 Days".parse(), Ok(Time::days(14)));
+        assert_eq!("2 Seconds".parse(), Ok(Time(2000)));
+        assert_eq!("160 Kilobits per Second".parse(), Ok(Bitrate(160)));
+        assert_eq!("1.5 Kilohertz".parse(), Ok(Frequency(1500)));
+        assert_eq!(
+            "2 Ms".parse(),
+            Ok(Time(2_000_000_000)),
+            "an abbreviation keeps its case"
+        );
     }
 
     #[test]

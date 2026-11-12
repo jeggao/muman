@@ -629,7 +629,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let (mut unused, mut strays) = (Group::default(), Group::default());
     let mut known = listed.clone();
     known.extend(c.manifest.removed_keys());
-    for path in &c.store.purgeable(c.dirs, &known) {
+    for path in &c.store.purgeable(c.dirs, &known, &c.state.copies) {
         if c.store.leftovers().contains(path) {
             strays.add(&path.display().to_string());
         } else {

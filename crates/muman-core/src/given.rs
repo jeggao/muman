@@ -24,7 +24,7 @@
 //! forever or never end it, and a socket holds nothing. A path named on
 //! the command line is sorted once, by [`Named::of`], before anything
 //! reads it: one that is no regular file or folder is refused there, as
-//! a walk passes one over inside a folder.
+//! a walk passes one over inside a folder, and names it ([`say_special`]).
 //!
 //! Every walk of a folder given and every copy out of one goes through
 //! [`Folder`], as `tests/architecture.rs` keeps it. muman's own folders,
@@ -75,12 +75,14 @@ impl Named {
     }
 }
 
-/// What a walk of a [`Folder`] found: its regular files, and the links
-/// inside it leading out of it, passed over.
+/// What a walk of a [`Folder`] found: its regular files, and what it
+/// passed over: the links inside it leading out of it, and the pipes,
+/// devices and sockets.
 #[derive(Debug, Default, Clone)]
 pub struct Walked {
     pub files: Vec<PathBuf>,
     pub outside: Vec<PathBuf>,
+    pub special: Vec<PathBuf>,
 }
 
 impl Folder {
@@ -160,10 +162,11 @@ impl Folder {
                 }
                 inside
             });
-        let mut files = Vec::new();
+        let (mut files, mut special) = (Vec::new(), Vec::new());
         for entry in entries {
             match entry {
                 Ok(e) if e.file_type().is_file() => files.push(e.into_path()),
+                Ok(e) if !e.file_type().is_dir() => special.push(e.into_path()),
                 Ok(_) => {}
                 Err(e) if e.loop_ancestor().is_some() || e.path().is_some_and(is_link) => {}
                 Err(e)
@@ -173,8 +176,12 @@ impl Folder {
             }
         }
         walked.files = files;
+        walked.special = special;
         if root != self.path.as_path() {
-            for path in walked.files.iter_mut().chain(&mut walked.outside) {
+            for path in (walked.files.iter_mut())
+                .chain(&mut walked.outside)
+                .chain(&mut walked.special)
+            {
                 if let Ok(rel) = path.strip_prefix(root) {
                     *path = rel.to_path_buf();
                 }
@@ -182,6 +189,7 @@ impl Folder {
         }
         walked.files.sort();
         walked.outside.sort();
+        walked.special.sort();
         Ok(walked)
     }
 
@@ -224,10 +232,29 @@ fn is_link(path: &Path) -> bool {
 ///
 /// Writing to `out`.
 pub fn say_outside<W: Write>(dir: &Path, outside: &[PathBuf], out: &mut W) -> Result<()> {
-    if outside.is_empty() {
+    say_passed_over(dir, outside, "links leading out of it", out)
+}
+
+/// Warn of the pipes, devices and sockets in `dir`, a folder given, that
+/// were passed over, each named below `dir`.
+///
+/// # Errors
+///
+/// Writing to `out`.
+pub fn say_special<W: Write>(dir: &Path, special: &[PathBuf], out: &mut W) -> Result<()> {
+    say_passed_over(
+        dir,
+        special,
+        "pipes, devices or sockets, which muman never reads",
+        out,
+    )
+}
+
+fn say_passed_over<W: Write>(dir: &Path, files: &[PathBuf], as_: &str, out: &mut W) -> Result<()> {
+    if files.is_empty() {
         return Ok(());
     }
-    let named: Vec<String> = outside
+    let named: Vec<String> = files
         .iter()
         .map(|f| f.strip_prefix(dir).unwrap_or(f).display().to_string())
         .collect();
@@ -239,7 +266,7 @@ pub fn say_outside<W: Write>(dir: &Path, outside: &[PathBuf], out: &mut W) -> Re
     crate::ui::warning(
         out,
         &format!(
-            "Left out of {}, as links leading out of it: {}",
+            "Left out of {}, as {as_}: {}",
             shown.display(),
             named.join(", ")
         ),
@@ -361,6 +388,14 @@ mod tests {
         let folder = Folder::new(&album);
         let walked = folder.walk(usize::MAX).unwrap();
         assert_eq!(names(&album, &walked.files), ["Paper Comets.flac"]);
+        assert_eq!(names(&album, &walked.special), ["Paper Comets.lrc"]);
+        let mut out = Vec::new();
+        say_special(&album, &walked.special, &mut out).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert!(
+            said.contains("sockets, which muman never reads: Paper Comets.lrc"),
+            "{said}"
+        );
         assert!(!folder.holds(&socket));
         let e = folder
             .copy(&socket, &dir.path().join("copy.lrc"))

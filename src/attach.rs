@@ -59,7 +59,9 @@
 //! With `-y` the likeliest is taken when it leads the next by 0.10.
 //! Without a terminal it is left out, and the command refuses at its
 //! end, so a script hears that a file it named was not added. A file
-//! that cannot be used, as one that does not read or a cue sheet that
+//! that cannot be used, as one that does not read, lyrics that sing no
+//! line by the rule that makes any source's lyrics
+//! (`lyrics::sings`), or a cue sheet that
 //! splits one song's file into tracks, is not added either, and the
 //! command fails at its end; the songs given with it are written first. Distances
 //! are rounded to thousandths before any comparison, and ties go to the
@@ -886,7 +888,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
                 lyrics::read(&raw)
                     .with_context(|| format!("{} reads as no text", path.display()))?
             };
-            if text.trim().is_empty() {
+            if !lyrics::sings(&text) {
                 bail!("{} holds no lyrics", path.display());
             }
             let h = lyrics::headers(&text);

@@ -518,8 +518,8 @@ pub enum Command {
     /// Delete fetched sources, lookup records and copies `add` made in
     /// `sources/manual/added` no song uses: an upload a release took the
     /// place of, a source taken out of its song. A removed song's sources
-    /// stay for `restore`, and a file of your own is never touched. A
-    /// source listed again is fetched again.
+    /// stay for `restore`, and a file of your own is never touched, a copy
+    /// you changed included. A source listed again is fetched again.
     Purge {
         /// Delete without asking; needed without a terminal.
         #[arg(short = 'y', long)]

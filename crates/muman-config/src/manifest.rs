@@ -735,7 +735,7 @@ impl Manifest {
             }
         }
         for removed in &mut self.removed {
-            for k in &mut removed.sources {
+            for k in removed.sources.iter_mut().chain(&mut removed.trashed) {
                 if let Some(to) = moved.get(k) {
                     k.clone_from(to);
                 }
@@ -1444,6 +1444,15 @@ fn spelled_now(text: &str) -> Option<String> {
     Some(key.to_string()).filter(|now| now != text)
 }
 
+/// Every field of a song, an album or a removed song that names sources,
+/// a key or a list of keys; with the `held` record, by key, every place a
+/// key stands. A file followed where it moved, as a key spelled anew, is
+/// followed in each, in the file ([`respell`]) as in memory
+/// ([`Manifest::rekey`]), which a test holds to the same.
+const KEYED: [&str; 9] = [
+    "sources", "trashed", "source", "album", "audio", "cover", "lyrics", "next", "prev",
+];
+
 /// Write each source key in `doc` as `now` spells it, where it does:
 /// in each song's, album's and removed song's keys, and its records.
 /// Returns each key written otherwise, by the key written.
@@ -1469,14 +1478,13 @@ fn respell(
             continue;
         };
         for t in tables.iter_mut() {
-            if let Some(keys) = t.get_mut("sources").and_then(Item::as_array_mut) {
-                keys.iter_mut().for_each(|v| string(v, &mut written));
-            }
-            for name in [
-                "source", "album", "audio", "cover", "lyrics", "next", "prev",
-            ] {
-                if let Some(v) = t.get_mut(name).and_then(Item::as_value_mut) {
-                    string(v, &mut written);
+            for name in KEYED {
+                match t.get_mut(name).and_then(Item::as_value_mut) {
+                    Some(Value::Array(keys)) => {
+                        keys.iter_mut().for_each(|v| string(v, &mut written));
+                    }
+                    Some(v) => string(v, &mut written),
+                    None => {}
                 }
             }
             let Some(held) = t.get_mut("held").and_then(Item::as_table_like_mut) else {
