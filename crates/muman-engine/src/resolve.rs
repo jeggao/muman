@@ -88,7 +88,13 @@
 //! quality 5 in 1, and AAC at 192 kbit/s in none. A lossless copy made
 //! from lossy audio, as the other 22 were, bounds nothing: a lossy copy
 //! wider than it may come from a better source, though of these the Opus
-//! copies at 96 kbit/s measured wider in 17. Mono
+//! copies at 96 kbit/s measured wider in 17. A lossy copy counts no wider
+//! either than any copy of its recording, lossy or lossless, it measures
+//! at most [`crate::quality::SMEAR_BANDS`] wider than: an encoder's noise
+//! moves the wall of a lowpass it was given by as much, and whole steps
+//! alone do not absorb it, two near-equals straddling a step's edge a step
+//! apart. A Vorbis copy of an MP3 measured 19.12 kHz to its 18.95, a step
+//! wider, though above 19 kHz both held the same. Mono
 //! comes before bandwidth because it is the larger loss to a listener:
 //! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
 //! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
@@ -1663,7 +1669,9 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
 /// audio, that clips less than it does or of which it is a lossy copy:
 /// what clipping adds above a lowpass is no sound of the recording, nor
 /// what an encoder fills in above it, and a step of bandwidth outweighs
-/// all of clipping and every tie-break.
+/// all of clipping and every tie-break. Lossy, it counts no wider either
+/// than any copy it measures at most [`crate::quality::SMEAR_BANDS`]
+/// wider than, which it may have been made from.
 fn bounded(
     facts: &Facts,
     compared: &[&Aligned],
@@ -1672,19 +1680,30 @@ fn bounded(
     let audio = facts.audio.as_ref()?;
     let q = audio.quality?;
     let lossy = !audio.is_lossless();
-    let cleaner = compared
-        .iter()
-        .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
-        .filter_map(|(_, _, facts)| facts.audio.as_ref())
+    let others = || {
+        compared
+            .iter()
+            .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
+            .filter_map(|(_, _, facts)| facts.audio.as_ref())
+    };
+    let cleaner = others()
         .filter(|audio| audio.is_lossless() && !audio.flags().band_limited)
         .filter_map(|audio| audio.quality)
         .filter(|other| lossy || other.clipping < q.clipping)
         .map(|other| other.bandwidth_hz)
         .reduce(f64::max);
-    Some(AudioQuality {
-        bandwidth_hz: cleaner.map_or(q.bandwidth_hz, |hz| q.bandwidth_hz.min(hz)),
-        ..q
-    })
+    let smear = crate::quality::smear_hz(audio.sample_rate);
+    let smeared = others()
+        .filter(|_| lossy)
+        .filter_map(|audio| audio.quality)
+        .map(|other| other.bandwidth_hz)
+        .filter(|hz| q.bandwidth_hz - hz <= smear)
+        .reduce(f64::min);
+    let bandwidth_hz = [cleaner, smeared]
+        .into_iter()
+        .flatten()
+        .fold(q.bandwidth_hz, f64::min);
+    Some(AudioQuality { bandwidth_hz, ..q })
 }
 
 /// How far `facts`' peak ([`crate::dynamics`]) stands above its

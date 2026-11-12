@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/14";
+pub const METHOD: &str = "tags/15";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1949,35 +1949,69 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// The file at `path` read by `lofty` for its tags alone. Its audio's
 /// properties are not read: `lofty` refuses some a file may hold, as an
 /// Opus stream of mapping family 255, and a file's tags never need them.
-/// Its format is told by its bytes, as ffprobe tells it, its name only
-/// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
-/// and `song.opus.part` is a file being written. An Ogg stream of a codec
-/// `lofty` does not read, as Ogg FLAC, it takes for MPEG by a frame sync
-/// inside its audio, and finds no tags in: such a file is refused as of
-/// no format `lofty` knows, so its tags are read as ffprobe reads them.
+/// Its format is told by its bytes, its name only where they say nothing:
+/// a FLAC named `.mp3` holds Vorbis comments, and `song.opus.part` is a
+/// file being written. Whether that format is the file's own, a source's
+/// facts ask [`reads_as`] first.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    use lofty::file::FileType;
-    use std::io::Read;
-
-    let probe = lofty::probe::Probe::open(path)?.guess_file_type()?;
-    let ogg = matches!(
-        probe.file_type(),
-        Some(FileType::Vorbis | FileType::Opus | FileType::Speex)
-    );
-    let mut magic = [0; 4];
-    if !ogg
-        && std::fs::File::open(path)
-            .and_then(|mut f| f.read_exact(&mut magic))
-            .is_ok()
-        && magic == *b"OggS"
-    {
-        return Err(lofty::error::UnknownFormatError.into());
-    }
-    probe
+    lofty::probe::Probe::open(path)?
+        .guess_file_type()?
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
+}
+
+/// The formats `lofty` reads tags of, by ffprobe's name for each, and as
+/// what `lofty` reads it.
+const LOFTY_READS: [(&str, &[lofty::file::FileType]); 11] = {
+    use lofty::file::FileType;
+    [
+        ("mp3", &[FileType::Mpeg]),
+        ("aac", &[FileType::Aac]),
+        ("flac", &[FileType::Flac]),
+        ("ogg", &[FileType::Vorbis, FileType::Opus, FileType::Speex]),
+        ("wav", &[FileType::Wav]),
+        ("aiff", &[FileType::Aiff]),
+        ("ape", &[FileType::Ape]),
+        ("wv", &[FileType::WavPack]),
+        ("mpc", &[FileType::Mpc]),
+        ("mpc8", &[FileType::Mpc]),
+        (MP4, &[FileType::Mp4]),
+    ]
+};
+
+/// ffprobe's name for the ISO base media formats, MPEG-4 and QuickTime.
+const MP4: &str = "mov,mp4,m4a,3gp,3g2,mj2";
+
+/// Whether `lofty` reads the file at `path` as the format ffprobe found it
+/// to be, `probed`, so that the tags, lyrics and pictures it reads are the
+/// file's; where it does not, they are read as ffprobe reads them. Where
+/// its bytes name no format `lofty` knows, `lofty` takes a file for MPEG
+/// by a frame sync in its first kilobyte, as PCM, ALAC or FLAC audio
+/// holds by chance, and finds no tags in it: so it read a CAF, an RF64
+/// WAVE and an Ogg FLAC. ffmpeg reads MPEG-4 and QuickTime with one
+/// demuxer, its major brand `qt` telling QuickTime apart, which keeps its
+/// tags as `udta` atoms where `lofty` looks for MPEG-4's `ilst` alone.
+#[must_use]
+pub fn reads_as(path: &std::path::Path, probed: &crate::probe::Probed) -> bool {
+    let guessed = lofty::probe::Probe::open(path).map(lofty::probe::Probe::guess_file_type);
+    let Some(read) = guessed
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|p| p.file_type())
+    else {
+        return false;
+    };
+    let quicktime = probed.format == MP4
+        && probed
+            .tags
+            .get("major_brand")
+            .is_some_and(|b| b.trim() == "qt");
+    !quicktime
+        && LOFTY_READS
+            .iter()
+            .any(|(format, types)| *format == probed.format && types.contains(&read))
 }
 
 /// A track or disc written `3/12` offers its total too, unless the file
@@ -2602,18 +2636,44 @@ mod tests {
     }
 
     #[test]
-    fn an_ogg_flac_is_no_file_lofty_reads_tags_from() {
+    fn lofty_counts_only_where_it_reads_a_file_as_the_format_ffprobe_found() {
         let dir = tempfile::tempdir().unwrap();
-        let oga = dir.path().join("a.oga");
-        std::fs::write(&oga, include_bytes!("../../../testdata/silence.oga")).unwrap();
+        let probed = |format: &str, brand: Option<&str>| crate::probe::Probed {
+            format: format.into(),
+            tags: brand
+                .map(|b| ("major_brand".to_string(), b.to_string()))
+                .into_iter()
+                .collect(),
+            ..crate::probe::Probed::default()
+        };
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let synced = |head: &[u8]| [head, &[0, 0x12, 0xff, 0xfb, 0x90, 0x64, 0, 0]].concat();
+        let ogg = probed("ogg", None);
+        let oga = file("a.oga", include_bytes!("../../../testdata/silence.oga"));
+        assert!(!reads_as(&oga, &ogg), "lofty takes an Ogg FLAC for MPEG");
+        assert!(reads_as(
+            &file("a.ogg", crate::testing::SILENCE_VORBIS),
+            &ogg
+        ));
+        let rf64 = file("b.wav", &synced(b"RF64\xff\xff\xff\xffWAVEds64"));
+        assert!(!reads_as(&rf64, &probed("wav", None)), "nor an RF64 WAVE");
+        let riff = file("c.wav", &synced(b"RIFF\x40\0\0\0WAVEfmt "));
+        assert!(reads_as(&riff, &probed("wav", None)));
+        let caf = file("d.caf", &synced(b"caff\0\x01\0\0desc"));
+        assert!(!reads_as(&caf, &probed("caf", None)), "nor a CAF");
+        let mov = file("e.mov", &synced(b"\0\0\0\x14ftypqt  \0\0\x02\0qt  "));
+        let mp4 = "mov,mp4,m4a,3gp,3g2,mj2";
         assert!(
-            read_tagged(&oga).is_err_and(|e| e.is_unknown_format()),
-            "lofty takes it for MPEG and finds no tags"
+            !reads_as(&mov, &probed(mp4, Some("qt  "))),
+            "QuickTime keeps udta"
         );
-        assert_eq!(read_file(&oga), None);
-        let ogg = dir.path().join("a.ogg");
-        std::fs::write(&ogg, crate::testing::SILENCE_VORBIS).unwrap();
-        assert!(read_file(&ogg).is_some());
+        let m4a = file("f.m4a", crate::testing::SILENCE_M4A);
+        assert!(reads_as(&m4a, &probed(mp4, Some("M4A "))));
+        assert!(!reads_as(&m4a, &probed("matroska,webm", None)));
     }
 
     #[test]
@@ -2876,7 +2936,7 @@ mod tests {
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/14",
+        "tags/15",
         "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
     );
 

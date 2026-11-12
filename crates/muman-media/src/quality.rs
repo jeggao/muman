@@ -305,6 +305,23 @@ pub const UPSAMPLED_HZ: f64 = 24_500.0;
 /// kbit/s reach, under the 20 kHz a converter's own filter stops at.
 pub const BAND_LIMITED_HZ: f64 = 19_000.0;
 
+/// The most bands a lossy encoder moves up the wall of a lowpass already
+/// in what it encodes: its noise fills the bands where the lowpass falls,
+/// and it drops or adds the floor past it the wall is held against. Of 40
+/// MP3 pieces cut 40 s long, copies made from them as Vorbis at quality 2
+/// to 8, MP3 at V0 and 320 kbit/s, AAC at 256 kbit/s and Opus at 96 and
+/// 192 kbit/s measured wider than their MP3 in 92 of 360, 67 of them by 3
+/// bands or less; of the 25 wider still, 23 were Opus and AAC filling the
+/// band past the lowpass, and two Vorbis copies of a piece one of whose
+/// excerpts the MP3 had starved of bits.
+pub const SMEAR_BANDS: u32 = 3;
+
+/// The Hz of [`SMEAR_BANDS`] at `sample_rate`.
+#[must_use]
+pub fn smear_hz(sample_rate: u32) -> f64 {
+    f64::from(SMEAR_BANDS) * real(BAND_BINS) * f64::from(sample_rate) / real(FFT)
+}
+
 /// What lossless audio's measures show it holds less of than it declares.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Flags {

@@ -401,6 +401,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   has a client read, not only the one it has servers send. A date of a
   day there is not, or with the wrong weekday, is no date, and the
   request waits as after any refusal.
+- **The tags of a CAF, an RF64 WAVE or a QuickTime `.mov` are read**,
+  where they were dropped and the song named "Untitled": a file's own
+  tags, lyrics and pictures are read as ffprobe reads them wherever the
+  tag reader took it for another format.
+- **A PCM WAVE, CAF or WMA file cut off is found so**, as an AIFF or a
+  FLAC is: its length is read from its header, where ffmpeg gave the
+  length of what was left.
+- **A lossy copy made from another no longer wins by its encoder's
+  noise**: a Vorbis file made from an MP3 counts as wide as the MP3,
+  where it measured a step wider and replaced it.
 
 ## [0.11.0] - 2026-11-10
 

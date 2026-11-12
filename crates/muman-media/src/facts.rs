@@ -856,8 +856,8 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     Ok(Reread {
         tags: tags_of(info.as_ref(), &probed, &located.path),
         release: info.as_ref().is_some_and(VideoInfo::is_release),
+        lyrics: own_lyrics(located, &probed),
         chapters: probed.chapters,
-        lyrics: tag_lyrics(located),
         ..Reread::default()
     })
 }
@@ -924,30 +924,32 @@ fn tags_digest(fetched: bool, probed: &Probed, path: &Path, scratch: &Path) -> O
     if fetched {
         return info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?);
     }
-    let own = tags::read_file(path).unwrap_or_else(|| {
-        probed
-            .tags
-            .iter()
-            .map(|(k, v)| (k.clone(), vec![v.clone()]))
-            .collect()
-    });
-    Some(digest(&serde_json::to_vec(&own).ok()?))
+    Some(digest(&serde_json::to_vec(&own_tags(probed, path)).ok()?))
 }
 
 /// What a media file's tags offer: its info JSON's, for what yt-dlp
-/// fetched; else its own, as `lofty` reads them, or as ffprobe does for a
-/// format `lofty` does not read.
+/// fetched; else its own ([`own_tags`]).
 fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
     match info {
         Some(info) => tags::from_info(info),
-        None => tags::from_container(&tags::read_file(path).unwrap_or_else(|| {
+        None => tags::from_container(&own_tags(probed, path)),
+    }
+}
+
+/// A media file's own tags, as `lofty` reads them, or as ffprobe does,
+/// `probed`, for a file `lofty` does not read as the format it is
+/// ([`tags::reads_as`]).
+fn own_tags(probed: &Probed, path: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    tags::reads_as(path, probed)
+        .then(|| tags::read_file(path))
+        .flatten()
+        .unwrap_or_else(|| {
             probed
                 .tags
                 .iter()
                 .map(|(k, v)| (k.clone(), vec![v.clone()]))
                 .collect()
-        })),
-    }
+        })
 }
 
 fn read_text(path: &Path) -> Result<String> {
@@ -966,6 +968,14 @@ pub fn tag_lyrics(located: &Located) -> Option<LyricsFacts> {
         digest: Some(digest(text.as_bytes())),
         ..lyrics_of(LyricsAt::Tag, &text)
     })
+}
+
+/// [`tag_lyrics`], of a file `lofty` reads as the format it is, `probed`
+/// ([`tags::reads_as`]).
+fn own_lyrics(located: &Located, probed: &Probed) -> Option<LyricsFacts> {
+    tags::reads_as(&located.path, probed)
+        .then(|| tag_lyrics(located))
+        .flatten()
 }
 
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
@@ -1064,7 +1074,9 @@ fn cover_outputs(
     inputs: &mut Vec<Input>,
 ) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
-    let tagged = picture::tag_pictures(path);
+    let tagged = tags::reads_as(path, probed)
+        .then(|| picture::tag_pictures(path))
+        .flatten();
     let streams = tagged
         .as_deref()
         .is_none_or(|t| streams_agree(&probed.pictures, t));
@@ -1347,7 +1359,7 @@ pub fn hash<R: Runner>(
         }
     }
     file_digests(located, &probed, scratch, &mut digests);
-    if let Some(d) = tag_lyrics(located).and_then(|l| l.digest) {
+    if let Some(d) = own_lyrics(located, &probed).and_then(|l| l.digest) {
         digests.lyrics.push((LyricsAt::Tag, d));
     }
     digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
@@ -1522,7 +1534,7 @@ fn media<R: Runner>(
     if let Some(Ok(text)) = &sidecar {
         facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, text));
     }
-    if let Some(l) = tag_lyrics(located) {
+    if let Some(l) = own_lyrics(located, &probed) {
         digests
             .lyrics
             .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));

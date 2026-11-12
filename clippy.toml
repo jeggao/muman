@@ -1,5 +1,5 @@
 # Proper nouns doc comments name; `..` keeps clippy's own list.
-doc-valid-idents = ["YouTube", "FFmpeg", "SQLite", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", "WebVTT", "SubRip", ".."]
+doc-valid-idents = ["YouTube", "FFmpeg", "SQLite", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", "WebVTT", "SubRip", "QuickTime", ".."]
 
 # A call that changes a file, runs a program, reaches the terminal, makes
 # a run's own file or follows a link, allowed only where `#[expect]` says

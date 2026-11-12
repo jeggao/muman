@@ -14,8 +14,8 @@
 //! read from its packets instead.
 //!
 //! A length counts as stated only for a format known to state one
-//! ([`STATED`]), and for MP3 and WAVE only where muman reads it in the
-//! file's own header; any other is taken for a guess. A format that
+//! ([`STATED`]), and for MP3, WAVE, CAF and ASF only where muman reads it
+//! in the file's own header; any other is taken for a guess. A format that
 //! states its length but is not known so is then judged by its packets
 //! and its decode alone, and a file of it cut short is not found by its
 //! length; one taken to state a length it guesses was judged cut off
@@ -25,20 +25,28 @@
 //! [`STATED`] holds what ffmpeg 6.1 reads from a header that still gives
 //! the whole length once the file is cut: FLAC's STREAMINFO, MP4's `mvhd`
 //! and `mdhd`, Matroska's segment duration and `DURATION` tags, and the
-//! headers of WavPack, Monkey's Audio, TTA, AIFF, ASF, Sun AU and CAF.
-//! Ogg's is its last page's granule, read from the end, so it never shows
-//! a cut and never makes one up. A FLAC whose STREAMINFO counts no
-//! samples, as one encoded into a pipe, has no length at all, and ffmpeg
-//! guesses none. An MP3's own header says whether it states its frames,
-//! as ffmpeg reads it: the Xing or Info tag, with its frame count, after
-//! the first frame's side information, or the VBRI tag 32 bytes in. A
-//! WAVE file states its length for PCM and float audio, whose data size
-//! over its block size is exact, but for compressed audio held in it, as
-//! MP3, only in a `fact` chunk counting its samples: without one, ffmpeg
-//! divides the data's size by the header's average byte rate, which a
-//! muxer may write as anything. An MP3 in WAVE of 90 s whose header said
-//! 27 kb/s for its 112 read as 359 s. An MP3 or WAVE file whose header
-//! cannot be read states nothing muman can confirm.
+//! headers of WavPack, Monkey's Audio, TTA, AIFF and Sun AU. Ogg's is its
+//! last page's granule, read from the end, so it never shows a cut and
+//! never makes one up. A FLAC whose STREAMINFO counts no samples, as one
+//! encoded into a pipe, has no length at all, and ffmpeg guesses none. An
+//! MP3's own header says whether it states its frames, as ffmpeg reads
+//! it: the Xing or Info tag, with its frame count, after the first frame's
+//! side information, or the VBRI tag 32 bytes in.
+//!
+//! WAVE, CAF and ASF headers state a length too, but ffmpeg gives it only
+//! while the file holds all the header says: past that, as for a WAVE
+//! whose `data` runs past the file's end, an ASF file more than 5% off the
+//! size its header states, and a CAF of PCM always, it estimates one from
+//! the bytes there are, which a cut never shows. A PCM WAVE of 40 s cut to
+//! 17 s read as 17 s, where the same cut of an AIFF read as 40 s. muman
+//! reads these headers itself ([`Stated::Read`]). A WAVE file states its
+//! length for PCM and float audio, whose data size over its block size is
+//! exact, but for compressed audio held in it, as MP3, only in a `fact`
+//! chunk counting its samples: without one, ffmpeg divides the data's size
+//! by the header's average byte rate, which a muxer may write as anything.
+//! An MP3 in WAVE of 90 s whose header said 27 kb/s for its 112 read as
+//! 359 s. A file of these four whose header cannot be read states nothing
+//! muman can confirm.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -126,7 +134,8 @@ pub struct Probed {
     /// ffprobe's names for the container's format, as `mp3` or
     /// `mov,mp4,m4a,3gp,3g2,mj2`.
     pub format: String,
-    /// Seconds, from the container; ffmpeg's guess where [`Self::guessed`].
+    /// Seconds, from the container, or as [`read`] reads its header;
+    /// ffmpeg's guess where [`Self::guessed`].
     pub duration: Option<f64>,
     /// Whether the file states no length, so that ffprobe's lengths are
     /// guessed from its size and bitrate; [`read`] then drops the audio
@@ -355,21 +364,33 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
 }
 
 /// What `path` holds, by one ffprobe run, its audio stream's length
-/// dropped where the file states none ([`Probed::guessed`]).
+/// the one its header states, as muman reads it where ffmpeg would not
+/// give it once the file is cut ([`Stated::Read`]), and dropped where the
+/// file states none ([`Probed::guessed`]).
 pub fn read<R: Runner>(runner: &R, path: &Path) -> Result<Probed> {
     let mut probed = parse(&runner.output(&ffprobe_command(path))?)?;
-    probed.guessed = guessed(&probed.format, || std::fs::File::open(path));
-    if probed.guessed
-        && let Some(audio) = &mut probed.audio
-    {
-        audio.duration = None;
+    match stated(&probed.format, || std::fs::File::open(path)) {
+        Stated::Probed => {}
+        Stated::Read(seconds) => {
+            probed.duration = Some(seconds);
+            if let Some(audio) = &mut probed.audio {
+                audio.duration = Some(seconds);
+            }
+        }
+        Stated::Unstated => {
+            probed.guessed = true;
+            if let Some(audio) = &mut probed.audio {
+                audio.duration = None;
+            }
+        }
     }
     Ok(probed)
 }
 
 /// ffprobe's names of the formats whose header states the audio's length,
-/// as ffmpeg reads it, besides MP3 and WAVE, which muman reads itself.
-const STATED: [&str; 11] = [
+/// as ffmpeg reads it, besides MP3, WAVE, CAF and ASF, which muman reads
+/// itself.
+const STATED: [&str; 9] = [
     "flac",
     "ogg",
     "mov,mp4,m4a,3gp,3g2,mj2",
@@ -378,20 +399,44 @@ const STATED: [&str; 11] = [
     "ape",
     "tta",
     "aiff",
-    "asf",
     "au",
-    "caf",
 ];
 
-/// Whether a file of `format` states no length muman knows of: one not
-/// of [`STATED`], an MP3 whose header, read from what `open` gives,
-/// counts no frames, or a WAVE file of compressed audio with no `fact`
-/// chunk.
-fn guessed<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> bool {
-    match format {
-        "mp3" => !open().and_then(mp3_counts_frames).unwrap_or(false),
-        "wav" => !open().and_then(wave_states_length).unwrap_or(false),
-        _ => !STATED.contains(&format),
+/// What a file's header states of its audio's length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Stated {
+    /// The length ffprobe gives, which ffmpeg reads from the header.
+    Probed,
+    /// Seconds, as muman reads them from the header: ffmpeg gives what is
+    /// there instead once the file is cut.
+    Read(f64),
+    /// None muman can confirm: ffprobe's length is a guess.
+    Unstated,
+}
+
+/// What a file of `format` states of its length: nothing for one not of
+/// [`STATED`] or an MP3 whose header, read from what `open` gives, counts
+/// no frames; a WAVE, CAF or ASF file's as its header says.
+fn stated<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> Stated {
+    let reading = |read: fn(F) -> std::io::Result<Stated>| open().and_then(read);
+    let header = match format {
+        "mp3" => reading(|file| {
+            Ok(if mp3_counts_frames(file)? {
+                Stated::Probed
+            } else {
+                Stated::Unstated
+            })
+        }),
+        "wav" => reading(wave_length),
+        "caf" => reading(caf_length),
+        "asf" => reading(asf_length),
+        _ if STATED.contains(&format) => Ok(Stated::Probed),
+        _ => Ok(Stated::Unstated),
+    };
+    match header {
+        Ok(Stated::Read(seconds)) if !(seconds.is_finite() && seconds > 0.0) => Stated::Unstated,
+        Ok(stated) => stated,
+        Err(_) => Stated::Unstated,
     }
 }
 
@@ -402,24 +447,46 @@ const WAVE_EXACT: [u16; 2] = [0x0001, 0x0003];
 /// The format tag of a WAVE file whose real one is in its extension.
 const WAVE_EXTENSIBLE: u16 = 0xfffe;
 
-/// Whether a WAVE file states its length: its audio PCM or float, or a
-/// `fact` chunk counting samples, before its `data`. A file not shaped as
-/// one states none muman can confirm.
-fn wave_states_length<F: Read + Seek>(mut file: F) -> std::io::Result<bool> {
+/// The length a WAVE file states before its `data`: of PCM or float audio,
+/// the data's size over the block size, of other audio only a `fact`
+/// chunk's samples. An RF64 or BW64 file's sizes are in its `ds64` chunk.
+/// A RIFF file's data of no size, or of the largest, is written as one
+/// streamed, its end unknown, and ffmpeg reads it to the end of the file.
+/// A file not shaped as one states none muman can confirm.
+fn wave_length<F: Read + Seek>(mut file: F) -> std::io::Result<Stated> {
     let mut head = [0_u8; 12];
     file.read_exact(&mut head)?;
-    if !matches!(&head[..4], b"RIFF" | b"RF64" | b"BW64") || &head[8..] != b"WAVE" {
-        return Ok(false);
+    let wide = matches!(&head[..4], b"RF64" | b"BW64");
+    if !(wide || &head[..4] == b"RIFF") || &head[8..] != b"WAVE" {
+        return Ok(Stated::Unstated);
     }
-    let (mut tag, mut counted) = (None, false);
+    let (mut tag, mut rate, mut align) = (None, 0_u32, 0_u16);
+    let (mut samples, mut wide_data) = (0_u64, None);
     loop {
         let mut chunk = [0_u8; 8];
         if file.read_exact(&mut chunk).is_err() {
-            break;
+            return Ok(Stated::Unstated);
         }
-        let size = u64::from(u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]));
+        let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
         match &chunk[..4] {
-            b"data" => break,
+            b"data" => {
+                let data = if wide {
+                    wide_data
+                } else {
+                    (size != 0 && size != u32::MAX).then_some(u64::from(size))
+                };
+                let frames = match data {
+                    Some(bytes) if tag.is_some_and(|t| WAVE_EXACT.contains(&t)) && align > 0 => {
+                        bytes / u64::from(align)
+                    }
+                    _ => samples,
+                };
+                return Ok(if frames > 0 && rate > 0 {
+                    Stated::Read(frames as f64 / f64::from(rate))
+                } else {
+                    Stated::Unstated
+                });
+            }
             b"fmt " => {
                 let mut fmt = vec![0_u8; size.min(64) as usize];
                 file.read_exact(&mut fmt)?;
@@ -431,18 +498,33 @@ fn wave_states_length<F: Read + Seek>(mut file: F) -> std::io::Result<bool> {
                     Some(WAVE_EXTENSIBLE) => word(24),
                     other => other,
                 };
-                past(&mut file, size, fmt.len())?;
+                rate = fmt
+                    .get(4..8)
+                    .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                align = word(12).unwrap_or(0);
+                past(&mut file, u64::from(size), fmt.len())?;
             }
             b"fact" => {
-                let mut samples = [0_u8; 4];
-                file.read_exact(&mut samples)?;
-                counted = u32::from_le_bytes(samples) > 0;
-                past(&mut file, size, 4)?;
+                let mut counted = [0_u8; 4];
+                file.read_exact(&mut counted)?;
+                samples = samples.max(u64::from(u32::from_le_bytes(counted)));
+                past(&mut file, u64::from(size), 4)?;
             }
-            _ => past(&mut file, size, 0)?,
+            b"ds64" => {
+                let mut sizes = [0_u8; 24];
+                file.read_exact(&mut sizes)?;
+                let long = |at: usize| {
+                    let mut b = [0_u8; 8];
+                    b.copy_from_slice(&sizes[at..at + 8]);
+                    u64::from_le_bytes(b)
+                };
+                wide_data = Some(long(8)).filter(|bytes| *bytes > 0);
+                samples = samples.max(long(16));
+                past(&mut file, u64::from(size), 24)?;
+            }
+            _ => past(&mut file, u64::from(size), 0)?,
         }
     }
-    Ok(tag.is_none_or(|t| WAVE_EXACT.contains(&t)) || counted)
 }
 
 /// Seek past the rest of a chunk of `size` bytes, padded to an even
@@ -451,6 +533,109 @@ fn past<F: Seek>(file: &mut F, size: u64, read: usize) -> std::io::Result<()> {
     let rest = (size + (size & 1)).saturating_sub(read as u64);
     file.seek(SeekFrom::Current(i64::try_from(rest).unwrap_or(i64::MAX)))
         .map(drop)
+}
+
+/// The length a CAF file states: of audio in packets of one size, as PCM,
+/// its `data` chunk's size in packets, over its `desc` chunk's rate; none
+/// where that size is unknown, the file written as a stream. Packets of
+/// many sizes, as ALAC's or AAC's, its `pakt` chunk lists, and ffmpeg
+/// reads its length from them.
+fn caf_length<F: Read + Seek>(mut file: F) -> std::io::Result<Stated> {
+    let mut head = [0_u8; 8];
+    file.read_exact(&mut head)?;
+    if &head[..4] != b"caff" {
+        return Ok(Stated::Unstated);
+    }
+    let (mut rate, mut packet_bytes, mut packet_frames) = (0.0, 0_u64, 0_u64);
+    loop {
+        let mut chunk = [0_u8; 12];
+        if file.read_exact(&mut chunk).is_err() {
+            return Ok(Stated::Unstated);
+        }
+        let mut size = [0_u8; 8];
+        size.copy_from_slice(&chunk[4..]);
+        let size = i64::from_be_bytes(size);
+        match &chunk[..4] {
+            b"desc" => {
+                let mut desc = [0_u8; 32];
+                file.read_exact(&mut desc)?;
+                let word = |at: usize| {
+                    u64::from(u32::from_be_bytes([
+                        desc[at],
+                        desc[at + 1],
+                        desc[at + 2],
+                        desc[at + 3],
+                    ]))
+                };
+                let mut hz = [0_u8; 8];
+                hz.copy_from_slice(&desc[..8]);
+                (rate, packet_bytes, packet_frames) = (f64::from_be_bytes(hz), word(16), word(20));
+                file.seek(SeekFrom::Current(size.saturating_sub(32)))?;
+            }
+            b"data" if packet_bytes == 0 || packet_frames == 0 => return Ok(Stated::Probed),
+            b"data" => {
+                // The data begins with an edit count; -1 is a size unknown.
+                let Some(bytes) = u64::try_from(size).ok().and_then(|s| s.checked_sub(4)) else {
+                    return Ok(Stated::Unstated);
+                };
+                let frames = bytes / packet_bytes * packet_frames;
+                return Ok(Stated::Read(frames as f64 / rate));
+            }
+            _ if size < 0 => return Ok(Stated::Unstated),
+            _ => {
+                file.seek(SeekFrom::Current(size))?;
+            }
+        }
+    }
+}
+
+/// The GUID an ASF file's header object begins with, as its bytes lie.
+const ASF_HEADER: [u8; 16] = [
+    0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
+];
+
+/// The GUID of an ASF file's properties object, as its bytes lie.
+const ASF_PROPERTIES: [u8; 16] = [
+    0xa1, 0xdc, 0xab, 0x8c, 0x47, 0xa9, 0xcf, 0x11, 0x8e, 0xe4, 0x00, 0xc0, 0x0c, 0x20, 0x53, 0x65,
+];
+
+/// The length an ASF file states, as ffmpeg reads it: its file properties'
+/// play duration, in 100 ns, less its preroll, in ms; none for a broadcast,
+/// whose properties hold no length. ffmpeg keeps that length only while
+/// the file is within 5% of the size its properties state.
+fn asf_length<F: Read + Seek>(mut file: F) -> std::io::Result<Stated> {
+    let mut head = [0_u8; 30];
+    file.read_exact(&mut head)?;
+    if head[..16] != ASF_HEADER {
+        return Ok(Stated::Unstated);
+    }
+    let objects = u32::from_le_bytes([head[24], head[25], head[26], head[27]]);
+    let long = |b: &[u8], at: usize| {
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&b[at..at + 8]);
+        u64::from_le_bytes(bytes)
+    };
+    for _ in 0..objects {
+        let mut object = [0_u8; 24];
+        file.read_exact(&mut object)?;
+        let size = long(&object, 16);
+        if object[..16] == ASF_PROPERTIES {
+            let mut properties = [0_u8; 68];
+            file.read_exact(&mut properties)?;
+            let (play, preroll) = (long(&properties, 40), long(&properties, 56));
+            let broadcast = properties[64] & 1 == 1;
+            return Ok(if broadcast || play == 0 {
+                Stated::Unstated
+            } else {
+                Stated::Read(play as f64 / 1e7 - preroll as f64 / 1e3)
+            });
+        }
+        let Some(rest) = size.checked_sub(24).and_then(|r| i64::try_from(r).ok()) else {
+            break;
+        };
+        file.seek(SeekFrom::Current(rest))?;
+    }
+    Ok(Stated::Unstated)
 }
 
 /// Bytes read for an MP3's first frame, past its `ID3v2` tag: enough for
@@ -641,6 +826,10 @@ mod tests {
 
     use super::*;
 
+    fn guessed<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> bool {
+        stated(format, open) == Stated::Unstated
+    }
+
     fn mp3_guessed(bytes: Vec<u8>) -> bool {
         guessed("mp3", || Ok(Cursor::new(bytes)))
     }
@@ -730,6 +919,119 @@ mod tests {
         assert!(!wav(wave(0x0055, None, Some(3_969_000))), "MP3 counted");
         assert!(wav(wave(0xfffe, Some(0x0055), None)), "extensible MP3");
         assert!(wav(b"not a wave at all".to_vec()));
+    }
+
+    fn header(format: &str, bytes: Vec<u8>) -> Stated {
+        stated(format, || Ok(Cursor::new(bytes)))
+    }
+
+    /// [`wave`] of PCM whose `data` chunk says it holds `bytes`.
+    fn cut_wave(bytes: u32) -> Vec<u8> {
+        let mut cut = wave(0x0001, None, None);
+        let at = cut.len() - 20;
+        cut[at..at + 4].copy_from_slice(&bytes.to_le_bytes());
+        cut
+    }
+
+    #[test]
+    fn a_wave_cut_off_states_the_length_its_header_does() {
+        let forty = 44_100 * 40;
+        assert_eq!(
+            header("wav", cut_wave(forty)),
+            Stated::Read(40.0),
+            "not the 16 bytes held"
+        );
+        for streamed in [0, u32::MAX] {
+            assert_eq!(
+                header("wav", cut_wave(streamed)),
+                Stated::Unstated,
+                "{streamed}"
+            );
+        }
+        let mut rf64 = cut_wave(u32::MAX);
+        rf64[..4].copy_from_slice(b"RF64");
+        let mut ds64 = b"ds64".to_vec();
+        ds64.extend(28_u32.to_le_bytes());
+        for long in [0_u64, 44_100 * 50, 0] {
+            ds64.extend(long.to_le_bytes());
+        }
+        ds64.extend(0_u32.to_le_bytes());
+        rf64.splice(12..12, ds64);
+        assert_eq!(header("wav", rf64), Stated::Read(50.0), "its sizes in ds64");
+    }
+
+    /// A CAF file's header: packets of `packet_bytes`, one frame each, at
+    /// 44.1 kHz, its data chunk `data` bytes long.
+    fn caf(packet_bytes: u32, data: i64) -> Vec<u8> {
+        let mut file = b"caff\0\x01\0\0desc".to_vec();
+        file.extend(32_i64.to_be_bytes());
+        file.extend(44_100.0_f64.to_be_bytes());
+        file.extend(b"lpcm");
+        for word in [0, packet_bytes, 1, 2, 16] {
+            file.extend(word.to_be_bytes());
+        }
+        file.extend(b"data");
+        file.extend(data.to_be_bytes());
+        file.extend([0; 12]);
+        file
+    }
+
+    #[test]
+    fn a_caf_of_pcm_states_the_length_of_its_data() {
+        let forty = 4 + 4 * 44_100 * 40;
+        assert_eq!(header("caf", caf(4, forty)), Stated::Read(40.0));
+        assert_eq!(header("caf", caf(4, -1)), Stated::Unstated, "streamed");
+        assert_eq!(
+            header("caf", caf(0, forty)),
+            Stated::Probed,
+            "packets listed"
+        );
+        assert_eq!(header("caf", b"caff".to_vec()), Stated::Unstated);
+    }
+
+    /// An ASF header holding file properties of `play` 100 ns, `preroll`
+    /// ms and `flags`.
+    fn asf(play: u64, preroll: u64, flags: u32) -> Vec<u8> {
+        let mut file = ASF_HEADER.to_vec();
+        file.extend(134_u64.to_le_bytes());
+        file.extend(1_u32.to_le_bytes());
+        file.extend([1, 2]);
+        file.extend(ASF_PROPERTIES);
+        file.extend(104_u64.to_le_bytes());
+        file.extend([0; 40]);
+        for long in [play, 0, preroll] {
+            file.extend(long.to_le_bytes());
+        }
+        file.extend(flags.to_le_bytes());
+        file.extend([0; 12]);
+        file
+    }
+
+    #[test]
+    fn an_asf_file_states_its_play_duration_less_its_preroll() {
+        assert_eq!(header("asf", asf(71_000_000, 100, 2)), Stated::Read(7.0));
+        let broadcast = header("asf", asf(71_000_000, 100, 1));
+        assert_eq!(broadcast, Stated::Unstated);
+        let mut other = asf(71_000_000, 100, 2);
+        other[0] = 0;
+        assert_eq!(header("asf", other), Stated::Unstated);
+    }
+
+    #[test]
+    fn a_length_ffmpeg_estimates_gives_way_to_the_one_the_header_states() {
+        use crate::testing::Fake;
+
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "pcm_s16le",
+            "sample_rate": "44100", "channels": 2, "duration": "17.0"}],
+            "format": {"format_name": "wav", "duration": "17.0"}}"#;
+        let fake = Fake::default().probe(".wav", json);
+        let path = dir.path().join("Cut.wav");
+        std::fs::write(&path, cut_wave(44_100 * 40)).unwrap();
+        let probed = read(&fake, &path).unwrap();
+        assert!(!probed.guessed);
+        assert_eq!(probed.audio.unwrap().duration, Some(40.0));
+        assert_eq!(probed.duration, Some(40.0));
     }
 
     #[test]

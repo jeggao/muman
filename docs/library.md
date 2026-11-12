@@ -60,7 +60,7 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
   made from an MP3 measures as narrow as the MP3, under any fill 20 dB
   down, while a recording whose treble fades on its own measures full.
   A lossy copy, or one that clips more, counts no wider than a lossless
-  copy of its recording: what clipping or an encoder fills in is no sound.
+  copy of its recording: what clipping or an encoder fills in is no sound. Nor does a lossy copy count wider than any copy of its recording it tops by three bands (about 500 Hz) or less, as an encoder's noise moves a lowpass: a Vorbis file made from an MP3 counts as wide as the MP3.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples

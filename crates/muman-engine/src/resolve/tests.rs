@@ -444,6 +444,26 @@ fn a_lossy_copy_never_counts_wider_than_a_lossless_copy_of_its_recording() {
     );
 }
 
+#[test]
+fn a_lossy_copy_of_a_lossy_copy_never_counts_wider_by_its_encoder_s_noise() {
+    let (mp3, ogg, aac) = (manual("tide.mp3"), manual("tide.ogg"), manual("tide.m4a"));
+    let facts = BTreeMap::from([
+        (mp3.clone(), audio("mp3", 18.95)),
+        (ogg.clone(), audio("vorbis", 19.12)),
+        (aac.clone(), audio("aac", 19.7)),
+    ]);
+    let alignments = both(&facts, &mp3, &ogg, 0, 0.99).to_vec();
+    for order in [[&mp3, &ogg], [&ogg, &mp3]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(&r.plan.audio.key, order[0], "{}", r.why.audio);
+    }
+    let r = run(&song(&[mp3.clone(), ogg.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, ogg, "not known to be one recording");
+    let alignments = both(&facts, &mp3, &aac, 0, 0.99).to_vec();
+    let r = run(&song(&[mp3, aac.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, aac, "wider than any encoder's noise");
+}
+
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
 /// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
 fn cut(
