@@ -54,7 +54,7 @@ pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
 pub use self::measure::{analyze_mixes, compare};
 pub use self::owned::{
-    adopt, changed_since_written, edited_since_written, rehome, sidecar_as_written,
+    adopt, changed_since_written, edited_since_written, left_in, rehome, sidecar_as_written,
     vouch_for_copies,
 };
 use self::plan::plan_awaiting;
@@ -211,6 +211,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
             crate::history::Moves::Follow
         };
         crate::history::follow_moves(home, &dirs.library, &mut state, moves);
+        if let Some(run) = rec.run().filter(|_| !opts.dry_run) {
+            run.forget_unmade(&dirs.library);
+        }
     }
     let store = Store::scan(dirs)?;
     let temp = crate::atomic::Scratch::new()?;
@@ -375,20 +378,8 @@ pub fn reconcile_into<R: Runner, W: Write>(
     adopt(&mut state, &dirs.library, out)?;
     vouch_for_copies(&dirs.library, &mut state);
     if !opts.dry_run {
-        let paths = planned
-            .iter()
-            .flat_map(|(_, r)| {
-                let path = path_of(r);
-                let names = crate::artifact::parts(&r.plan).files(&path);
-                std::iter::once(path).chain(names)
-            })
-            .chain(
-                state
-                    .outputs
-                    .iter()
-                    .flat_map(|(p, w)| w.files(p).map(Path::to_path_buf)),
-            );
-        crate::library::clear_leftovers(&dirs.library, paths);
+        let moving = crate::history::moving(home);
+        crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
     }
     let located: BTreeMap<SourceKey, Located> = listed
         .iter()

@@ -256,6 +256,12 @@ pub struct State {
     /// Every audio file written, by its path in the library.
     #[serde(default, with = "crate::relpath::portable_keys")]
     pub outputs: BTreeMap<PathBuf, Written>,
+    /// The outputs of each library folder muman was pointed away from, by
+    /// that folder, as they were when it left: pointed back at one, a file
+    /// there as muman wrote it then is muman's again
+    /// ([`crate::reconcile::adopt`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub left: BTreeMap<PathBuf, BTreeMap<PathBuf, Written>>,
     /// Uploads a release was kept in place of, so listing them again
     /// fetches nothing.
     #[serde(default, deserialize_with = "json::lenient_map")]

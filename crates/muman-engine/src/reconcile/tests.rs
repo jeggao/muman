@@ -951,6 +951,344 @@ fn a_panic_building_one_song_fails_that_song_alone() {
     );
 }
 
+/// A runner that, once it has made the file of the song at a path holding
+/// a fragment, puts a folder in the way of that song's file, as a player
+/// holding the file open on Windows keeps it from being replaced; and
+/// runs every command as `Fake` does.
+struct Holding<'a>(&'a Fake, &'a str);
+
+impl crate::runner::Runner for Holding<'_> {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)?;
+        for arg in cmd.iter().map(|a| a.to_string_lossy()) {
+            let Some(song) = arg.strip_suffix(".opus.part") else {
+                continue;
+            };
+            let song = PathBuf::from(format!("{song}.opus"));
+            if song.is_file() && arg.contains(self.1) {
+                std::fs::remove_file(&song).unwrap();
+                std::fs::create_dir_all(song.join("held")).unwrap();
+            }
+        }
+        Ok(())
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+
+    fn pipe(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_bytes: &mut dyn FnMut(&[u8]),
+    ) -> anyhow::Result<()> {
+        self.0.pipe(cmd, on_bytes)
+    }
+
+    fn fingerprint(&self, pcm: &Path) -> anyhow::Result<Vec<u32>> {
+        self.0.fingerprint(pcm)
+    }
+}
+
+#[test]
+fn a_song_written_in_part_stays_muman_s_and_is_written_whole_next() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let rel = Path::new("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    let (song, lrc) = (
+        h.dirs.library.join(rel),
+        h.dirs.library.join(rel.with_extension("lrc")),
+    );
+    let lyrics = std::fs::read(&lrc).unwrap();
+    std::fs::write(&lrc, b"[00:01.00]Older words\n").unwrap();
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let mut out = Vec::new();
+    let runner = Holding(&fake, "aaaaaaaaaaa");
+    let ok = reconcile(&runner, &h.dirs, forced, Recording::Test, &mut out)
+        .unwrap()
+        .ok;
+    let text = String::from_utf8(out).unwrap();
+    h.holds(&text);
+    assert!(!ok && text.contains("left half written"), "{text}");
+    assert_eq!(std::fs::read(&lrc).unwrap(), lyrics, "its lyrics in place");
+    let written = State::load(&h.dirs.home).unwrap().outputs[rel].clone();
+    assert!(
+        written.plan.is_none() && written.stamp.is_none(),
+        "recorded as the run recorded it before writing any: {written:?}"
+    );
+    let said = crate::diagnose::diagnose(&h.dirs).unwrap().said;
+    assert!(
+        !said
+            .iter()
+            .any(|s| format!("{s:?}").contains("Changed since")),
+        "{said:?}"
+    );
+    std::fs::remove_dir_all(&song).unwrap();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("changed since muman wrote it") && !text.contains("not muman's"),
+        "{text}"
+    );
+    assert!(song.is_file() && lrc.is_file(), "{text}");
+}
+
+#[test]
+fn a_song_moving_where_a_file_cannot_be_freed_stays_where_it_is() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    h.songs(
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
+         [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n",
+    );
+    assert!(h.run(&fake, Options::default()).0);
+    // A file that will not go, as one Windows holds open: a folder at the
+    // name, recorded as the file muman wrote there.
+    let plain = Path::new("Chan/Same/Same.opus");
+    std::fs::remove_file(h.dirs.library.join(plain)).unwrap();
+    std::fs::create_dir_all(h.dirs.library.join(plain).join("held")).unwrap();
+    let mut state = State::load(&h.dirs.home).unwrap();
+    let written = state.outputs.get_mut(plain).unwrap();
+    written.stamp = crate::store::stamp_text(&h.dirs.library.join(plain));
+    written.digest = None;
+    state.save(&h.dirs.home).unwrap();
+    h.songs(
+        "[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n\
+         [[removed]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nnote = \"Same\"\n",
+    );
+    let told_apart = h.lib("Chan/Same/Same [bbbbbbbbbbb].opus");
+    let bytes = std::fs::read(&told_apart).unwrap();
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(
+        text.matches("Could not remove").count(),
+        1,
+        "said once: {text}"
+    );
+    assert!(
+        !text.contains("Failed"),
+        "nothing written where it cannot be: {text}"
+    );
+    assert_eq!(std::fs::read(&told_apart).unwrap(), bytes, "{text}");
+    assert!(told_apart.with_extension("lrc").is_file(), "{text}");
+    assert!(!h.lib("Chan/Same/Same.lrc").exists(), "{text}");
+
+    std::fs::remove_dir_all(h.dirs.library.join(plain)).unwrap();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: Chan/Same/Same [bbbbbbbbbbb].opus → Chan/Same/Same.opus"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_move_in_case_alone_stopped_halfway_is_muman_s_and_finished() {
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let titled = |title: &str| {
+        format!(
+            "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = {{ title = \"{title}\" }}\n"
+        )
+    };
+    let prepare = || {
+        let h = home();
+        h.fetched("aaaaaaaaaaa");
+        h.songs(&titled("lantern"));
+        assert!(h.run(&fake, Options::default()).0);
+        h.songs(&titled("Lantern"));
+        h
+    };
+    // As a sync runs, recording what it does: the record names each move.
+    let recorded = |h: &Home| {
+        let mut run = Run::begin(&h.dirs.home).unwrap();
+        let mut out = Vec::new();
+        let synced = reconcile(
+            &fake,
+            &h.dirs,
+            Options::default(),
+            Recording::Run(&mut run),
+            &mut out,
+        );
+        run.finish(&h.dirs.home).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        h.holds(&text);
+        (synced.unwrap().ok, text)
+    };
+    let whole = prepare();
+    let counted = crate::kill::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    recorded(&whole);
+    let steps = counted.seen();
+    drop(counted);
+    let mut halfway = 0;
+    for at in 1..=steps {
+        let h = prepare();
+        let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recorded(&h)));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let left: Vec<PathBuf> = files(&h.dirs.library)
+            .into_iter()
+            .filter(|f| f.to_string_lossy().ends_with(".moving"))
+            .map(|f| f.strip_prefix(&h.dirs.library).unwrap().to_path_buf())
+            .collect();
+        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+            .map(|s| format!("{s:?}"))
+            .collect();
+        assert!(
+            !said
+                .iter()
+                .any(|s| s.contains("Not muman's") && s.contains(".moving")),
+            "step {at}: {said:?}"
+        );
+        for moving in &left {
+            halfway += 1;
+            let line = format!(
+                "Left by an interrupted run: {}",
+                crate::relpath::show(moving)
+            );
+            assert!(
+                said.iter().any(|s| s.contains(&line)),
+                "step {at}: {said:?}"
+            );
+        }
+        let (ok, text) = recorded(&h);
+        assert!(ok, "step {at}: {text}");
+        assert!(
+            !text.contains("Added: "),
+            "step {at}: the move is finished: {text}"
+        );
+        h.audit(&[], &text);
+    }
+    assert!(halfway > 0, "no step of {steps} stopped a move halfway");
+}
+
+#[test]
+fn a_file_of_yours_named_as_a_song_s_part_is_left_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let song = "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa";
+    let mine = [format!("{song}.opus.part"), format!("{song}.lrc.part")];
+    for part in &mine {
+        std::fs::write(h.lib(part), "my notes").unwrap();
+    }
+    let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+        .map(|s| format!("{s:?}"))
+        .collect();
+    for part in &mine {
+        let line = format!("Not muman's, left alone: {part}");
+        assert!(said.iter().any(|s| s.contains(&line)), "{said:?}");
+    }
+    assert!(!said.iter().any(|s| s.contains("interrupted")), "{said:?}");
+    let sync = |fake: &Fake| {
+        let mut out = Vec::new();
+        let ok = reconcile(fake, &h.dirs, Options::default(), Recording::Test, &mut out)
+            .unwrap()
+            .ok;
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let (ok, text) = sync(&fake);
+    assert!(ok, "{text}");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Folk\" }\n");
+    let (ok, text) = sync(&fake);
+    assert!(
+        !ok && text.contains("is not muman's, and is in the way of writing it"),
+        "{text}"
+    );
+    for part in &mine {
+        assert_eq!(
+            std::fs::read_to_string(h.lib(part)).unwrap(),
+            "my notes",
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_run_stopped_freeing_a_path_for_a_move_is_undone_whole_and_said_once() {
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let prepare = || {
+        let h = home();
+        h.fetched("aaaaaaaaaaa");
+        h.fetched("bbbbbbbbbbb");
+        h.songs(
+            "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
+             [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n",
+        );
+        assert!(h.run(&fake, Options::default()).0);
+        let before: Vec<(PathBuf, Vec<u8>)> = files(&h.lib(""))
+            .into_iter()
+            .map(|f| (f.clone(), std::fs::read(f).unwrap()))
+            .collect();
+        h.songs(
+            "[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n\
+             [[removed]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nnote = \"Same\"\n",
+        );
+        (h, before)
+    };
+    let recorded = |h: &Home| {
+        let mut run = Run::begin(&h.dirs.home).unwrap();
+        let mut out = Vec::new();
+        let synced = reconcile(
+            &fake,
+            &h.dirs,
+            Options::default(),
+            Recording::Run(&mut run),
+            &mut out,
+        );
+        run.finish(&h.dirs.home).unwrap();
+        (synced.unwrap().ok, String::from_utf8(out).unwrap())
+    };
+    let (whole, _) = prepare();
+    let counted = crate::kill::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    recorded(&whole);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let (h, before) = prepare();
+        let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recorded(&h)));
+        drop(kill);
+        if stopped.is_ok() {
+            continue;
+        }
+        let (ok, text) = recorded(&h);
+        assert!(ok, "step {at}: {text}");
+        let plan = crate::history::plan(&h.dirs).unwrap();
+        let lines = plan.lines().to_vec();
+        let mut named = BTreeSet::new();
+        for line in lines.iter().filter_map(|l| l.trim().split_once(": ")) {
+            assert!(named.insert(line.0.to_string()), "step {at}: {lines:?}");
+        }
+        crate::history::undo(&h.dirs, plan, &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        let after: Vec<(PathBuf, Vec<u8>)> = files(&h.lib(""))
+            .into_iter()
+            .map(|f| (f.clone(), std::fs::read(f).unwrap()))
+            .collect();
+        assert_eq!(after, before, "step {at}: {lines:?}");
+    }
+}
+
 #[test]
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();

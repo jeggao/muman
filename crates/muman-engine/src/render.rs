@@ -16,7 +16,10 @@
 //! place of only the files the sync claimed as muman's or took over,
 //! every one checked before any is changed ([`crate::library::claimed`]):
 //! a song one file refuses changes none, and keeps its file as its record
-//! says, never one written but recorded as it was.
+//! says, never one written but recorded as it was. A rename that fails
+//! all the same once another file of the song is in place, as over a file
+//! Windows holds open, says the song [`crate::library::HalfWritten`], for
+//! the sync to record it as about to be written, as a run stopped there.
 //! A cover or lyrics that fail are reported and the song is written
 //! without them. A song that fails leaves the folders made for it, since
 //! another song rendered at the same time may be writing into one; the
@@ -456,8 +459,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         stage_beside(job, (&rels, &parts), &held, &mut problems)
     })();
     let placed = staged.and_then(|written| {
-        let beside = put_beside(job, &parts, &rels, &written)?;
-        crate::library::put(job.library, &audio_part, &audio_rel, job.claim)?;
+        let (beside, changed) = put_beside(job, &parts, &rels, &written)?;
+        crate::library::put(job.library, &audio_part, &audio_rel, job.claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
         Ok(beside)
     });
     match placed {
@@ -516,15 +520,17 @@ fn stage_beside(
 /// Put each of `rels` staged at `parts` that `written` names in its
 /// place, and clear the files the song's last build left beside it that
 /// are not written again, its lyrics that are none now among them; each
-/// put with what it takes. Each of them, and the song's audio file, is
-/// first checked to be the song's to change, so a file not muman's among
-/// them leaves every one as it was.
+/// put with what it takes, and whether any file was changed. Each of
+/// them, and the song's audio file, is first checked to be the song's to
+/// change, so a file not muman's among them leaves every one as it was;
+/// one that fails once another is changed leaves the song
+/// [`HalfWritten`](crate::library::HalfWritten).
 fn put_beside(
     job: &Job<'_>,
     parts: &[PathBuf],
     rels: &[PathBuf],
     written: &[PathBuf],
-) -> Result<Vec<(PathBuf, u64)>> {
+) -> Result<(Vec<(PathBuf, u64)>, bool)> {
     let audio = with_extension(job.stem, job.parts.audio.format.extension());
     // A file the last build left that is not written again, changed by
     // the user since, is theirs now: left where it is, not cleared.
@@ -542,16 +548,22 @@ fn put_beside(
         job.claim,
     )?;
     let mut beside = Vec::new();
+    let mut changed = false;
     for (staged, rel) in parts.iter().zip(rels) {
         if written.contains(rel) {
-            crate::library::put(job.library, staged, rel, job.claim)?;
+            crate::library::put(job.library, staged, rel, job.claim)
+                .map_err(|e| crate::library::half_written(e, changed))?;
+            changed = true;
             beside.push((rel.clone(), size_of(&job.library.join(rel))));
         }
     }
     for gone in cleared {
-        crate::library::clear(job.library, gone, job.claim)?;
+        let there = fs::symlink_metadata(job.library.join(gone)).is_ok();
+        crate::library::clear(job.library, gone, job.claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
+        changed |= there;
     }
-    Ok(beside)
+    Ok((beside, changed))
 }
 
 /// Whether `rel` is a file of the song's folder, of `job`'s plan, that a
@@ -885,13 +897,18 @@ pub fn place(
             .chain([&rendered.audio]),
         claim,
     )?;
+    let mut changed = false;
     for (file, _) in &beside {
-        copy_in(file)?;
+        copy_in(file).map_err(|e| crate::library::half_written(e, changed))?;
+        changed = true;
     }
     for gone in cleared {
-        crate::library::clear(library, gone, claim)?;
+        let there = fs::symlink_metadata(library.join(gone)).is_ok();
+        crate::library::clear(library, gone, claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
+        changed |= there;
     }
-    copy_in(&rendered.audio)?;
+    copy_in(&rendered.audio).map_err(|e| crate::library::half_written(e, changed))?;
     let mut problems = rendered.problems.clone();
     problems.extend(
         left.iter()
@@ -905,11 +922,14 @@ pub fn place(
 }
 
 /// What [`beside`] wrote: each file beside the song, with what it takes
-/// in bytes, and what could not be written, each said once.
+/// in bytes, and what could not be written, each said once; and whether
+/// it changed a file of the song, written or cleared, so the song's file
+/// that fails to be put after is [`HalfWritten`](crate::library::HalfWritten).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Beside {
     pub files: Vec<(PathBuf, u64)>,
     pub problems: Vec<String>,
+    pub changed: bool,
 }
 
 /// Write the files `job`'s plan has beside the song, its lyrics and its
@@ -985,7 +1005,11 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<
     let placed = stage_beside(job, (&rels, &parts), &held, &mut problems)
         .and_then(|written| put_beside(job, &parts, &rels, &written));
     match placed {
-        Ok(files) => Ok(Beside { files, problems }),
+        Ok((files, changed)) => Ok(Beside {
+            files,
+            problems,
+            changed,
+        }),
         Err(e) => {
             for staged in &parts {
                 let _ = fs::remove_file(staged);

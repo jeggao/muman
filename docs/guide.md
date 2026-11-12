@@ -82,9 +82,9 @@ its own. Anything else in the library folder stays as it is:
   time, as some taggers leave one, is caught as muman is about to
   write over it or remove it.
 
-muman writes every file under a temporary name and renames it into
-place, so a player never sees half a track. Library paths in messages
-use `/` on every system.
+muman writes every file as its name and `.part`, renamed into place so
+a player never sees half a track; a file of yours so named stays.
+Library paths in messages use `/` on every system.
 
 ### Progress and output
 

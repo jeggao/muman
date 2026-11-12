@@ -109,7 +109,8 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
         .clone()
         .filter(|l| !crate::platform::same_path(l, &dirs.library));
     if moved_from.is_some() {
-        reconcile::rehome(&mut state.outputs, &dirs.library);
+        let earlier = reconcile::left_in(&state, &dirs.library);
+        reconcile::rehome(&mut state.outputs, earlier, &dirs.library);
     }
     reconcile::vouch_for_copies(&dirs.library, &mut state);
     let store = Store::scan(dirs)?;

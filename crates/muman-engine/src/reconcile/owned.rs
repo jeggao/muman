@@ -285,41 +285,86 @@ fn stamped(file: &Path, stamp: Option<&String>, digest: Option<&String>) -> AsWr
 }
 
 /// The outputs of a library folder named anew, as `--library` or the
-/// song list names another: each whose file is at its place in `library`
-/// as muman wrote it, moved there or copied, stays muman's, re-stamped
-/// where a copy gave it new times; the rest are let go of, to be written
-/// anew, or left alone where another file is in the way. How many were
-/// kept and let go of.
-pub fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -> (usize, usize) {
-    let before = outputs.len();
-    outputs.retain(
-        |path, written| match as_written(&library.join(path), written) {
+/// song list names another, from the records of them: `outputs`, those
+/// muman wrote last, into whichever folder, and `earlier`, those it wrote
+/// into `library` itself before it was pointed away from it. Each file at
+/// its place in `library` as one of them says muman wrote it, moved there,
+/// copied or left there, stays muman's, re-stamped where a copy gave it
+/// new times: by the record under which all its song's files are as
+/// written, else the first under which its own file is. The rest are let
+/// go of, to be written anew, or left alone where another file is in the
+/// way. How many were kept and let go of.
+pub fn rehome(
+    outputs: &mut BTreeMap<PathBuf, Written>,
+    earlier: BTreeMap<PathBuf, Written>,
+    library: &Path,
+) -> (usize, usize) {
+    let mut records: BTreeMap<PathBuf, Vec<Written>> = BTreeMap::new();
+    for (path, written) in std::mem::take(outputs).into_iter().chain(earlier) {
+        records.entry(path).or_default().push(written);
+    }
+    let all = records.len();
+    for (path, candidates) in records {
+        let mut held: Vec<(Written, bool)> = candidates
+            .into_iter()
+            .filter_map(|w| as_found(library, &path, w))
+            .collect();
+        let whole = held.iter().position(|(_, whole)| *whole).unwrap_or(0);
+        if !held.is_empty() {
+            outputs.insert(path, held.swap_remove(whole).0);
+        }
+    }
+    (outputs.len(), all - outputs.len())
+}
+
+/// `written`, the record of the output at `path` in `library`, re-stamped
+/// as each of its files is found there, and whether all of them are as
+/// written; none when the output's own file is not, and without each
+/// file beside it that is not.
+fn as_found(library: &Path, path: &Path, mut written: Written) -> Option<(Written, bool)> {
+    match as_written(&library.join(path), &written) {
+        AsWritten::Copied(now) => written.stamp = Some(now),
+        AsWritten::Same => {}
+        AsWritten::Not => return None,
+    }
+    let before = written.sidecars.len();
+    written
+        .sidecars
+        .retain_mut(|s| match sidecar_written(library, s) {
             AsWritten::Copied(now) => {
-                written.stamp = Some(now);
+                s.stamp = Some(now);
                 true
             }
             AsWritten::Same => true,
-            AsWritten::Not => false,
-        },
-    );
-    for written in outputs.values_mut() {
-        written
-            .sidecars
-            .retain_mut(|s| match sidecar_written(library, s) {
-                AsWritten::Copied(now) => {
-                    s.stamp = Some(now);
-                    true
-                }
-                AsWritten::Same => true,
-                AsWritten::Not => s.stamp.is_none(),
-            });
-    }
-    (outputs.len(), before - outputs.len())
+            AsWritten::Not => s.stamp.is_none(),
+        });
+    let whole = written.sidecars.len() == before;
+    Some((written, whole))
+}
+
+/// The records `state` keeps of the outputs muman wrote into `library`
+/// before it was pointed away from it, as [`rehome`] takes them.
+#[must_use]
+pub fn left_in(state: &State, library: &Path) -> BTreeMap<PathBuf, Written> {
+    (state.left.iter())
+        .find(|(l, _)| crate::platform::same_path(l, library))
+        .map(|(_, outputs)| outputs.clone())
+        .unwrap_or_default()
+}
+
+/// [`left_in`], taken out of `state`.
+fn take_left(state: &mut State, library: &Path) -> BTreeMap<PathBuf, Written> {
+    let key = (state.left.keys())
+        .find(|l| crate::platform::same_path(l, library))
+        .cloned();
+    key.and_then(|k| state.left.remove(&k)).unwrap_or_default()
 }
 
 /// Take `library` as the folder the outputs are in: the files there as
-/// muman wrote them stay its ([`rehome`]), and those written into another
-/// before are no longer muman's to delete.
+/// muman wrote them stay its ([`rehome`]), those it wrote there before it
+/// was pointed away from it among them, and those written into another
+/// are no longer muman's to delete, their records kept should it be
+/// pointed back at that one.
 pub fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
     if library.exists() && !library.is_dir() {
         anyhow::bail!("the library {} is a file, not a folder", library.display());
@@ -329,12 +374,15 @@ pub fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result
         .clone()
         .filter(|l| !crate::platform::same_path(l, library))
     {
-        let (kept, gone) = rehome(&mut state.outputs, library);
+        let earlier = take_left(state, library);
+        state.left.retain(|l, _| l.is_dir());
+        state.left.insert(before.clone(), state.outputs.clone());
+        let (kept, gone) = rehome(&mut state.outputs, earlier, library);
         crate::ui::warning(
             out,
             &format!(
                 "The library moved from {}: {kept} file(s) here as muman wrote them stay its, \
-                 {gone} are written here anew; the files left there are left alone",
+                 {gone} others are let go of; the files left there are left alone",
                 before.display()
             ),
         )?;

@@ -656,9 +656,14 @@ mod tests {
             "A/changed.opus".into(),
             of(ids[1], written(Some("1:1".into()))),
         );
+        // About to be written when its run stopped, as a sync records it.
+        let unfinished = Written {
+            plan: None,
+            ..written(None)
+        };
         state
             .outputs
-            .insert("A/gone.opus".into(), of(ids[2], written(None)));
+            .insert("A/gone.opus".into(), of(ids[2], unfinished));
         state
             .outputs
             .insert("A/dropped.opus".into(), of("eeeeeeeeeee", written(None)));

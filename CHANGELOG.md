@@ -9,6 +9,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song half written stays muman's**: when its file cannot be
+  replaced after its `.lrc` was, as a file a player holds open on
+  Windows, the song is said half written and the next sync writes it
+  whole, where muman took its own `.lrc` for yours, held the song back
+  until `sync --force` and refused `undo`.
+- **A song moving where a removed song's file cannot go stays where it
+  is** until a later sync, where it was written at that path, which
+  failed, and "Could not remove" was said twice.
+- **Only a `.part` or `.moving` a stopped run was writing is muman's**:
+  a file of yours named after a song's file and `.part` is left alone
+  and named, where `sync` deleted it unsaid, and a song it would be
+  written through fails, naming it. A `.moving` a run stopped halfway
+  through a rename of case left is called the run's by `check`, and the
+  next sync finishes the rename, where `check` called it not muman's and
+  the sync deleted it.
+- **A second `undo` keeps a file muman wrote since muman's**: a file the
+  undone run left as it was keeps its record as written by the sync of
+  an undo before, where muman took it for yours and held the song back.
+- **Pointed back at a library folder it used before, muman takes its
+  files there as its own again** while they are as it wrote them, as
+  the configuration guide says, where it left them as not muman's.
+- **`undo` names each file once**: a file moved and then written over is
+  said by its move back, and a run stopped and finished by the next
+  lists only the moves made, and keeps every file it removes.
 - **A size is bytes however its unit is cased**: `max_size = "240Mb"`,
   `"2 Gb"` or `--max-size 1kb` read as megabytes, gigabytes and
   kilobytes, where they read as bits; a unit of bits is refused.

@@ -9363,6 +9363,72 @@ fn a_library_moved_or_copied_elsewhere_keeps_the_files_muman_wrote() {
 }
 
 #[test]
+fn a_library_folder_pointed_back_at_is_muman_s_again_while_unchanged() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    let other = s.dir.path().join("other");
+    for file in crate::store::files_below(&lib, usize::MAX, |_| true).unwrap() {
+        let at = other.join(file.strip_prefix(&lib).unwrap());
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::copy(&file, &at).unwrap();
+    }
+    let run_in = |library: &Path, args: &[&str]| {
+        let mut job = s.job(args);
+        job.dirs.library = library.to_path_buf();
+        let mut out = Vec::new();
+        let ok = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let (ok, text) = run_in(&other, &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok && text.contains("Updated"), "{text}");
+    for (library, done) in [(&lib, "Updated"), (&other, "Up to date: 1")] {
+        let (ok, text) = run_in(library, &["sync"]);
+        assert!(ok, "{text}");
+        assert!(
+            text.contains("1 file(s) here as muman wrote them stay its"),
+            "{text}"
+        );
+        assert!(text.contains(done), "{text}");
+        assert!(!text.contains("not muman's"), "{text}");
+    }
+}
+
+#[test]
+fn two_undos_back_past_lyrics_an_undo_s_sync_wrote_leave_them_muman_s() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Old words\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok, "{text}");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]New words\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    for n in 1..=2 {
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "undo {n}: {text}");
+        assert!(
+            !text.contains("changed since muman wrote it"),
+            "undo {n}: {text}"
+        );
+    }
+    let (ok, text) = s.run(&flacs(), &["check"]);
+    assert!(ok && !text.contains("Changed since"), "{text}");
+}
+
+#[test]
 fn an_export_of_a_song_list_edited_since_the_last_run_is_refused() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -17,10 +17,24 @@
 //! holds every other module to changing no library file, and `render` to
 //! replacing none but through them.
 //!
+//! A song's files go into place one at a time, and a rename can fail
+//! midway, as over a file Windows holds open: a song that fails once one
+//! of its files is in place says so ([`HalfWritten`]), and its record is
+//! then the one the run made before it changed any, as a run stopped
+//! there leaves it, so every file at its paths stays muman's.
+//!
 //! A move that only changes a name's case goes through a temporary name,
 //! which a filesystem blind to case would otherwise take for a rename
-//! onto itself. A folder a removal or a move leaves empty goes too, the
-//! files a file manager leaves in a folder it showed aside.
+//! onto itself; a second step that fails puts the file back. A folder a
+//! removal or a move leaves empty goes too, the files a file manager
+//! leaves in a folder it showed aside.
+//!
+//! What a run stopped partway leaves, a `.part` it was writing or a
+//! `.moving` it was renaming through, is known by the records it made
+//! before it changed anything ([`Leftovers`]): a `.part` beside a file of
+//! an output the state records as about to be written, and a `.moving`
+//! beside a path the stopped run's record lists a move to. Any other file
+//! so named is the user's, left alone, whatever its name says.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -227,6 +241,28 @@ impl<'a> Ledger<'a> {
     }
 }
 
+/// The error of a song whose files were put in place in part: what
+/// failed came after one of them was changed, so the song is as a run
+/// stopped there leaves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HalfWritten;
+
+impl std::fmt::Display for HalfWritten {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("left half written, so written whole by the next sync")
+    }
+}
+
+/// `e`, said [`HalfWritten`] once `changed` says a file of the song was.
+#[must_use]
+pub fn half_written(e: anyhow::Error, changed: bool) -> anyhow::Error {
+    if changed && e.downcast_ref::<HalfWritten>().is_none() {
+        e.context(HalfWritten)
+    } else {
+        e
+    }
+}
+
 /// Put the file staged at `staged` in its place at `rel` in the library
 /// `root`: over a file there only as `claim` holds it, and never a staged
 /// path that is no longer a plain file, as a link put in its place is not.
@@ -338,11 +374,11 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
             .with_context(|| format!("moving {} to {}", a.display(), b.display()))
     };
     if crate::relpath::folded(&from) == crate::relpath::folded(&to) {
-        let mut temp = to.clone().into_os_string();
-        temp.push(".moving");
-        let temp = PathBuf::from(temp);
+        let temp = named(&to, MOVING);
         step(&from, &temp)?;
-        step(&temp, &to)
+        step(&temp, &to).inspect_err(|_| {
+            let _ = crate::atomic::rename(&temp, &from);
+        })
     } else if to.exists() {
         // Left by a move before it that failed.
         Err(anyhow!("{} is taken", to.display()))
@@ -351,39 +387,92 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
     }
 }
 
-/// What a run stopped partway leaves beside a path muman writes: a
-/// `.part` it was writing, a `.moving` it was renaming through.
-const LEFTOVERS: [&str; 2] = [".part", ".moving"];
+/// What a file is staged as before it is put in place.
+const PART: &str = ".part";
 
-/// The path `rel` would be left beside by a run stopped partway: `rel`
-/// without its `.part` or `.moving`. It is muman's leftover only when
-/// muman writes that path; a download of the user's own named so is not.
-#[must_use]
-pub fn left_beside(rel: &Path) -> Option<PathBuf> {
-    let name = rel.as_os_str().to_str()?;
-    LEFTOVERS
-        .iter()
-        .find_map(|s| name.strip_suffix(s))
-        .filter(|of| !of.is_empty())
-        .map(PathBuf::from)
+/// What a file a move changes only the case of is renamed through.
+const MOVING: &str = ".moving";
+
+/// `rel` with `suffix` after its name.
+fn named(rel: &Path, suffix: &str) -> PathBuf {
+    let mut name = rel.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
-/// Remove what a run stopped partway left beside the paths muman writes,
-/// each a song's file or one beside it ([`LEFTOVERS`]). Only beside
-/// those paths, so a download of the user's own named so is not.
-// Removes what a stopped run left beside the paths muman writes.
-#[expect(clippy::disallowed_methods)]
-pub fn clear_leftovers(library: &Path, paths: impl Iterator<Item = PathBuf>) {
-    for file in paths {
-        for suffix in LEFTOVERS {
-            let mut left = library.join(&file).into_os_string();
-            left.push(suffix);
-            let left = PathBuf::from(left);
+/// What a run stopped partway may have left beside the library's files,
+/// known by the records it made before it changed any, as the module's
+/// docs say.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Leftovers(BTreeSet<PathBuf>);
+
+impl Leftovers {
+    /// What runs may have left that `outputs` records and that the moves
+    /// to `moving` a stopped run records: a `.part` beside each file of an
+    /// output with no plan, as a sync records a song before it writes it,
+    /// and a `.moving` beside each path moved to.
+    #[must_use]
+    pub fn of<'a>(
+        outputs: &BTreeMap<PathBuf, Written>,
+        moving: impl IntoIterator<Item = &'a PathBuf>,
+    ) -> Self {
+        let parts = (outputs.iter())
+            .filter(|(_, w)| w.plan.is_none())
+            .flat_map(|(path, w)| w.files(path))
+            .map(|file| named(file, PART));
+        let moving = moving.into_iter().map(|to| named(to, MOVING));
+        Self(parts.chain(moving).collect())
+    }
+
+    /// The `.part` files writing a song's files at `paths` stages.
+    #[must_use]
+    pub fn staged(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self(paths.into_iter().map(|p| named(&p, PART)).collect())
+    }
+
+    /// Whether `rel`, a path in the library, is one of them.
+    #[must_use]
+    pub fn contains(&self, rel: &Path) -> bool {
+        self.0.contains(rel)
+    }
+
+    /// The first of them anything is at in `library`.
+    #[must_use]
+    pub fn found(&self, library: &Path) -> Option<&PathBuf> {
+        (self.0.iter()).find(|left| std::fs::symlink_metadata(library.join(left)).is_ok())
+    }
+
+    /// Remove each of them that is a file in `library`.
+    // Removes what a stopped run left beside the paths it wrote.
+    #[expect(clippy::disallowed_methods)]
+    pub fn clear(&self, library: &Path) {
+        for left in &self.0 {
+            let left = library.join(left);
             if left.is_file() {
                 let _ = crate::atomic::remove(&left);
             }
         }
     }
+}
+
+/// Whether a case-only move of `from` to `to` in `library` was stopped
+/// between its two renames: the file at its temporary name, and none at
+/// either end.
+#[must_use]
+pub fn half_moved(library: &Path, from: &Path, to: &Path) -> bool {
+    library.join(named(to, MOVING)).is_file()
+        && std::fs::symlink_metadata(library.join(from)).is_err()
+        && std::fs::symlink_metadata(library.join(to)).is_err()
+}
+
+/// Make the second rename of a move [`half_moved`], returning whether it
+/// was made.
+// Finishes a move a stopped run made half of.
+#[expect(clippy::disallowed_methods)]
+#[must_use]
+pub fn finish_move(library: &Path, from: &Path, to: &Path) -> bool {
+    half_moved(library, from, to)
+        && crate::atomic::rename(&library.join(named(to, MOVING)), &library.join(to)).is_ok()
 }
 
 /// Remove each folder a removed file leaves empty, up to the library.
@@ -485,6 +574,39 @@ mod tests {
                 .is_none(),
             "never listed: only `taken` may name it"
         );
+    }
+
+    #[test]
+    fn a_leftover_is_muman_s_only_beside_what_a_record_says_was_being_written() {
+        let about_to_be = Written {
+            plan: None,
+            stamp: None,
+            ..written(None, Some("A/x.lrc"))
+        };
+        let mut done = written(Some("1:1".into()), Some("B/y.lrc"));
+        done.plan = Some(crate::resolve::testing::every_part(
+            crate::resolve::Format::Copy {
+                codec: crate::codec::Codec::Opus,
+            },
+        ));
+        let outputs = BTreeMap::from([
+            (PathBuf::from("A/x.opus"), about_to_be),
+            (PathBuf::from("B/y.opus"), done),
+        ]);
+        let moving = [PathBuf::from("C/Z.opus")];
+        let left = Leftovers::of(&outputs, &moving);
+        for ours in ["A/x.opus.part", "A/x.lrc.part", "C/Z.opus.moving"] {
+            assert!(left.contains(Path::new(ours)), "{ours}");
+        }
+        for theirs in [
+            "B/y.opus.part",
+            "B/y.lrc.part",
+            "A/x.opus.moving",
+            "C/Z.opus.part",
+            "notes.part",
+        ] {
+            assert!(!left.contains(Path::new(theirs)), "{theirs}");
+        }
     }
 
     #[test]

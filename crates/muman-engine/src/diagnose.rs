@@ -217,11 +217,13 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             }
         }
     }
+    let moving = crate::history::moving(&dirs.home);
+    let leftovers = crate::library::Leftovers::of(&state.outputs, &moving);
     for file in store::files_below(library, usize::MAX, |_| true)? {
         let Ok(rel) = file.strip_prefix(library) else {
             continue;
         };
-        if crate::library::left_beside(rel).is_some_and(|of| owned.contains(&of)) {
+        if leftovers.contains(rel) {
             if !busy {
                 said.problem(format!(
                     "Left by an interrupted run: {}",
