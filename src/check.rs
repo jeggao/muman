@@ -596,6 +596,8 @@ mod tests {
     }
 
     #[test]
+    // One home holding a file of each kind `check` tells apart, checked whole.
+    #[expect(clippy::too_many_lines)]
     fn missing_changed_and_stray_files_are_found() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = Dirs {
@@ -610,7 +612,18 @@ mod tests {
         for name in names.split(' ') {
             std::fs::write(dirs.library.join("A").join(name), "x").unwrap();
         }
+        // Each file a song listed has, but one whose song was taken out of the list.
+        let ids = ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd"];
+        let songs = (ids.iter())
+            .map(|id| format!("[[song]]\nsources = [\"youtube.com:{id}\"]\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        std::fs::write(dirs.manifest(), format!("version = 1\n{songs}")).unwrap();
         let mut state = crate::state::State::default();
+        let of = |id: &str, written: Written| Written {
+            sources: vec![crate::source::SourceKey::youtube(id)],
+            ..written
+        };
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
             sidecars: Vec::new(),
@@ -636,15 +649,26 @@ mod tests {
             digest: None,
         };
         let kept = store::stamp_text(&dirs.library.join("A/kept.opus"));
-        state.outputs.insert("A/kept.opus".into(), written(kept));
         state
             .outputs
-            .insert("A/changed.opus".into(), written(Some("1:1".into())));
-        state.outputs.insert("A/gone.opus".into(), written(None));
+            .insert("A/kept.opus".into(), of(ids[0], written(kept)));
+        state.outputs.insert(
+            "A/changed.opus".into(),
+            of(ids[1], written(Some("1:1".into()))),
+        );
+        state
+            .outputs
+            .insert("A/gone.opus".into(), of(ids[2], written(None)));
+        state
+            .outputs
+            .insert("A/dropped.opus".into(), of("eeeeeeeeeee", written(None)));
         std::fs::write(dirs.library.join("A/sung.opus"), "x").unwrap();
         let sung = Written {
             sidecars: vec![crate::state::Sidecar::at("A/sung.lrc".into())],
-            ..written(store::stamp_text(&dirs.library.join("A/sung.opus")))
+            ..of(
+                ids[3],
+                written(store::stamp_text(&dirs.library.join("A/sung.opus"))),
+            )
         };
         state.outputs.insert("A/sung.opus".into(), sung);
         state.save(&dirs.home).unwrap();
@@ -678,6 +702,12 @@ mod tests {
         }
         assert!(
             text.contains("Missing beside its song, `sync` writes it again: A/sung.lrc"),
+            "{text}"
+        );
+        // A sync writes nothing again for a song no longer listed: it lets go of its file.
+        assert!(!text.contains("again: A/dropped.opus"), "{text}");
+        assert!(
+            said("Missing, and no song listed has it: `sync` lets it go: A/dropped.opus".into()),
             "{text}"
         );
 

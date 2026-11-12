@@ -217,7 +217,12 @@ pub(super) fn apply<R: Runner, W: Write>(
     out: &mut W,
 ) -> Result<Applied> {
     let library = &job.dirs.library;
-    let stuck = free(ledger, &intent.freed, &mut state.outputs, out)?;
+    let stuck = free(
+        ledger,
+        (&intent.freed, &intent.handed),
+        &mut state.outputs,
+        out,
+    )?;
     // A move onto a file that could not go is written instead.
     let moves: Vec<Relocation> = (intent.moves.into_iter())
         .filter(|m| {
@@ -779,7 +784,8 @@ fn render_due<R: Runner, W: Write>(
 /// was gone is said by its `.lrc`. A file beside it it had none of is
 /// added, one gone is written again, and each its last build left that it
 /// has none of now is said removed, or left in place where the user
-/// changed it.
+/// changed it: a song whose lyrics were taken off is said by its `.lrc`
+/// removed. Its own file is named unwritten only where nothing else is.
 fn say_written<W: Write>(
     (before, verb): (Option<&Written>, &str),
     (done, rewrite): (&render::Rendered, &Rewrite),
@@ -792,7 +798,7 @@ fn say_written<W: Write>(
         .map(|(path, _)| path)
         .filter(|path| !as_recorded && !rewrite.kept.contains(path))
         .collect();
-    let own = rewrite.audio || wrote.is_empty();
+    let own = rewrite.audio || (wrote.is_empty() && rewrite.stale.is_empty());
     if own {
         crate::ui::success(
             out,

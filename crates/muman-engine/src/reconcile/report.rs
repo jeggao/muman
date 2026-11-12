@@ -428,24 +428,26 @@ pub(super) fn status<W: Write>(
     if showing.matched.is_some() {
         return Ok(());
     }
-    let there = |file: &PathBuf| std::fs::symlink_metadata(dirs.library.join(file)).is_ok();
     for (path, fate) in &intent.pruned {
+        let leaving = |file: &PathBuf| {
+            format!(
+                "Would leave in place, changed since muman wrote it: {}",
+                crate::relpath::show(file)
+            )
+        };
         match fate {
-            Pruned::Removed(files) => {
-                for file in files.iter().filter(|f| there(f)) {
+            Pruned::Removed { gone, left } => {
+                for file in gone {
                     crate::ui::warning(
                         out,
                         &format!("Would remove: {}", crate::relpath::show(file)),
                     )?;
                 }
+                for file in left {
+                    crate::ui::warning(out, &leaving(file))?;
+                }
             }
-            Pruned::LeftChanged => crate::ui::warning(
-                out,
-                &format!(
-                    "Would leave in place, changed since muman wrote it: {}",
-                    crate::relpath::show(path)
-                ),
-            )?,
+            Pruned::LeftChanged => crate::ui::warning(out, &leaving(path))?,
             Pruned::KeptForFailed => {}
         }
     }
@@ -495,8 +497,8 @@ pub(super) fn status<W: Write>(
     // As `purge` deletes them: a removed song's sources stay for `restore`.
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    for path in store.purgeable(dirs, &known) {
-        crate::ui::info(out, &format!("Unused: {}", path.display()))?;
+    for unused in store.purgeable(dirs, &known) {
+        crate::ui::info(out, &format!("Unused: {}", unused.display()))?;
     }
     Ok(())
 }

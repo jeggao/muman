@@ -14,9 +14,15 @@
 //! of songs typed instead: `undo` cannot take a file back from the
 //! desktop's trash on every platform, and a yes given from habit should
 //! not be enough to put it there.
+//!
+//! What `remove` says of the library files it deletes and leaves is what
+//! the sync after it decides ([`crate::reconcile::leaving`]): a file
+//! beside a song that the user changed since muman wrote it is left in
+//! place, said so and not counted, as the sync leaves it.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::ui::Prompter;
 use anyhow::{Context, Result, bail};
@@ -27,6 +33,8 @@ use crate::dirs::Dirs;
 use crate::manifest::{self, Edit, Manifest, Rewritten, Song, SongTable};
 use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
+use crate::reconcile::Pruned;
+use crate::relpath;
 use crate::resolve::Resolved;
 use crate::rows;
 use crate::source::SourceKey;
@@ -299,33 +307,12 @@ pub fn remove<W: Write>(
     // `[[removed]]` so `restore` waits for every one of them.
     let mut trashed: Vec<Vec<SourceKey>> = Vec::new();
     let mut deleted = 0;
+    let leaving = Leaving::of(dirs, &read.state, picked.iter().map(|n| &read.views[*n]));
     for n in &picked {
         let mut own_trashed = Vec::new();
         let view = &read.views[*n];
         crate::ui::line(out, &format!("  − {}", named(view)))?;
-        let written = read
-            .state
-            .outputs
-            .iter()
-            .filter(|(_, w)| view.id().is_some_and(|id| w.sources.contains(id)));
-        for (path, w) in written {
-            // As the sync after does: a song's files stay whole when its
-            // audio changed since written.
-            let changed =
-                crate::reconcile::edited_since_written(&dirs.library, &read.state.outputs, path);
-            let how = if changed {
-                "leaves in place, changed since muman wrote it,"
-            } else {
-                "deletes"
-            };
-            for file in w.files(path) {
-                deleted += usize::from(!changed);
-                crate::ui::line(
-                    out,
-                    &format!("    {how} {}", dirs.library.join(file).display()),
-                )?;
-            }
-        }
+        deleted += leaving.say(dirs, &read.state, view, out)?;
         if purge {
             // A record another song still lists stays for that song.
             let shared = |k: &SourceKey| {
@@ -342,21 +329,21 @@ pub fn remove<W: Write>(
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
-                    for file in store_files(&store, key) {
+                    for source in store_files(&store, key) {
                         crate::ui::line(
                             out,
-                            &format!("    keeps {}, which a removed song lists", file.display()),
+                            &format!("    keeps {}, which a removed song lists", source.display()),
                         )?;
                     }
                     continue;
                 }
-                for file in store_files(&store, key) {
+                for source in store_files(&store, key) {
                     let how = if own { "trashes" } else { "deletes" };
-                    crate::ui::line(out, &format!("    {how} {}", file.display()))?;
-                    if own && let Ok(rel) = file.strip_prefix(dirs.manual()) {
+                    crate::ui::line(out, &format!("    {how} {}", source.display()))?;
+                    if own && let Ok(rel) = source.strip_prefix(dirs.manual()) {
                         own_trashed.push(SourceKey::Manual(rel.into()));
                     }
-                    doomed.push((file, own));
+                    doomed.push((source, own));
                 }
             }
         }
@@ -392,19 +379,69 @@ pub fn remove<W: Write>(
     Ok(true)
 }
 
+/// What the sync after `remove` does with each library file of the songs
+/// it removes, as it decides it ([`crate::reconcile::leaving`]).
+struct Leaving(BTreeMap<PathBuf, Pruned>);
+
+impl Leaving {
+    fn of<'a>(dirs: &Dirs, state: &State, views: impl Iterator<Item = &'a View>) -> Self {
+        let paths: BTreeSet<PathBuf> = views.flat_map(|v| files_of(state, v)).collect();
+        let fates = crate::reconcile::leaving(&dirs.library, &state.outputs, &paths);
+        Self(fates.into_iter().collect())
+    }
+
+    /// Say what becomes of each file of `view`'s song; how many go.
+    fn say<W: Write>(&self, dirs: &Dirs, state: &State, view: &View, out: &mut W) -> Result<usize> {
+        let there = |file: &&Path| std::fs::symlink_metadata(dirs.library.join(file)).is_ok();
+        let mut deleted = 0;
+        for path in files_of(state, view) {
+            let Some(fate) = self.0.get(&path) else {
+                continue;
+            };
+            let left: Vec<&Path> = match fate {
+                Pruned::LeftChanged => state.outputs[&path].files(&path).filter(there).collect(),
+                _ => fate.left().iter().map(PathBuf::as_path).collect(),
+            };
+            for file in fate.gone() {
+                deleted += 1;
+                crate::ui::line(out, &format!("    deletes {}", relpath::show(file)))?;
+            }
+            for file in left {
+                crate::ui::line(
+                    out,
+                    &format!(
+                        "    leaves in place, changed since muman wrote it, {}",
+                        relpath::show(file)
+                    ),
+                )?;
+            }
+        }
+        Ok(deleted)
+    }
+}
+
+/// The library files the state records of `view`'s song.
+fn files_of(state: &State, view: &View) -> Vec<PathBuf> {
+    let id = view.id();
+    (state.outputs.iter())
+        .filter(|(_, w)| id.is_some_and(|id| w.sources.contains(id)))
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+
 /// Move each file of `doomed` that is the user's own to the trash, and
 /// delete the others, which muman fetched.
 // Deletes a removed song's fetched source, with `remove --purge`.
 #[expect(clippy::disallowed_methods)]
 fn purge_all(doomed: Vec<(PathBuf, bool)>) -> Result<()> {
-    for (file, own) in doomed {
+    for (source, own) in doomed {
         if own {
-            crate::history::to_trash(&file)
-                .with_context(|| format!("moving {} to the trash", file.display()))?;
+            crate::history::to_trash(&source)
+                .with_context(|| format!("moving {} to the trash", source.display()))?;
         } else {
-            match std::fs::remove_file(&file) {
+            match std::fs::remove_file(&source) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(e).with_context(|| format!("deleting {}", file.display()));
+                    return Err(e).with_context(|| format!("deleting {}", source.display()));
                 }
                 _ => {}
             }

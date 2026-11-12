@@ -20,7 +20,7 @@ use crate::state::{Sidecar, State, Written};
 use super::damage::{damaged_since_built, split_drifts};
 use super::owned::{blocking, carried, carried_edit, edited_since_written};
 use super::plan::{PlannedSong, path_of};
-use super::prune::{Pruned, prune_plan};
+use super::prune::{Pruned, prune_plan, removal};
 
 /// What `old` records of the song's file, when that file is the song as
 /// it would be written now: its plan, its file there and not empty, each
@@ -273,19 +273,24 @@ impl Landing {
     }
 }
 
-/// The files of `written`, the output at `path`, that freeing its path
-/// removes: its own, and each beside it as muman wrote it; one the user
-/// changed stays theirs, in the way of a move as any file of theirs.
-fn freed_files<'a>(
-    library: &'a Path,
-    path: &'a Path,
-    written: &'a Written,
-) -> impl Iterator<Item = &'a Path> {
-    std::iter::once(path).chain(
-        (written.sidecars.iter())
-            .filter(|s| super::owned::sidecar_as_written(library, s))
-            .map(|s| s.path.as_path()),
-    )
+/// The files freeing each output of `freeable` takes out of a move's
+/// way, folded: all of its files, but one beside it the user changed,
+/// theirs, in the way of a move as any file of theirs ([`removal`]).
+fn freed_files(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    freeable: &BTreeSet<PathBuf>,
+) -> BTreeSet<String> {
+    let mut freed = BTreeSet::new();
+    for path in freeable {
+        let left = removal(library, (path, &old[path]), false, |_| false);
+        freed.extend(
+            (old[path].files(path))
+                .filter(|f| !left.left().iter().any(|l| l == f))
+                .map(crate::relpath::folded),
+        );
+    }
+    freed
 }
 
 /// The sources holding otherwise than their songs were built from, and
@@ -494,10 +499,7 @@ fn decide_in(
     // already chosen leaves, so the order chosen is an order they can run.
     let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
     let ours: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
-    let pruned: BTreeSet<String> = (freeable.iter())
-        .flat_map(|p| freed_files(library, p, &old[p]))
-        .map(folded)
-        .collect();
+    let pruned = freed_files(library, old, freeable);
     let mut held: BTreeSet<String> = ours.difference(&pruned).cloned().collect();
     let free = |held: &BTreeSet<String>, p: &Path| {
         p.ancestors().all(|a| !held.contains(&folded(a)))
@@ -684,6 +686,10 @@ pub(super) struct Intent {
     /// The outputs no song keeps whose files go before the moves, as a
     /// move lands where one of them is ([`freeable`]).
     pub freed: Vec<PathBuf>,
+    /// Each folder's file of `freed` a song's plan has where it ends,
+    /// with the song's file whose record takes it before the moves: the
+    /// song writes it over rather than it be removed and written again.
+    pub handed: BTreeMap<PathBuf, PathBuf>,
     /// Each song's file moved to its song's path, with the files beside it
     /// it carries, in an order the moves can be made.
     pub moves: Vec<Relocation>,
@@ -738,12 +744,19 @@ pub(super) fn intend(
         .filter(|p| old[*p].files(p).any(|f| landing.blocks(f)))
         .cloned()
         .collect();
+    let holders = holders(planned, &decided);
+    let mut handed = BTreeMap::new();
     let mut relocated = old.clone();
     let mut pruned: Vec<(PathBuf, Pruned)> = Vec::new();
     for path in &freed {
         if let Some(written) = relocated.remove(path) {
-            let files = written.files(path).map(Path::to_path_buf).collect();
-            pruned.push((path.clone(), Pruned::Removed(files)));
+            handed.extend(
+                (written.sidecars.iter())
+                    .filter(|s| super::owned::sidecar_as_written(library, s))
+                    .filter_map(|s| Some((s.path.clone(), holders.get(&s.path)?.clone()))),
+            );
+            let fate = removal(library, (path, &written), false, |f| handed.contains_key(f));
+            pruned.push((path.clone(), fate));
         }
     }
     for m in &moves {
@@ -781,11 +794,31 @@ pub(super) fn intend(
     Intent {
         decided,
         freed,
+        handed,
         moves,
         moved: relocated,
         pruned,
         edits,
     }
+}
+
+/// Each folder's file a song of `planned` has where it ends, with the
+/// song's own file before the moves, of the songs whose record is there
+/// and that `decided` writes over it: moved or tagged again ([`Intent::handed`]).
+fn holders(planned: &[PlannedSong], decided: &[Doing]) -> BTreeMap<PathBuf, PathBuf> {
+    let mut holders = BTreeMap::new();
+    for ((_, r), d) in planned.iter().zip(decided) {
+        let path = path_of(r);
+        let own = match d {
+            Doing::Move { from, .. } => from.clone(),
+            Doing::Retag => path.clone(),
+            _ => continue,
+        };
+        for file in crate::artifact::parts(&r.plan).folder_files(&path) {
+            holders.insert(file, own.clone());
+        }
+    }
+    holders
 }
 
 /// What `written` records once its file has moved, each file beside it

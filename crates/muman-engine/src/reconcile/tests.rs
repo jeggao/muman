@@ -413,6 +413,132 @@ fn lyrics_taken_off_a_song_are_said_removed() {
     );
 }
 
+#[test]
+fn lyrics_taken_off_a_song_whose_file_holds_none_name_its_lrc_alone() {
+    let h = home();
+    listing(&h, "", &["a"]);
+    std::fs::write(h.dirs.manual().join("a.lrc"), "[00:01.00]la la\n").unwrap();
+    let fake = Fake::default().probe("a.flac", &tagged_flac("Kite", 1, "Record", false));
+    assert!(h.run(&fake, Options::default()).0);
+    let song = h.lib("Artist/Record/01 Kite.flac");
+    assert!(h.lib("Artist/Record/01 Kite.lrc").exists());
+    let stamp = crate::store::stamp_text(&song);
+    h.songs("[[song]]\nsources = [\"manual:a.flac\"]\nlyrics = false\n");
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(crate::store::stamp_text(&song), stamp, "{text}");
+    assert!(
+        text.contains("Removed: Artist/Record/01 Kite.lrc"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(".flac"),
+        "its file, untouched, is not said written: {text}"
+    );
+}
+
+#[test]
+fn a_changed_lrc_of_a_song_dropped_is_said_left_by_status_and_sync_alike() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let lrc = "Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.lrc";
+    std::fs::write(h.lib(lrc), "[00:01.00]my own words\n").unwrap();
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let said = h.status(&fake, &[], false);
+    let (ok, done) = h.run(&fake, Options::default());
+    assert!(ok, "{done}");
+    let done = crate::ui::plain(&done);
+    let after = |text: &str, lead: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| Some(l.split_once(lead)?.1.trim().to_string()))
+            .collect()
+    };
+    assert_eq!(
+        after(&said, "Would remove: "),
+        after(&done, "Removed: "),
+        "{said}\n{done}"
+    );
+    assert!(
+        said.contains(&format!(
+            "Would leave in place, changed since muman wrote it: {lrc}"
+        )),
+        "{said}"
+    );
+    assert!(
+        done.contains(&format!(
+            "Left in place, changed since muman wrote it: {lrc}; it is yours now"
+        )),
+        "{done}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.lib(lrc)).unwrap(),
+        "[00:01.00]my own words\n"
+    );
+    h.audit(&[lrc], &done);
+}
+
+#[test]
+fn a_folder_s_cover_freed_for_a_move_is_written_over_by_its_new_holder() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    listing(&h, folder, &["a", "b"]);
+    let fake = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Record", false));
+    assert!(h.run(&fake, Options::default()).0);
+    let cover = "Artist/Record/cover.jpg";
+    assert!(h.lib(cover).exists());
+    // The song holding the cover is dropped, and the other takes its path.
+    h.songs(&format!(
+        "{folder}[[song]]\nsources = [\"manual:b.flac\"]\ntags = {{ title = \"Kite\", track = \"1\" }}\n"
+    ));
+    let said = h.status(&fake, &[], false);
+    let (ok, done) = h.run(&fake, Options::default());
+    assert!(ok, "{done}");
+    assert!(said.contains("Would move: "), "{said}");
+    for text in [&said, &done] {
+        assert!(!text.contains(&format!("Removed: {cover}")), "{text}");
+        assert!(!text.contains(&format!("remove: {cover}")), "{text}");
+        assert!(!text.contains("not muman's"), "{text}");
+    }
+    let state = State::load(&h.dirs.home).unwrap();
+    let holders: Vec<&PathBuf> = (state.outputs.iter())
+        .filter(|(_, w)| w.sidecar_paths().any(|s| s == Path::new(cover)))
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(
+        holders,
+        [&PathBuf::from("Artist/Record/01 Kite.flac")],
+        "{done}"
+    );
+    h.audit(&[], &done);
+}
+
+#[test]
+fn a_forced_sync_writes_again_a_folder_s_cover_changed_by_hand() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    listing(&h, folder, &["a"]);
+    let fake = Fake::default().probe("a.flac", &tagged_flac("Kite", 1, "Record", false));
+    assert!(h.run(&fake, Options::default()).0);
+    let cover = h.lib("Artist/Record/cover.jpg");
+    let written = std::fs::read(&cover).unwrap();
+    std::fs::write(&cover, "a picture of my own").unwrap();
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&fake, forced);
+    assert!(ok, "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+    assert_eq!(std::fs::read(&cover).unwrap(), written, "{text}");
+    h.audit(&[], &text);
+}
+
 /// 8 kHz samples whose loudness follows `levels`, one per 10 ms.
 fn pcm(levels: &[f64]) -> Vec<u8> {
     levels
@@ -1680,7 +1806,10 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
         plan,
         [(
             PathBuf::from("A/x.opus"),
-            Pruned::Removed(vec![PathBuf::from("A/x.opus")])
+            Pruned::Removed {
+                gone: vec![PathBuf::from("A/x.opus")],
+                left: Vec::new()
+            }
         )]
     );
 }

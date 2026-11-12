@@ -536,6 +536,19 @@ fn lyrics_changed_by_hand_are_neither_written_over_nor_removed() {
         mended,
         "the user's now: {text}"
     );
+    // What `remove` says it does is what the sync after it does.
+    for said in [
+        "    deletes Artist/Record/02 Song.flac\n",
+        "    leaves in place, changed since muman wrote it, Artist/Record/02 Song.lrc\n",
+        "1 file deleted",
+        "Left in place, changed since muman wrote it: Artist/Record/02 Song.lrc; it is yours now",
+    ] {
+        assert!(text.contains(said), "{said}: {text}");
+    }
+    assert!(
+        !text.contains("deletes Artist/Record/02 Song.lrc"),
+        "{text}"
+    );
 }
 
 #[test]

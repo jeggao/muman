@@ -345,7 +345,7 @@ Songs share an album as their tags [agree on one](metadata.md#tags); a
 single is an album of its own. A folder holding songs of several albums gets no
 file, and `sync` says so, unless `mixed = "majority"` takes the album
 most of its songs are on; the library folder itself never gets one. A
-file of yours at that name is left alone, even by `sync --force`. This
+file there muman never wrote is left alone, even by `sync --force`. This
 writes the cover inside each song and as `cover.jpg` in its folder:
 
 ```toml

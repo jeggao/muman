@@ -106,8 +106,9 @@ quietly matches nothing, or every song when negated.
   tag it writes, where that came from and what other sources offer;
   they never reach the song list.
 - **`remove`** moves songs to `[[removed]]` and deletes their library
-  files. `--purge` also deletes their fetched sources, and moves your
-  own files to the trash.
+  files, but a file you changed since muman wrote it, which it lists as
+  left in place. `--purge` also deletes their fetched sources, and moves
+  your own files to the trash.
 - **`restore`** lists removed songs again, fetching any source purged.
   It refuses until you take back from the trash the files of yours that
   `--purge` moved there, a song's `.lrc` and pictures with it, and

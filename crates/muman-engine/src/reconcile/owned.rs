@@ -150,7 +150,8 @@ pub(super) fn carried(
 /// writing it may write over or remove, each to be kept for `undo` first:
 /// muman's, under its name or one a filesystem blind to case takes for it,
 /// and, when `forced`, one of the user's own, taken over, but never a
-/// folder's of the user's own.
+/// folder's muman never wrote. A folder's file muman wrote and the user
+/// changed since is written again, as a song's own is.
 pub(super) fn claim(
     ledger: &Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
@@ -165,7 +166,10 @@ pub(super) fn claim(
     std::iter::once(path.to_path_buf())
         .chain(made.touched(path, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
-        .filter(|rel| !foreign.contains(rel) || (forced && !folder.contains(rel)))
+        .filter(|rel| {
+            !foreign.contains(rel)
+                || (forced && (!folder.contains(rel) || changed_since_muman(old, rel)))
+        })
         .map(|rel| {
             ledger
                 .owned(old, &rel, true)

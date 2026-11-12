@@ -428,6 +428,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`restore` names every file `remove --purge` trashed**: a song's
   `.lrc` and pictures too, and waits for each, rather than restore the
   song without its lyrics once its audio alone is back.
+- **A `.lrc` or folder cover you changed beside a song that goes is
+  said kept everywhere**: `status` says it would leave it, `remove`
+  lists it as left and counts it with no file deleted, and the sync says
+  it left it yours, where the first two said it was deleted and the sync
+  said nothing.
+- **A folder cover the next song takes over is no longer removed and
+  written again** when its song is freed for another song to move into
+  its name: the new holder writes over it, as `status` says.
+- **`sync --force` writes again a folder cover muman wrote that you
+  changed**, as `check` says and as it writes a song's own cover file,
+  where it called the cover "not muman's" and stopped counting it.
+- **`check` says what the sync does with a file no listed song has**: one
+  missing is let go of, not "written again", and one you changed stays
+  yours; neither is a problem.
+- **`set lyrics=false` names only the `.lrc` it removes**, where it said
+  the song's own file, left untouched, was updated.
+- **`remove` lists library files with `/` on every system**, relative to
+  the library as every other message names them, as does a sync's
+  "Could not remove" warning.
 
 ## [0.11.0] - 2026-11-10
 

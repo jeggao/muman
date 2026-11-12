@@ -7,6 +7,13 @@
 //! reported though no run recorded it; a failure recorded is reported
 //! while it still applies, and while a run holds the home, a file it may
 //! be moving or writing is not.
+//!
+//! A file the state records is said as the next sync takes it: one a
+//! listed song has ([`crate::reconcile::files_of`]) missing, empty or
+//! changed is that song's to write again, and one no listed song has is
+//! judged as pruning judges it ([`crate::reconcile::leaving`]), let go of
+//! when gone and left in place, the user's, when changed, neither a
+//! problem.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -15,6 +22,7 @@ use anyhow::Result;
 
 use crate::dirs::Dirs;
 use crate::manifest::Manifest;
+use crate::reconcile::Pruned;
 use crate::resolve::Doubt;
 use crate::source::SourceKey;
 use crate::state::State;
@@ -126,9 +134,37 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
     }
 
     let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
+    let songs = crate::reconcile::files_of(0..manifest.songs.len(), &manifest, &state.outputs);
+    let kept: BTreeSet<&PathBuf> = songs.values().collect();
+    let unkept: BTreeSet<PathBuf> = (state.outputs.keys())
+        .filter(|p| !kept.contains(p))
+        .cloned()
+        .collect();
+    for (path, fate) in crate::reconcile::leaving(library, &state.outputs, &unkept) {
+        if busy {
+            continue;
+        }
+        if std::fs::symlink_metadata(library.join(&path)).is_err() {
+            said.info(format!(
+                "Missing, and no song listed has it: `sync` lets it go: {}",
+                crate::relpath::show(&path)
+            ))?;
+        }
+        let changed = (fate == Pruned::LeftChanged).then_some(&path);
+        for file in changed.into_iter().chain(fate.left()) {
+            said.info(format!(
+                "Changed since muman wrote it, and no song listed has it: `sync` leaves it \
+                 in place, yours: {}",
+                crate::relpath::show(file)
+            ))?;
+        }
+    }
     for (path, written) in &state.outputs {
         owned.insert(path.clone());
         owned.extend(written.sidecar_paths().cloned());
+        if unkept.contains(path) {
+            continue;
+        }
         let file = library.join(path);
         match std::fs::metadata(&file) {
             // A run under way may be moving it, or about to write it.

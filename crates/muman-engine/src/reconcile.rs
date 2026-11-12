@@ -61,6 +61,7 @@ use self::plan::plan_awaiting;
 pub use self::plan::{
     Planned, Resolver, name_of, path_of, plan, plan_with, resolve_as_fitted, resolve_songs,
 };
+pub use self::prune::{Pruned, leaving};
 pub use self::report::{Fate, verdict};
 use self::report::{Showing, Shown, fit_summary, left_out, status};
 use self::write::{Writing, apply, touch};
@@ -692,7 +693,10 @@ pub fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
     for (path, written) in &state.outputs {
         for file in written.files(path) {
             if !dirs.library.join(file).exists() {
-                return Err(format!("{} is recorded, not there", file.display()));
+                return Err(format!(
+                    "{} is recorded, not there",
+                    crate::relpath::show(file)
+                ));
             }
         }
         for key in written
@@ -703,8 +707,8 @@ pub fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
             if let Some(other) = owners.insert(key, path) {
                 return Err(format!(
                     "{key} made both {} and {}",
-                    other.display(),
-                    path.display()
+                    crate::relpath::show(other),
+                    crate::relpath::show(path)
                 ));
             }
         }

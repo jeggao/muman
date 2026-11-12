@@ -70,12 +70,12 @@ its own. Anything else in the library folder stays as it is:
 - A file of yours at a song's path, or where a file beside the song
   goes, holds that song back until `sync --force`.
 - A file muman wrote that you changed since, as a tagger changes a
-  song or an editor its `.lrc`, stays with a warning. A new path
-  template still moves it, your change with it, but a change to the
-  song leaves it alone: a song whose `.lrc` you changed keeps its old
-  name when retitled, and a folder's cover you changed stays when any
-  of its songs moves to another folder. `sync --force` writes the song
-  again over your change, and `undo` brings your change back.
+  song or an editor its `.lrc`, stays with a warning, and yours once its
+  song goes. A new path template still moves it, your change with it,
+  but a change to the song leaves it alone: a song whose `.lrc` you
+  changed keeps its old name when retitled, and a folder's cover you
+  changed stays when any of its songs moves to another folder.
+  `sync --force` writes it again, and `undo` brings your change back.
 - muman knows its files by their size and modification time, else by
   their bytes, so a restored backup or a copy without its times is
   still muman's. A file whose bytes changed under the same size and
