@@ -267,9 +267,10 @@ pub enum Kind {
     /// A product's barcode, its digits alone, leading zeros kept: a UPC's
     /// 12, an EAN's 13 or 8, a GTIN's 14.
     Barcode,
-    /// A language by its ISO 639-2 code, as `jpn`; any other spelling of
-    /// it, as `ja` or `ja-JP`, read as it. `zxx` names none, as a song
-    /// with no words has.
+    /// A language by its ISO 639-2 code, as `jpn` ([`crate::lang::Lang::iso639`]);
+    /// any other spelling of it, as `ja` or `ja-JP`, read as it, and a
+    /// code no ISO 639 table names, as `xx`, refused. `zxx` names none, as
+    /// a song with no words has.
     Language,
     /// A ReplayGain peak, measured by muman: full scale 1, six decimals.
     Peak,
@@ -412,7 +413,7 @@ fn barcode(text: &str) -> Option<String> {
 fn language(text: &str) -> Option<String> {
     let code = text.trim().to_ascii_lowercase();
     match crate::lang::Lang::parse(&code) {
-        Some(lang) => Some(lang.iso639_2()),
+        Some(lang) => lang.iso639(),
         None => ["und", "mul", "mis", "zxx"]
             .contains(&code.as_str())
             .then_some(code),
@@ -1238,6 +1239,15 @@ fn time_of_day(t: &str) -> bool {
                 && parts.next().is_none()
         }
     }
+}
+
+/// Whether `value` is a language tag well formed but of a language no ISO
+/// 639 table names, as `xx`, given as `name`, a language: one [`by_hand`]
+/// refuses that an earlier muman took, so a song list may hold it.
+#[must_use]
+pub fn unnamed_language(name: &str, value: &str) -> bool {
+    Field::named(name).is_some_and(|f| f.spec().kind == Kind::Language)
+        && crate::lang::Lang::parse(value).is_some_and(|l| l.iso639().is_none())
 }
 
 /// What is wrong with `value` as `name`'s, set by hand, as [`by_hand`]
@@ -2358,6 +2368,11 @@ mod tests {
         assert_eq!(read(Kind::Barcode, "12345"), None);
         assert_eq!(read(Kind::Language, "ja").as_deref(), Some("jpn"));
         assert_eq!(read(Kind::Language, "SWE").as_deref(), Some("swe"));
+        assert_eq!(read(Kind::Language, "yue").as_deref(), Some("yue"));
+        assert_eq!(read(Kind::Language, "zxx").as_deref(), Some("zxx"));
+        for none in ["xx", "zz-ZZ", "qaa", "Klingon"] {
+            assert_eq!(read(Kind::Language, none), None, "{none}");
+        }
         assert!(id3_key("Abm") && id3_key("F#") && id3_key("C") && id3_key("o"));
         assert!(!id3_key("8A") && !id3_key("H") && !id3_key("A minor") && !id3_key("Am#"));
         assert_eq!(Field::named("initialkey"), Some(Field::InitialKey));

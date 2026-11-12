@@ -9,6 +9,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A size is bytes however its unit is cased**: `max_size = "240Mb"`,
+  `"2 Gb"` or `--max-size 1kb` read as megabytes, gigabytes and
+  kilobytes, where they read as bits; a unit of bits is refused.
+- **`add` refuses a pipe, a device or a socket named on its command
+  line** before reading it, where one named as a song or lyrics held the
+  run up for ever.
+- **`check` calls only muman's own `.part` an interrupted run's**, one
+  beside a file muman wrote, named below the library as every other
+  line; a `.part` of yours is not muman's, and no longer fails `check`.
+- **`info` counts a song naming no album as a single**, an album of its
+  own as loudness takes it, and counts no missing album artist as one.
+- **The `list | fzf | xargs` example in the songs guide takes any key**,
+  spaces and quotes too, on every system.
+- **A `language` no ISO 639 code names is refused**, as `xx`; one an
+  earlier muman wrote into the song list is left out with a warning, so
+  the list still reads.
+- **`add` fetches a `.torrent` file given by its `https://` address**,
+  then adds it as one on disk, where it said "no such file".
+- **`list --removed` writes each removed song's artist and album** beside
+  its key and title, as `list` writes a song.
+- **`check` says a damaged copy not yet fetched again is damaged**, where
+  it said a fetch had failed after runs that fetched nothing.
+- **The README's exit code 5 matches `--help`**: a query matching no song
+  is a refusal only for a change.
 - **`purge` never deletes a source in use**: a stray file beside a listed
   fetched source goes alone; a kept record in any case of extension, and
   a record's `.json` left without its `.lrc`, are purged; the folders

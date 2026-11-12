@@ -222,3 +222,38 @@ fn sizes_and_times_read_plainly() {
     assert_eq!(duration(3.0 * 3600.0 + 120.0), "3 h 2 min");
     assert_eq!(duration(50.0 * 3600.0), "2 d 2 h");
 }
+
+#[test]
+fn songs_naming_no_album_are_each_an_album_of_their_own_as_loudness_takes_them() {
+    let (_dir, dirs) = home();
+    let tagged = |album: &str| {
+        let body = ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+            .map(|id| {
+                format!(
+                    "[[song]]\nsources = [\"youtube.com:{id}\"]\ntags.album = \"{album}\"\n\
+                     tags.albumartist = \"Marlo Venn\"\n"
+                )
+            })
+            .concat();
+        std::fs::write(dirs.manifest(), format!("version = 1\n{body}")).unwrap();
+        let recording = crate::history::Recording::Test;
+        let synced = reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            recording,
+            &mut Vec::new(),
+        );
+        assert!(synced.unwrap().ok);
+        let text = info_text(&dirs, false);
+        (value(&text, "Songs"), value(&text, "Album artists"))
+    };
+    assert_eq!(
+        tagged(""),
+        ("2 (0 on 0 album(s), 2 single(s))".into(), "1".into())
+    );
+    assert_eq!(
+        tagged("Lantern Weather"),
+        ("2 (2 on 1 album(s), 0 single(s))".into(), "1".into())
+    );
+}

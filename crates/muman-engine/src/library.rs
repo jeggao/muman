@@ -317,15 +317,31 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
     }
 }
 
+/// What a run stopped partway leaves beside a path muman writes: a
+/// `.part` it was writing, a `.moving` it was renaming through.
+const LEFTOVERS: [&str; 2] = [".part", ".moving"];
+
+/// The path `rel` would be left beside by a run stopped partway: `rel`
+/// without its `.part` or `.moving`. It is muman's leftover only when
+/// muman writes that path; a download of the user's own named so is not.
+#[must_use]
+pub fn left_beside(rel: &Path) -> Option<PathBuf> {
+    let name = rel.as_os_str().to_str()?;
+    LEFTOVERS
+        .iter()
+        .find_map(|s| name.strip_suffix(s))
+        .filter(|of| !of.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Remove what a run stopped partway left beside the paths muman writes,
-/// each a song's file or one beside it: a `.part` it was writing, a
-/// `.moving` it was renaming through. Only beside those paths, so a
-/// download of the user's own named so is not.
+/// each a song's file or one beside it ([`LEFTOVERS`]). Only beside
+/// those paths, so a download of the user's own named so is not.
 // Removes what a stopped run left beside the paths muman writes.
 #[expect(clippy::disallowed_methods)]
 pub fn clear_leftovers(library: &Path, paths: impl Iterator<Item = PathBuf>) {
     for file in paths {
-        for suffix in [".part", ".moving"] {
+        for suffix in LEFTOVERS {
             let mut left = library.join(&file).into_os_string();
             left.push(suffix);
             let left = PathBuf::from(left);

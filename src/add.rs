@@ -10,7 +10,8 @@
 //! folder more often than named, and dropped there it left the songs
 //! untitled.
 //!
-//! A magnet link or a `.torrent` file names a torrent, whose song files
+//! A magnet link or a `.torrent` file, on disk or at an http or https
+//! address it is fetched from first, names a torrent, whose song files
 //! and what they bring are fetched by aria2c ([`crate::aria2`]) and each
 //! song file listed as a song is. Its metainfo is kept in the store, and
 //! what fetches it again, its name, trackers and v2 hash, in the song
@@ -36,7 +37,7 @@ use crate::Job;
 use crate::acquire::Proposal;
 use crate::cli::{Matching, TagArgs};
 use crate::dirs::Dirs;
-use crate::given::{Folder, Walked};
+use crate::given::{Folder, Named, Walked};
 use crate::history::Run;
 use crate::http::HttpTransport;
 use crate::manifest::{Edit, Manifest, Recorder};
@@ -100,7 +101,8 @@ pub(crate) fn run<R: Runner, W: Write>(
         copied.finish()?;
         let mut proposals = imported?;
         if !torrents.is_empty() {
-            let (fine, found) = add_torrents(job, runner, &torrents, request.from, &mut run, out)?;
+            let (fine, found) =
+                add_torrents(job, (runner, http), &torrents, request.from, &mut run, out)?;
             ok &= fine;
             proposals.extend(found);
         }
@@ -214,16 +216,28 @@ struct Inputs<'a> {
 }
 
 /// `inputs` sorted into torrents, files on disk and URLs, refused where a
-/// file named is not there or a word was meant for `--to`.
+/// file named is not there, is no regular file or folder
+/// ([`Named::of`]), or a word was meant for `--to`. Every path `add`
+/// reads is sorted here first.
 fn sort_inputs(inputs: &[String]) -> Result<Inputs<'_>> {
-    let (torrents, inputs): (Vec<&String>, Vec<&String>) =
-        inputs.iter().partition(|i| names_a_torrent(i));
-    let (files, urls): (Vec<&String>, Vec<&String>) =
-        inputs.into_iter().partition(|i| Path::new(i).exists());
-    let missing = torrents
-        .iter()
-        .find(|t| !is_magnet(t) && !Path::new(t).exists())
-        .or_else(|| urls.iter().find(|u| names_a_path(u)));
+    let mut torrents = Vec::new();
+    let mut files = Vec::new();
+    let mut urls = Vec::new();
+    let mut missing = None;
+    for input in inputs {
+        let on_disk = Named::of(Path::new(input))?;
+        if names_a_torrent(input) {
+            if on_disk.is_none() && !is_magnet(input) && !is_web(input) {
+                missing = missing.or(Some(input));
+            }
+            torrents.push(input);
+        } else if on_disk.is_some() {
+            files.push(input);
+        } else {
+            urls.push(input);
+        }
+    }
+    let missing = missing.or_else(|| urls.iter().copied().find(|u| names_a_path(u)));
     if let Some(missing) = missing {
         bail!("`{missing}`: no such file");
     }
@@ -823,13 +837,31 @@ fn is_magnet(input: &str) -> bool {
         .is_some_and(|s| s.eq_ignore_ascii_case("magnet:"))
 }
 
-/// Whether `input` names a torrent: a magnet link, or a `.torrent` file.
+/// Whether `input` is an http or https address.
+fn is_web(input: &str) -> bool {
+    ["http://", "https://"].iter().any(|scheme| {
+        input
+            .get(..scheme.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+    })
+}
+
+/// Whether `input` names a torrent: a magnet link, or a `.torrent` file
+/// on disk or at an http or https address.
 fn names_a_torrent(input: &str) -> bool {
+    let path = if is_web(input) {
+        crate::http::shown(input)
+    } else {
+        input
+    };
     is_magnet(input)
-        || Path::new(input)
+        || Path::new(path)
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
 }
+
+/// The longest a `.torrent` file named by its address takes to arrive.
+const METAINFO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Fetch each torrent `inputs` names, its metainfo kept and recorded, and
 /// propose each of its song files no song lists: whether every one was
@@ -837,7 +869,7 @@ fn names_a_torrent(input: &str) -> bool {
 /// in one aria2c run, and every torrent's files fetched in one more.
 fn add_torrents<R: Runner, W: Write>(
     job: &Job,
-    runner: &R,
+    (runner, http): (&R, &(dyn HttpTransport + Sync)),
     inputs: &[&String],
     from: Option<&Path>,
     run: &mut dyn Recorder,
@@ -859,7 +891,7 @@ fn add_torrents<R: Runner, W: Write>(
     };
     let mut known = manifest.keys();
     known.extend(manifest.removed_keys());
-    let (mut ok, metas) = read_all(runner, out, &places, (&mut manifest, run), inputs)?;
+    let (mut ok, metas) = read_all((runner, http), out, &places, (&mut manifest, run), inputs)?;
     let on_disk = |meta, f| on_disk(places.store, meta, f);
     let mut wanted = Vec::new();
     for meta in &metas {
@@ -1011,7 +1043,7 @@ fn on_disk(root: &Path, meta: &crate::torrent::Metainfo, f: &crate::torrent::Fil
 /// of its peers in one run, and keep and record each, a torrent given
 /// twice once: whether every one was read, and their metainfo.
 fn read_all<R: Runner, W: Write>(
-    runner: &R,
+    (runner, http): (&R, &(dyn HttpTransport + Sync)),
     out: &mut W,
     places: &crate::aria2::Places<'_>,
     (manifest, run): (&mut Manifest, &mut dyn Recorder),
@@ -1020,7 +1052,7 @@ fn read_all<R: Runner, W: Write>(
     let mut ok = true;
     let mut read = Vec::new();
     for input in inputs {
-        match read_torrent(input) {
+        match read_torrent(http, input) {
             Ok(Given::Magnet(m)) => {
                 let hash = m.v1.as_deref().or(m.v2.as_deref()).unwrap_or_default();
                 let kept = std::fs::read(crate::store::metainfo_path(places.store, hash))
@@ -1088,10 +1120,19 @@ enum Given {
     Kept(Vec<u8>, Vec<String>),
 }
 
-/// The torrent `input` names, read as far as it is without asking a peer.
-fn read_torrent(input: &str) -> Result<Given> {
+/// The torrent `input` names, read as far as it is without asking a
+/// peer: a `.torrent` file at an address fetched through `http`.
+fn read_torrent(http: &(dyn HttpTransport + Sync), input: &str) -> Result<Given> {
     if is_magnet(input) {
         return Ok(Given::Magnet(crate::torrent::Magnet::parse(input)?));
+    }
+    if is_web(input) {
+        let agent = crate::http::user_agent();
+        let bytes = http
+            .get(input, &[("User-Agent", agent.as_str())], METAINFO_TIMEOUT)
+            .map_err(|e| e.hiding(input))
+            .with_context(|| format!("fetching {}", crate::http::shown(input)))?;
+        return Ok(Given::File(bytes));
     }
     let bytes = std::fs::read(input).with_context(|| format!("reading {input}"))?;
     Ok(Given::File(bytes))

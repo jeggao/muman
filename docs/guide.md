@@ -213,7 +213,7 @@ is written as `1` or `0`. These tags take a value in a set form:
 | `isrc` | An ISRC, kept without the dashes it is often shown with |
 | `bpm` | A number from 1 to 9999 with up to two decimals, rounded where a format holds whole ones (`TBPM`, `tmpo`) |
 | `barcode` | Its digits |
-| `language` | Any tag for a language, as `ja`, written as its ISO 639-2 code, `jpn` |
+| `language` | Any tag for a language, as `ja`, written as its ISO 639-2 code, `jpn`, or ISO 639-3's where 639-2 has none, as `yue`; `xx`, which none names, is refused |
 | `initialkey` | Written as `KEY` and `INITIALKEY` in Vorbis comments; in MP3 as `TKEY` when it is a key that frame holds (`Abm`, `F#`), else as a user text frame |
 
 A song's `language` is the one it is sung in, which decides what its
@@ -223,12 +223,12 @@ own `comment` is written only with `[library] source_comments`. `add
 `add` lists, and `muman status` shows each tag's value and the source
 it came from.
 
-muman refuses a song list with a tag its field cannot hold, naming the
-song by its number and first source: a date of `July 2019` or
-`2019-02-30`, a tempo outside 1 to 9999, a table, or a ReplayGain gain
-or peak, which muman measures itself. It also refuses a tag name a
-Vorbis comment cannot carry: one with `=`, or anything but printable
-ASCII.
+muman refuses a song list with a tag its field cannot hold, naming the song by
+its number and first source: a date of `July 2019` or `2019-02-30`, a tempo
+outside 1 to 9999, a table, or a ReplayGain gain or peak, which muman measures
+itself. It also refuses a tag name a Vorbis comment cannot carry: one with `=`,
+or anything but printable ASCII. A `language` no ISO 639 code names, which an
+earlier muman took, is left out instead, and `sync` and `check` warn of it.
 
 ### Chapters
 
@@ -311,12 +311,12 @@ waits the same way when that fails. Only runs that fetch need yt-dlp.
 
 ### Torrents
 
-`muman add <magnet link|FILE.torrent>` fetches a torrent's song files
-with aria2c, each with the `.lrc` and pictures named as it is and its
-folder's cover, by the rules for [files of your own](#files-of-your-own).
-Scans, logs and the rest stay with the torrent's peers. Each song file
-is listed as a song, or joins the song it is the same recording as, and
-is tagged and looked up as a file of your own is.
+`muman add <magnet link|FILE.torrent>`, the file on disk or at an `https://`
+address, fetches a torrent's song files with aria2c, each with the `.lrc` and
+pictures named as it is and its folder's cover, by the rules for [files of your
+own](#files-of-your-own). Scans, logs and the rest stay with the torrent's
+peers. Each song file is listed as a song, or joins the song it is the same
+recording as, and is tagged and looked up as a file of your own is.
 
 The metainfo is kept in the store, and the torrent's name, trackers and
 v2 hash in the song list's `[torrents."<hash>"]`. A private torrent's

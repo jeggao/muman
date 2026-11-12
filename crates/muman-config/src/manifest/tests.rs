@@ -1445,3 +1445,32 @@ fn a_list_removed_while_muman_runs_is_not_written_again() {
     );
     assert!(!dir.path().join(MANIFEST).exists());
 }
+
+#[test]
+fn a_language_no_iso_639_table_names_is_left_out_of_a_list_and_refused_anew() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.language = \"xx\"\n\
+         tags.genre = \"Folk\"\n\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n\
+         tags.language = \"ja\"\n",
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    let tag = |name: &str, value: &str| vec![(name.to_string(), vec![value.to_string()])];
+    assert_eq!(m.songs[0].tags, tag("genre", "Folk"));
+    assert_eq!(m.songs[1].tags, tag("language", "jpn"));
+    assert_eq!(m.left_out.len(), 1, "{:?}", m.left_out);
+    assert!(m.left_out[0].contains("\"xx\""), "{:?}", m.left_out);
+
+    let again = Edit::Tag {
+        key: yt("bbbbbbbbbbb"),
+        tags: tag("language", "zz"),
+    };
+    let e = m.trial(&[again]).unwrap_err();
+    assert!(format!("{e:#}").contains("\"zz\""), "{e:#}");
+    let other = Edit::Tag {
+        key: yt("bbbbbbbbbbb"),
+        tags: tag("genre", "Folk"),
+    };
+    m.trial(&[other]).unwrap();
+}

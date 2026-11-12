@@ -605,12 +605,11 @@ mod tests {
         };
         std::fs::create_dir_all(dirs.library.join("A")).unwrap();
         std::fs::create_dir_all(&dirs.home).unwrap();
-        std::fs::write(dirs.library.join("A/kept.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/changed.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/stray.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/notes.txt"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/.hidden"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/half.opus.part"), "x").unwrap();
+        let names = "kept.opus changed.opus stray.opus notes.txt .hidden gone.opus.part \
+                     notes.part stray.opus.part";
+        for name in names.split(' ') {
+            std::fs::write(dirs.library.join("A").join(name), "x").unwrap();
+        }
         let mut state = crate::state::State::default();
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
@@ -659,7 +658,7 @@ mod tests {
         )
         .unwrap();
         assert!(out.is_empty(), "the problems are the report");
-        let text = String::from_utf8(report).unwrap();
+        let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(
             text.contains("Missing, `sync` writes it again: A/gone.opus"),
@@ -668,16 +667,15 @@ mod tests {
         assert!(text.contains("Changed since muman wrote it"), "{text}");
         assert!(text.contains("A/changed.opus"), "{text}");
         assert!(!text.contains("A/kept.opus"), "{text}");
-        assert!(
-            text.contains("Not muman's, left alone: A/stray.opus"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Not muman's, left alone: A/notes.txt"),
-            "{text}"
-        );
         assert!(!text.contains(".hidden"), "{text}");
-        assert!(text.contains("Left by an interrupted run"), "{text}");
+        let said = |line: String| text.lines().any(|l| l == line);
+        assert!(said("Left by an interrupted run: A/gone.opus.part".into()));
+        for theirs in ["stray.opus", "notes.txt", "notes.part", "stray.opus.part"] {
+            assert!(
+                said(format!("Not muman's, left alone: A/{theirs}")),
+                "{text}"
+            );
+        }
         assert!(
             text.contains("Missing beside its song, `sync` writes it again: A/sung.lrc"),
             "{text}"

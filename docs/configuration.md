@@ -101,8 +101,8 @@ A quantity takes its unit after the number; the space is optional:
 
 Every unit but `LUFS` and `LKFS` may be spelled out, as `"2 gibibytes"`
 or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary sizes; `KB`,
-`MB` and `GB` decimal. A bare number is bytes, hertz or a fraction; a
-bitrate, time, loudness or level needs its unit.
+`MB` and `GB` decimal, `Mb` too: a size is never in bits. A bare number
+is bytes, hertz or a fraction; a bitrate, time, loudness or level needs its unit.
 
 | Table | Sets |
 |---|---|

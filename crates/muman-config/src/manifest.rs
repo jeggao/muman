@@ -457,6 +457,9 @@ pub struct Manifest {
     /// Each source key the file names by yt-dlp's extractor, as
     /// `youtube:<id>`, by the key the next write names by its site.
     pub respelled: BTreeMap<String, String>,
+    /// What the file holds that is read as nothing, each said: a value an
+    /// earlier muman took that this one refuses.
+    pub left_out: Vec<String>,
     edits: Vec<Edit>,
     stale: bool,
     /// The file's text as this was read from it or last wrote it, with
@@ -666,6 +669,7 @@ impl Manifest {
             stale_defaults: parsed.stale_defaults,
             renamed: parsed.renamed,
             respelled: parsed.respelled,
+            left_out: parsed.left_out,
             edits: Vec::new(),
             stale,
             text,
@@ -850,6 +854,7 @@ impl Manifest {
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
         self.torrents = parsed.torrents;
         (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
+        self.left_out = parsed.left_out;
         self.stale = false;
         run.saved(self)?;
         Ok(Vec::new())
@@ -883,7 +888,13 @@ impl Manifest {
             apply(&mut doc, edit)?;
         }
         normalize(&mut doc);
-        parse(&doc).map(drop)
+        let parsed = parse(&doc)?;
+        // What the file held before is left out as it reads; a value the
+        // edits bring is refused as `set` refuses it.
+        match parsed.left_out.iter().find(|l| !self.left_out.contains(l)) {
+            Some(line) => bail!("{line}"),
+            None => Ok(()),
+        }
     }
 
     /// Drop what was recorded and not saved.
@@ -1025,6 +1036,7 @@ struct Parsed {
     stale_defaults: Vec<crate::settings::Stale>,
     renamed: Vec<crate::migrate::Renamed>,
     respelled: BTreeMap<String, String>,
+    left_out: Vec<String>,
 }
 
 /// The keys a table lists, each parsed.
@@ -1193,6 +1205,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let respelled = respell(&mut current, &spelled_now);
     let doc = no_misspelled_list(&current)?;
     let mut songs = Vec::new();
+    let mut left_out = Vec::new();
     let mut owner: BTreeMap<SourceKey, usize> = BTreeMap::new();
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
@@ -1213,7 +1226,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             cover: key_at(t, "cover", &what)?,
             lyrics,
             lyrics_offset_ms: lyrics_offset(t, &what)?,
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, &mut left_out)?,
             held: crate::held::read(t, &sources, &what)?,
             lookups_off: lookups_off(t, &what)?,
             release: match t.get("release") {
@@ -1251,11 +1264,11 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         albums.push(Album {
             source,
             tracks: numbered(t, "tracks", &what)?,
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, &mut left_out)?,
         });
     }
     refuse_albumless(&songs, &albums)?;
-    let removed = removed_of(doc)?;
+    let removed = removed_of(doc, &mut left_out)?;
     let settings = crate::settings::read(doc)?;
     let providers = providers::read(doc)?;
     // A song's tags are those muman knows and those the song list gives
@@ -1279,6 +1292,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,
         respelled,
+        left_out,
     })
 }
 
@@ -1349,7 +1363,7 @@ fn named_by(t: &Table, key: &str) -> Option<String> {
 }
 
 /// The songs `[[removed]]` lists, each kept to be restored.
-fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
+fn removed_of(doc: &DocumentMut, left_out: &mut Vec<String>) -> Result<Vec<Removed>> {
     let mut removed = Vec::new();
     for (n, t) in tables(doc, "removed").enumerate() {
         let what = format!("removed song {}", n + 1);
@@ -1362,7 +1376,7 @@ fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
                 .to_string(),
             title: named_by(t, "title"),
             artist: named_by(t, "artist"),
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, left_out)?,
             held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
         });
     }
@@ -2485,8 +2499,9 @@ fn switches_template(
 /// them, each read as its field's kind reads it; an empty value sets
 /// nothing. A value its field cannot hold, as a date that is none, or of
 /// any other type, as a table, refuses the song list, naming the song as
-/// `what`.
-fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
+/// `what`; but a language no ISO 639 table names, which an earlier muman
+/// set, is left out and said in `left_out`, so the list still reads.
+fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Result<Tags> {
     let Some(t) = item.and_then(Item::as_table_like) else {
         return Ok(Vec::new());
     };
@@ -2513,12 +2528,19 @@ fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
                 .collect::<Result<_>>()?,
             v => scalar(key, v)?.into_iter().collect(),
         };
-        let values = raw
-            .iter()
-            .map(|v| tags::by_hand(key, v).map_err(|why| anyhow::anyhow!("{what}: tags.{why}")))
-            // A value read as nothing, as one of marks alone, sets nothing.
-            .filter(|v| !matches!(v, Ok(v) if v.is_empty()))
-            .collect::<Result<Vec<String>>>()?;
+        let mut values = Vec::new();
+        for v in &raw {
+            match tags::by_hand(key, v) {
+                // A value read as nothing, as one of marks alone, sets nothing.
+                Ok(v) if v.is_empty() => {}
+                Ok(v) => values.push(v),
+                Err(_) if tags::unnamed_language(key, v) => left_out.push(format!(
+                    "{what}: tags.{key} = {v:?} names no language ISO 639 has a code for, so \
+                     it is left out; set the language by its code, as jpn or ja"
+                )),
+                Err(why) => bail!("{what}: tags.{why}"),
+            }
+        }
         if !values.is_empty() {
             tags.push((key.to_string(), values));
         }

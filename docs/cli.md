@@ -24,7 +24,7 @@ Exit codes:
      list or state could not be read or written, the song list is no
      TOML or a song, album or removed song in it does not read, or check
      found a problem
-  5  A query for a change did not read or matched no song, a change
+  5  A query did not read, or one for a change matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
      and was left out, a change, an undo or an export's output was
      refused, the library template cannot name every song, the song list
@@ -85,7 +85,7 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 **Arguments:**
 
-* `<URL|MAGNET|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; magnet links and .torrent files, whose song files aria2c fetches; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
+* `<URL|MAGNET|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; magnet links and .torrent files, on disk or at an http or https address, whose song files aria2c fetches; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 
@@ -152,7 +152,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 * `-f`, `--format <TEMPLATE>` — Write each song by a template of `{field}`s instead
 * `--keys` — Write each song's first key alone
-* `--removed` — List removed songs instead: each key and the song it was
+* `--removed` — List removed songs instead, each by the key, artist, title and album it had
 
 
 

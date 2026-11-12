@@ -87,6 +87,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
     for line in crate::settings::stale_warnings(&manifest.stale_defaults)
         .into_iter()
         .chain(manifest.misspelled())
+        .chain(manifest.left_out.iter().cloned())
     {
         said.warning(line)?;
     }
@@ -184,12 +185,12 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         let Ok(rel) = file.strip_prefix(library) else {
             continue;
         };
-        if rel
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("part"))
-        {
+        if crate::library::left_beside(rel).is_some_and(|of| owned.contains(&of)) {
             if !busy {
-                said.problem(format!("Left by an interrupted run: {}", file.display()))?;
+                said.problem(format!(
+                    "Left by an interrupted run: {}",
+                    crate::relpath::show(rel)
+                ))?;
             }
             continue;
         }
@@ -263,7 +264,15 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             said.problem(format!("Missing from sources, {how}: {key}"))?;
         }
     }
-    for (key, f) in listed.iter().filter_map(|k| {
+    // A damaged copy noted to be fetched again, and not yet tried, is said
+    // with the note.
+    let refetching = |k: &SourceKey| {
+        state
+            .failures
+            .get(k)
+            .is_some_and(|f| f.step == crate::state::Step::Refetch && f.count <= 1)
+    };
+    for (key, f) in listed.iter().filter(|k| !refetching(k)).filter_map(|k| {
         let rev = store.locate(k)?.rev();
         Some((k, state.facts.get(k).filter(|f| f.holds_for(&rev))?))
     }) {
@@ -275,17 +284,25 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         if !failure.applies(store.locate(key).as_ref(), state.facts.get(key)) {
             continue;
         }
-        said.problem(format!(
-            "Failed {} time(s) to {}: {key}: {}",
-            failure.count,
-            match failure.step {
-                crate::state::Step::Measure => "read",
-                crate::state::Step::Fetch => "fetch",
-                crate::state::Step::Refetch => "fetch again",
-                crate::state::Step::Mend => "mend",
-            },
-            failure.error
-        ))?;
+        // A note to fetch a damaged copy again counts the copy found
+        // damaged first, which no fetch failed at.
+        let (failed, step) = match failure.step {
+            crate::state::Step::Measure => (failure.count, "read"),
+            crate::state::Step::Fetch => (failure.count, "fetch"),
+            crate::state::Step::Refetch => (failure.count.saturating_sub(1), "fetch again"),
+            crate::state::Step::Mend => (failure.count, "mend"),
+        };
+        if failed == 0 {
+            said.problem(format!(
+                "Damaged audio, `sync` fetches it again: {}",
+                failure.error
+            ))?;
+        } else {
+            said.problem(format!(
+                "Failed {failed} time(s) to {step}: {key}: {}",
+                failure.error
+            ))?;
+        }
     }
     // Each song as a sync would resolve it, from the sources it reads: one
     // whose source is missing, which `sync` fetches again, waits, and one

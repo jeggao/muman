@@ -2507,6 +2507,85 @@ fn a_torrents_song_files_are_fetched_and_listed_and_the_rest_left() {
 }
 
 #[test]
+fn a_torrent_file_at_an_address_is_fetched_then_added_as_one_on_disk_is() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["01 Paper Comets.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes.clone(), hash.clone(), runs);
+    let server = Server::default().answer_bytes("/lantern-weather.torrent", &bytes);
+    let url = "https://files.example/lantern-weather.torrent?from=list";
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["add", "--no-match", url]),
+        &fake,
+        &server,
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(ok, "{text}");
+    assert_eq!(server.asked.lock().unwrap().first().unwrap(), url);
+    assert_eq!(
+        s.songs(),
+        [vec![
+            SourceKey::parse(&format!("torrent:{hash}/01 Paper Comets.flac")).unwrap()
+        ]]
+    );
+
+    let gone = "https://files.example/missing.torrent";
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["add", gone]),
+        &fake,
+        &server,
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("fetching https://files.example/missing.torrent"),
+        "{text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_path_named_that_is_no_file_or_folder_is_refused_before_it_is_read() {
+    let s = Setup::new();
+    for name in [
+        "Paper Comets.flac",
+        "Paper Comets.lrc",
+        "Lantern Weather.torrent",
+    ] {
+        let path = s.dir.path().join(name);
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let e = run_with(
+            &s.job(&["add", &path.to_string_lossy()]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("no file or folder"),
+            "{name}: {e:#}"
+        );
+    }
+    assert!(s.songs().is_empty());
+}
+
+#[test]
 fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo(
@@ -3641,6 +3720,19 @@ fn a_damaged_torrent_file_fetched_back_as_it_was_is_not_fetched_again() {
         Some(crate::state::Step::Refetch),
         "{text}"
     );
+    s.run(&fake, &["sync", "--offline"]);
+    let (_, report) = s.report(&fake, &["check"]);
+    assert_eq!(
+        report
+            .matches(&format!(
+                "Damaged audio, `sync` fetches it again: {key} lacks"
+            ))
+            .count(),
+        1,
+        "no fetch was tried, so none failed: {report}"
+    );
+    assert!(!report.contains("Failed"), "{report}");
+    assert!(!report.contains("Damaged audio: "), "said once: {report}");
     let before = std::fs::metadata(&file).unwrap().modified().unwrap();
 
     let (_, text) = s.run(&fake, &["sync"]);
@@ -6407,6 +6499,11 @@ fn a_song_purged_keeps_its_title_and_artist_as_fields() {
     assert_eq!(
         s.listed(&["list", "--removed", "-f", "{artist}|{title}"]),
         "Artist|Song\n"
+    );
+    assert!(
+        s.listed(&["list", "--removed"])
+            .starts_with("manual:a.flac\tArtist\tSong\t"),
+        "as `list` writes a song"
     );
     for term in ["artist:artist", "title:=Song"] {
         assert_eq!(

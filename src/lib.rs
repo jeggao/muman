@@ -1001,11 +1001,10 @@ fn list_songs<D: Write>(
         query::views(&manifest, &state, &dirs.library)?
     };
     parsed.check_fields(&views)?;
-    let template = match (format, keys, removed) {
-        (Some(f), _, _) => f,
-        (None, true, _) => "{key}",
-        (None, false, true) => "{key}\\t{title}",
-        (None, false, false) => "{key}\\t{artist}\\t{title}\\t{album}",
+    let template = match (format, keys) {
+        (Some(f), _) => f,
+        (None, true) => "{key}",
+        (None, false) => "{key}\\t{artist}\\t{title}\\t{album}",
     };
     query::check_format(template, &views)?;
     for view in views

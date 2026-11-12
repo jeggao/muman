@@ -115,9 +115,13 @@ quietly matches nothing, or every song when negated.
   run that changed them, one run further back each time.
 
 ```bash
-muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y
+muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 --print0 | xargs -0 muman remove -y
 muman set artist:="Marlo Venn" album="Lantern Weather"
 ```
+
+A key may hold spaces and quotes, as `manual:Marlo Venn/Paper Comets.flac`
+does, so the keys picked pass to `xargs` ended by a NUL, which `-0`
+reads on every system.
 
 ### What undo puts back
 

@@ -6,6 +6,9 @@
 //! the library is in step is what a sync would do with each song, by the
 //! decisions a sync makes (`reconcile::foresee`), on the state as a
 //! sync would take it, so `info`, `status` and `sync` never disagree.
+//! Songs are counted on albums as loudness and folder covers group them
+//! (`album::of_each`): a song naming no album is a single, an album of
+//! its own, and only an album artist named is counted.
 //!
 //! `--changes` answers what those songs would change into, value by
 //! value: each song's plan as its file was written, the one a state
@@ -31,7 +34,7 @@ use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
 use crate::quality::SOFT_COVER;
 use crate::reconcile;
-use crate::resolve::{Plan, Resolved, SINGLE};
+use crate::resolve::{Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state;
 use crate::state::State;
@@ -363,21 +366,13 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
             .find(|(k, _)| k == f.vorbis())
             .and_then(|(_, v)| v.first().cloned())
     };
-    let singles = c
+    let album_of = crate::album::of_each(c.planned.iter().map(|(_, r)| r));
+    let albums: BTreeSet<&crate::album::Album> = album_of.iter().flatten().collect();
+    let singles = album_of.iter().filter(|a| a.is_none()).count();
+    let artists: BTreeSet<String> = c
         .planned
         .iter()
-        .filter(|(_, r)| r.why.tags.iter().any(|t| t.from == SINGLE))
-        .count();
-    let albums: BTreeSet<(Option<String>, Option<String>)> = c
-        .planned
-        .iter()
-        .filter(|(_, r)| !r.why.tags.iter().any(|t| t.from == SINGLE))
-        .map(|(_, r)| (tag(r, Field::AlbumArtist), tag(r, Field::Album)))
-        .collect();
-    let artists: BTreeSet<Option<String>> = c
-        .planned
-        .iter()
-        .map(|(_, r)| tag(r, Field::AlbumArtist))
+        .filter_map(|(_, r)| tag(r, Field::AlbumArtist))
         .collect();
     row(
         out,

@@ -46,7 +46,7 @@ Exit codes:
      list or state could not be read or written, the song list is no
      TOML or a song, album or removed song in it does not read, or check
      found a problem
-  5  A query for a change did not read or matched no song, a change
+  5  A query did not read, or one for a change matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
      and was left out, a change, an undo or an export's output was
      refused, the library template cannot name every song, the song list
@@ -338,10 +338,10 @@ pub enum Command {
     /// and asked about when that is not sure.
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
-        /// magnet links and .torrent files, whose song files aria2c
-        /// fetches; or audio files and folders of them, copied into the manual
-        /// folder, an original yt-dlp fetched among them into
-        /// sources/yt-dlp under its key; or
+        /// magnet links and .torrent files, on disk or at an http or https
+        /// address, whose song files aria2c fetches; or audio files and
+        /// folders of them, copied into the manual folder, an original
+        /// yt-dlp fetched among them into sources/yt-dlp under its key; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
         #[arg(required = true, value_name = "URL|MAGNET|FILE", value_hint = ValueHint::AnyPath)]
@@ -436,7 +436,8 @@ pub enum Command {
         #[arg(long)]
         keys: bool,
 
-        /// List removed songs instead: each key and the song it was.
+        /// List removed songs instead, each by the key, artist, title and
+        /// album it had.
         #[arg(long)]
         removed: bool,
     },

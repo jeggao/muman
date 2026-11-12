@@ -21,7 +21,10 @@
 //! (`aria2::take_up`).
 //!
 //! Only regular files are read: a pipe or a device would hold a copy up
-//! forever or never end it, and a socket holds nothing.
+//! forever or never end it, and a socket holds nothing. A path named on
+//! the command line is sorted once, by [`Named::of`], before anything
+//! reads it: one that is no regular file or folder is refused there, as
+//! a walk passes one over inside a folder.
 //!
 //! Every walk of a folder given and every copy out of one goes through
 //! [`Folder`], as `tests/architecture.rs` keeps it. muman's own folders,
@@ -42,6 +45,34 @@ pub struct Folder {
     /// Its real path; `None` when it cannot be read, so nothing is
     /// inside it.
     real: Option<PathBuf>,
+}
+
+/// What a path named on the command line leads to, a link followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    File,
+    Folder,
+}
+
+impl Named {
+    /// What `path` is; none when nothing is there.
+    ///
+    /// # Errors
+    ///
+    /// `path` being neither a regular file nor a folder, as a pipe, a
+    /// device or a socket is.
+    pub fn of(path: &Path) -> Result<Option<Self>> {
+        match std::fs::metadata(path) {
+            Ok(m) if m.is_dir() => Ok(Some(Self::Folder)),
+            Ok(m) if m.is_file() => Ok(Some(Self::File)),
+            Ok(_) => bail!(
+                "`{}` is no file or folder but a pipe, a device or a socket, which muman \
+                 never reads",
+                path.display()
+            ),
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 /// What a walk of a [`Folder`] found: its regular files, and the links

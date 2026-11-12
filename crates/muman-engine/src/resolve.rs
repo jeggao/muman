@@ -1205,17 +1205,8 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         .flat_map(|(_, v)| v)
         .filter_map(|code| Lang::parse(code))
         .collect();
-    if sung.is_empty()
-        && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
-        && let Some(own) = own_lyrics_language(facts)
-    {
-        insert_comment(&mut tags, Field::Language, vec![own.iso639_2()]);
-        tag_why.push(TagWhy {
-            key: Field::Language.vorbis().to_string(),
-            from: "the language of the audio file's own lyrics".to_string(),
-            cleaned: Vec::new(),
-        });
-        sung.push(own);
+    if sung.is_empty() {
+        sung.extend(sung_as_own_lyrics(facts, &mut tags, &mut tag_why));
     }
     let instrumental = instrumental(&tags);
     let lyrics = pick_lyrics(input, &audio_key, &sung, instrumental, &vets);
@@ -1781,6 +1772,29 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
 /// The language the lyrics tag of the audio's own file names, as a
 /// `USLT` frame does: a file's own lyrics are the song's as someone kept
 /// it, so most likely in the language it is sung in.
+/// The language a song whose tags name none is sung in, by its audio
+/// file's own lyrics: written as its `LANGUAGE` where an ISO 639 code
+/// names it.
+fn sung_as_own_lyrics(
+    facts: &Facts,
+    tags: &mut Comments,
+    tag_why: &mut Vec<TagWhy>,
+) -> Option<Lang> {
+    if tags.iter().any(|(k, _)| k == Field::Language.vorbis()) {
+        return None;
+    }
+    let own = own_lyrics_language(facts)?;
+    if let Some(code) = own.iso639() {
+        insert_comment(tags, Field::Language, vec![code]);
+        tag_why.push(TagWhy {
+            key: Field::Language.vorbis().to_string(),
+            from: "the language of the audio file's own lyrics".to_string(),
+            cleaned: Vec::new(),
+        });
+    }
+    Some(own)
+}
+
 fn own_lyrics_language(facts: &Facts) -> Option<Lang> {
     facts
         .lyrics
