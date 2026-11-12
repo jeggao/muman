@@ -340,11 +340,76 @@ fn a_dry_run_says_what_a_sync_would_remove_keep_or_write_again() {
         ..Options::default()
     };
     let (_, text) = h.run(&infos(&["aaaaaaaaaaa"]), dry);
-    assert!(text.contains("(written again)"), "lyrics gone: {text}");
+    assert!(
+        text.contains("(a file beside it written again)"),
+        "lyrics gone: {text}"
+    );
     assert!(!text.contains("Would remove"), "{text}");
     assert!(
         text.contains("Would leave in place, changed since muman wrote it"),
         "{text}"
+    );
+}
+
+#[test]
+fn a_file_beside_a_song_deleted_is_written_again_alone_and_said_so() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let song = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    let lrc = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc");
+    let stamp = crate::store::stamp_text(&song);
+    std::fs::remove_file(&lrc).unwrap();
+    let before = renders(&fake);
+    let mut run = Run::begin(&h.dirs.home).unwrap();
+    let mut out = Vec::new();
+    let synced = reconcile(
+        &fake,
+        &h.dirs,
+        Options::default(),
+        Recording::Run(&mut run),
+        &mut out,
+    )
+    .unwrap();
+    run.finish(&h.dirs.home).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(synced.ok, "{text}");
+    assert_eq!(renders(&fake), before, "nothing encoded again: {text}");
+    assert!(lrc.exists(), "{text}");
+    assert_eq!(crate::store::stamp_text(&song), stamp, "its file as it was");
+    assert!(
+        text.contains("Written again: Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(".opus"),
+        "its file is not said written: {text}"
+    );
+    let undo = crate::history::plan(&h.dirs)
+        .map(|p| p.lines().join("\n"))
+        .unwrap_or_default();
+    assert!(!undo.contains(".opus"), "nothing of its file kept: {undo}");
+}
+
+#[test]
+fn lyrics_taken_off_a_song_are_said_removed() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nlyrics = false\n");
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Removed: Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc"),
+        "{text}"
+    );
+    assert!(
+        !h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc")
+            .exists()
     );
 }
 
@@ -1106,7 +1171,11 @@ fn a_dry_run_names_every_move_and_removal_its_sync_makes() {
         after(&done, "Removed: "),
         "{said}\n{done}"
     );
-    assert_eq!(after(&done, "Removed: ").len(), 1, "{done}");
+    assert_eq!(
+        after(&done, "Removed: ").len(),
+        2,
+        "its song and lyrics: {done}"
+    );
 }
 
 #[test]
@@ -1129,6 +1198,77 @@ fn a_song_that_loses_its_told_apart_name_moves_to_the_plain_one() {
     );
     let after = files(&h.lib(""));
     assert_eq!(after.len(), before.len(), "{before:?} → {after:?}");
+}
+
+#[test]
+fn a_song_takes_the_plain_name_a_song_removed_leaves_by_a_move_undone_whole() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let same = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
+                [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n";
+    h.songs(same);
+    assert!(h.run(&fake, Options::default()).0);
+    let before = files(&h.lib(""))
+        .into_iter()
+        .map(|f| (f.clone(), std::fs::read(f).unwrap()))
+        .collect::<Vec<_>>();
+    let told_apart = h.lib("Chan/Same/Same [bbbbbbbbbbb].opus");
+    let bytes = std::fs::read(&told_apart).unwrap();
+    h.songs(
+        "[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n\
+         [[removed]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nnote = \"Same\"\n",
+    );
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let (_, said) = h.run(&fake, dry);
+    assert!(
+        said.contains("Would move: Chan/Same/Same [bbbbbbbbbbb].opus → Chan/Same/Same.opus"),
+        "{said}"
+    );
+    let renders_before = renders(&fake);
+    let mut run = Run::begin(&h.dirs.home).unwrap();
+    let mut out = Vec::new();
+    let synced = reconcile(
+        &fake,
+        &h.dirs,
+        Options::default(),
+        Recording::Run(&mut run),
+        &mut out,
+    )
+    .unwrap();
+    run.finish(&h.dirs.home).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(synced.ok, "{text}");
+    h.holds(&text);
+    assert_eq!(renders(&fake), renders_before, "nothing encoded: {text}");
+    assert!(text.contains("Removed: Chan/Same/Same.opus"), "{text}");
+    assert!(
+        text.contains("Moved: Chan/Same/Same [bbbbbbbbbbb].opus → Chan/Same/Same.opus"),
+        "{text}"
+    );
+    assert!(!told_apart.exists(), "{text}");
+    assert_eq!(std::fs::read(h.lib("Chan/Same/Same.opus")).unwrap(), bytes);
+
+    let plan = crate::history::plan(&h.dirs).unwrap();
+    let mut out = Vec::new();
+    crate::history::undo(&h.dirs, plan, &mut out)
+        .unwrap()
+        .finish()
+        .unwrap();
+    let after = files(&h.lib(""))
+        .into_iter()
+        .map(|f| (f.clone(), std::fs::read(f).unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after,
+        before,
+        "both back: {}",
+        String::from_utf8_lossy(&out)
+    );
 }
 
 #[test]
@@ -2455,6 +2595,14 @@ fn a_song_left_as_built_is_pooled_in_its_album_as_its_file_was_made() {
     assert!(!text.contains("Updated"), "{text}");
     assert_eq!(album_gains(&h), built, "one album, one gain");
     assert_eq!(std::fs::read(&song).unwrap(), file);
+    let state = State::load(&h.dirs.home).unwrap();
+    let held = state.outputs[path].plan.as_ref().unwrap();
+    let gain = tag(held, "REPLAYGAIN_TRACK_GAIN").unwrap();
+    let shown = h.status(&louder, &[], false);
+    assert!(
+        (shown.lines()).any(|l| l.contains("REPLAYGAIN_TRACK_GAIN") && l.contains(gain)),
+        "the gain its file holds, {gain}: {shown}"
+    );
     let (_, again) = h.run(&louder, Options::default());
     assert!(!again.contains("Updated"), "{again}");
 

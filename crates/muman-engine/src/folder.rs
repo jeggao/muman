@@ -28,16 +28,19 @@
 //! its own, so a folder a path template renames keeps its cover, the
 //! user's change to it with it, as their change to a song's `.lrc`; only
 //! where it holds its new folder's file, so songs of several folders
-//! moving into one bring no file there of each, in one another's way. But
-//! one the user changed stays where it is while songs are left in its
-//! folder, as when the song that holds it moves to another album: it is
-//! that folder's cover, not the song's. Carried off, it would sit in
-//! another album's folder at a name the song there may not write, its
-//! own folder given a new cover in its place, and `undo`, which takes
-//! out what the run wrote but leaves a file of the user's, could not put
-//! the two back. Left, it is a file of the user's own to its folder's
-//! next holder, which writes beside it, and the song's new folder gets
-//! a cover of its own.
+//! moving into one bring no file there of each, in one another's way;
+//! each one carried is said moved, as it is named for no song. But one
+//! the user changed stays where it is when the song that holds it moves
+//! for a change to the song, its plan not the one its file was made from,
+//! as every song of an album retagged to another album moves, or while
+//! songs are left in its folder, as when the song that holds it moves to
+//! another album: it is that folder's cover, not the song's. Carried off,
+//! it would sit in another album's folder at a name the song there may
+//! not write, its own folder given a new cover in its place, and `undo`,
+//! which takes out what the run wrote but leaves a file of the user's,
+//! could not put the two back. Left, it is a file of the user's own,
+//! said so, to its folder's next holder, which writes beside it, and the
+//! song's new folder gets a cover of its own.
 //!
 //! A song held at its last plan while it fails, while a sync leaves it as
 //! built, or while a file of the user's keeps it unwritten

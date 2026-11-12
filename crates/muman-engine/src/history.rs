@@ -39,7 +39,11 @@
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
-//! reversed, as a song retagged where it moved to needs, then each file
+//! reversed, as a song retagged where it moved to needs, then the files
+//! no song kept that the run removed to free a path a move landed on, put
+//! back where the moves back left it free: kept apart from the files it
+//! wrote over, as a song moved there and retagged is kept at that path
+//! too. Then each file
 //! the run made, an output or one beside it, taken out: the sync after
 //! cannot, as the song list put back may still name its path, and a file
 //! no record names is the user's to it. A file the user
@@ -156,6 +160,8 @@ use crate::store;
 
 const RECORD: &str = "run.json";
 const VERSION: u32 = 3;
+/// The folder of a run's that keeps the files it freed paths of.
+const FREED: &str = "freed";
 
 fn version_one() -> u32 {
     1
@@ -227,6 +233,16 @@ struct Record {
     /// Library files the run moved, in the order it moved them.
     #[serde(default)]
     moves: Vec<Moved>,
+    /// Library files no song kept that the run removed before its moves,
+    /// to free their paths for a move, each kept under the run's `freed`
+    /// while the budget lasts: `undo` puts them back once it has moved the
+    /// files back, where a file the run kept under `files` goes before.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeSet::is_empty",
+        with = "crate::relpath::portable_keys"
+    )]
+    freed: BTreeSet<PathBuf>,
     /// Files of the user's own the run moved to the desktop's trash,
     /// under the home.
     #[serde(default, with = "crate::relpath::portable_keys")]
@@ -463,9 +479,9 @@ fn held(dir: &Path) -> u64 {
     if said > 0 {
         return said;
     }
-    crate::store::walk(&dir.join("files"), usize::MAX)
-        .unwrap_or_default()
+    [dir.join("files"), dir.join(FREED)]
         .iter()
+        .flat_map(|d| crate::store::walk(d, usize::MAX).unwrap_or_default())
         .filter_map(|f| std::fs::metadata(f).ok())
         .map(|m| m.len())
         .sum()
@@ -704,7 +720,21 @@ impl Run {
         if self.lost {
             return Ok(());
         }
-        if let Err(e) = self.try_keep(library, rel) {
+        if let Err(e) = self.try_keep(library, rel, false) {
+            self.lose(&e);
+        }
+        Ok(())
+    }
+
+    /// Keep a library file no song keeps that the run is about to remove
+    /// before its moves, to free its path for one, as [`Run::keep`] keeps
+    /// a file but apart: a move may land where it was, and a file written
+    /// over there after be kept too.
+    pub fn keep_freed(&mut self, library: &Path, rel: &Path) -> Result<()> {
+        if self.lost {
+            return Ok(());
+        }
+        if let Err(e) = self.try_keep(library, rel, true) {
             self.lose(&e);
         }
         Ok(())
@@ -723,7 +753,7 @@ impl Run {
 
     // Keeps a file for undo before the run changes it.
     #[expect(clippy::disallowed_methods)]
-    fn try_keep(&mut self, library: &Path, rel: &Path) -> Result<()> {
+    fn try_keep(&mut self, library: &Path, rel: &Path, freeing: bool) -> Result<()> {
         let from = library.join(rel);
         let Ok(meta) = std::fs::metadata(&from) else {
             return Ok(());
@@ -732,7 +762,12 @@ impl Run {
         if self.made_before.contains(rel) {
             return Ok(());
         }
-        if !self.record.touched.insert(rel.to_path_buf()) {
+        let first = if freeing {
+            self.record.freed.insert(rel.to_path_buf())
+        } else {
+            self.record.touched.insert(rel.to_path_buf())
+        };
+        if !first {
             return Ok(());
         }
         let budget = self.limits.max_size.0;
@@ -745,7 +780,10 @@ impl Run {
         if self.record.bytes + meta.len() > budget {
             return Ok(());
         }
-        let to = self.dir.join("files").join(rel);
+        let to = self
+            .dir
+            .join(if freeing { FREED } else { "files" })
+            .join(rel);
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
@@ -760,7 +798,9 @@ impl Run {
         let kept = std::fs::hard_link(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
             .is_ok();
-        if kept {
+        if kept && freeing {
+            self.record.bytes += meta.len();
+        } else if kept {
             self.record.bytes += meta.len();
             self.record.kept.insert(rel.to_path_buf());
             // A copy with new times, its bytes muman's, is no change.
@@ -916,6 +956,7 @@ impl Run {
         // that is the next run's.
         let applied = matches!(self.seen, Seen::As(_)) || self.record.songs_after != self.found;
         if self.record.touched.is_empty()
+            && self.record.freed.is_empty()
             && self.record.moves.is_empty()
             && self.record.copied.is_empty()
             && (self.record.songs_after == self.record.songs_before || !applied)
@@ -1049,16 +1090,19 @@ fn let_go(dir: &Path) -> Result<()> {
             record.bytes = 0;
             let text = serde_json::to_vec(&record).context("writing the run record")?;
             atomic::write_private(dir, &atomic::Name::new(RECORD)?, &text)?;
-            dir.join("files")
+            vec![dir.join("files"), dir.join(FREED)]
         }
-        None => dir.to_path_buf(),
+        None => vec![dir.to_path_buf()],
     };
-    match std::fs::remove_dir_all(&gone) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("removing {}", gone.display()))
+    for gone in gone {
+        match std::fs::remove_dir_all(&gone) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", gone.display()));
+            }
+            _ => {}
         }
-        _ => Ok(()),
     }
+    Ok(())
 }
 
 /// The moves `first` and then `second` make, as one set of moves made at
@@ -1328,7 +1372,7 @@ fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()
             .flat_map(|w| &w.sidecars)
             .map(|s| (&s.path, s))
             .collect();
-        for rel in &record.touched {
+        for rel in record.touched.iter().chain(&record.freed) {
             if !dirs.library.join(rel).exists() {
                 continue;
             }
@@ -1446,6 +1490,15 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             crate::relpath::show(&m.from),
             crate::relpath::show(&m.to)
         ));
+    }
+    let freed_back = |rel: &PathBuf| record.undoing && !dir.join(FREED).join(rel).exists();
+    for rel in record.freed.iter().filter(|rel| !freed_back(rel)) {
+        let how = if dir.join(FREED).join(rel).exists() {
+            "put back, once the files moved there are back"
+        } else {
+            "written again from its sources"
+        };
+        lines.push(format!("{}: {how}", crate::relpath::show(rel)));
     }
     lines.extend(copies_said(dirs, &record));
     // What `undo` removes, the files beside a song, as its lyrics, too.
@@ -1660,6 +1713,23 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
             out,
             &format!("Moved back: {}", crate::relpath::show(&m.from)),
         )?;
+    }
+    // Where a move landed, so after the moves back; over a song written
+    // there for a move that failed, as a file kept is put back.
+    for rel in &record.freed {
+        let (from, to) = (dir.join(FREED).join(rel), dirs.library.join(rel));
+        if !from.exists() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        atomic::rename(&from, &to)
+            .or_else(|_| std::fs::copy(&from, &to).map(drop))
+            .with_context(|| format!("putting back {}", to.display()))?;
+        changed.written += 1;
+        crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
     }
     // A run stopped partway may have left a part beside any path it wrote,
     // which the sync after clears only beside the outputs put back.

@@ -127,10 +127,28 @@ impl<'a> Ledger<'a> {
     }
 
     /// Remove each of `files`, kept for `undo` first.
-    // Removes library files, the ledger's own change.
-    #[expect(clippy::disallowed_methods)]
     pub fn remove(&mut self, files: &[Owned]) -> Result<Removal> {
         self.replacing(files)?;
+        Ok(self.delete(files))
+    }
+
+    /// Remove each of `files`, of songs no song keeps, before the moves
+    /// that land where they are: kept for `undo` first apart from the
+    /// files the run writes over, as a file moved there may be written over
+    /// after, and put back after the moves are.
+    pub fn free(&mut self, files: &[Owned]) -> Result<Removal> {
+        if let Some(run) = self.run.as_deref_mut().filter(|_| !files.is_empty()) {
+            for file in files {
+                run.keep_freed(self.root, file.path())?;
+            }
+            run.checkpoint(self.home)?;
+        }
+        Ok(self.delete(files))
+    }
+
+    // Removes library files, the ledger's own change.
+    #[expect(clippy::disallowed_methods)]
+    fn delete(&self, files: &[Owned]) -> Removal {
         let mut gone = Vec::new();
         let mut held = Vec::new();
         for file in files {
@@ -142,14 +160,15 @@ impl<'a> Ledger<'a> {
             }
         }
         remove_empty_folders(self.root, &gone);
-        Ok(Removal { gone, held })
+        Removal { gone, held }
     }
 
     /// Move each of `moves`, a song's file and those beside it, all
     /// recorded ahead; a song whose files beside it cannot follow goes
     /// back whole, and one that cannot move is forgotten from the record.
     /// A folder a move empties is removed before the next, which may
-    /// move a file to where it was.
+    /// move a file to where it was. Each move is said, a folder's file
+    /// with its song's, as its name is no song's.
     /// Returns each one's outcome, in order.
     pub fn relocate<W: Write>(
         &mut self,
@@ -182,14 +201,16 @@ impl<'a> Ledger<'a> {
             match &result {
                 Ok(()) => {
                     remove_empty_folders(self.root, std::slice::from_ref(&m.from));
-                    crate::ui::info(
-                        out,
-                        &format!(
-                            "Moved: {} → {}",
-                            crate::relpath::show(&m.from),
-                            crate::relpath::show(&m.to)
-                        ),
-                    )?;
+                    for (a, b) in m.said() {
+                        crate::ui::info(
+                            out,
+                            &format!(
+                                "Moved: {} → {}",
+                                crate::relpath::show(a),
+                                crate::relpath::show(b)
+                            ),
+                        )?;
+                    }
                 }
                 Err(_) => {
                     if let Some(run) = self.run.as_deref_mut() {
@@ -289,6 +310,19 @@ pub struct Relocation {
     pub to: PathBuf,
     /// Each file beside it, from and to.
     pub beside: Vec<(PathBuf, PathBuf)>,
+}
+
+impl Relocation {
+    /// The moves said of it, each from and to: the song's file, and each
+    /// of its folder's files it carries, which a name of the song's own
+    /// does not tell of.
+    pub fn said(&self) -> impl Iterator<Item = (&PathBuf, &PathBuf)> {
+        std::iter::once((&self.from, &self.to)).chain(
+            (self.beside.iter())
+                .filter(|(a, _)| crate::outputs::of_folder(&self.from, a))
+                .map(|(a, b)| (a, b)),
+        )
+    }
 }
 
 /// Rename a library file, creating its new folder.

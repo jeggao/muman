@@ -48,18 +48,19 @@ the home and brings the library in line with the song list:
    yours, and the song is written again at its path.
 1. Move each song whose path changed, if its file differs from its
    plan at most in its tags. Nothing is encoded again.
-1. Write new tags into each file whose plan changed only in its tags.
+1. Write new tags into each file whose plan changed only in its tags,
+   and each file beside a song that is gone, as a deleted `.lrc`.
    Write a song anew when its plan changed otherwise, or its file is
    gone. `sync --force` writes every song.
-1. Delete each file muman wrote that no song makes any more.
+1. Delete and name each file muman wrote that no song makes any more.
 
 muman knows each part a song takes from a source, its audio, cover or
 lyrics, by a digest of its content. A source fetched again, or copied
 without its file times, rewrites no song while it holds the same.
 
 `muman status` makes the same decisions and changes nothing. A song
-may move into a path another song leaves in the same sync; two songs
-that swap paths are written again.
+may move into a path another song leaves in the same sync, a removed
+song's file going first; two songs that swap paths are written again.
 
 ### Files muman owns
 
@@ -72,10 +73,9 @@ its own. Anything else in the library folder stays as it is:
   song or an editor its `.lrc`, stays with a warning. A new path
   template still moves it, your change with it, but a change to the
   song leaves it alone: a song whose `.lrc` you changed keeps its old
-  name when retitled, and a folder's cover you changed stays in its
-  folder when the song that holds it moves to another. `sync --force`
-  writes the song again over your change, and `undo` brings your
-  change back.
+  name when retitled, and a folder's cover you changed stays when any
+  of its songs moves to another folder. `sync --force` writes the song
+  again over your change, and `undo` brings your change back.
 - muman knows its files by their size and modification time, else by
   their bytes, so a restored backup or a copy without its times is
   still muman's. A file whose bytes changed under the same size and
@@ -142,7 +142,7 @@ tags.genre = ""
 | `held."<key>"` | What a source held when the song was built, written by muman ([a source that changes](#a-source-that-changes)) |
 | `[[album]]` | A YouTube Music album added whole: its key as `source`, as `youtube.com:playlist/<id>`, how many songs it holds as `tracks`, and `tags.<name>` over what its tracks offer |
 | `[torrents."<hash>"]` | A torrent whose files songs list: its `name`, `trackers` and `v2` hash, from which it is fetched again ([torrents](#torrents)) |
-| `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it ([removed songs](#removed-songs)) |
+| `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it, and the files of yours `--purge` moved to the trash as `trashed` ([removed songs](#removed-songs)) |
 
 The file also holds the [settings](configuration.md#settings-in-the-song-list),
 the cleaning switches under `[tags.clean.*]` and `[lyrics.clean.*]`

@@ -890,6 +890,45 @@ fn a_folder_s_cover_the_user_changed_stays_in_its_folder_when_its_song_moves() {
 }
 
 #[test]
+fn a_folder_s_cover_the_user_changed_stays_when_its_whole_album_is_retagged() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "mine").unwrap();
+    let before = library_of(&s);
+
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "--all", "album:=Record", "album=Copper Moth"],
+    );
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("Moved:").count(), 2, "the songs alone: {text}");
+    assert_eq!(std::fs::read_to_string(&cover).unwrap(), "mine", "{text}");
+    assert!(
+        text.contains("Left in place, changed since muman wrote it: Artist/Record/cover.jpg"),
+        "{text}"
+    );
+    let moved = s.dir.path().join("lib/Artist/Copper Moth/cover.jpg");
+    assert_eq!(
+        std::fs::read(&moved).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "the album's new folder has muman's: {text}"
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
 fn a_folder_s_cover_the_user_changed_stays_with_a_song_held_back_from_its_move() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -1017,6 +1056,10 @@ fn a_folder_s_cover_the_user_changed_moves_with_its_whole_album() {
         "mine",
         "{text}"
     );
+    assert!(
+        text.contains("Moved: Artist/Record/cover.jpg → Record/cover.jpg"),
+        "{text}"
+    );
     assert!(!lib.join("Artist").exists(), "{text}");
 
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
@@ -1114,6 +1157,29 @@ fn songs_of_two_folders_moved_into_the_library_folder_move_and_take_no_cover() {
     assert!(!lib.join("Kiri Hoshino").exists(), "{text}");
     let (_, text) = s.run(&fake, &["sync"]);
     assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
+fn a_folder_s_cover_deleted_is_written_again_alone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::remove_file(&cover).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(cover.exists(), "{text}");
+    assert!(!fake.ran("-c:a"), "its song not written: {text}");
+    assert!(
+        text.contains("Written again: Artist/Record/cover.jpg"),
+        "{text}"
+    );
+    assert_eq!(text.matches("Written again").count(), 1, "{text}");
 }
 
 #[test]
@@ -6653,6 +6719,7 @@ fn undo_of_a_purge_finds_a_file_of_a_decomposed_name_put_back() {
 fn restore_of_a_purged_song_waits_for_its_files_back_from_the_trash() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
     s.file("home/sources/manual/b.flac");
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
@@ -6660,14 +6727,22 @@ fn restore_of_a_purged_song_waits_for_its_files_back_from_the_trash() {
     assert!(ok, "{text}");
     let said = s.refused(&["restore", "-y", "manual:a.flac"]);
     assert!(
-        said.contains("a.flac") && said.contains("put them back"),
+        said.contains("a.flac") && said.contains("a.lrc") && said.contains("put them back"),
         "{said}"
     );
     assert_eq!(s.songs().len(), 1);
     s.file("home/sources/manual/a.flac");
+    let said = s.refused(&["restore", "-y", "manual:a.flac"]);
+    assert!(
+        said.contains("a.lrc") && !said.contains("a.flac"),
+        "its lyrics still in the trash: {said}"
+    );
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
     let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:a.flac"]);
     assert!(ok, "{text}");
     assert_eq!(s.songs().len(), 2, "{text}");
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(!list.contains("trashed"), "{list}");
 }
 
 const MBID: &str = "00000000-0000-4000-8000-000000000001";

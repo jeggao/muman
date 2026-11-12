@@ -110,7 +110,8 @@ quietly matches nothing, or every song when negated.
   own files to the trash.
 - **`restore`** lists removed songs again, fetching any source purged.
   It refuses until you take back from the trash the files of yours that
-  `--purge` moved there, and names each.
+  `--purge` moved there, a song's `.lrc` and pictures with it, and
+  names each, as its `[[removed]]` entry keeps them.
 - **`undo`** puts the song list and the library back as before the last
   run that changed them, one run further back each time.
 

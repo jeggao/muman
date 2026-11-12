@@ -295,8 +295,12 @@ pub fn remove<W: Write>(
     }
     let store = Store::scan(dirs)?;
     let mut doomed: Vec<(PathBuf, bool)> = Vec::new();
+    // Each song's files of the user's own it trashes, noted under
+    // `[[removed]]` so `restore` waits for every one of them.
+    let mut trashed: Vec<Vec<SourceKey>> = Vec::new();
     let mut deleted = 0;
     for n in &picked {
+        let mut own_trashed = Vec::new();
         let view = &read.views[*n];
         crate::ui::line(out, &format!("  − {}", named(view)))?;
         let written = read
@@ -349,10 +353,14 @@ pub fn remove<W: Write>(
                 for file in store_files(&store, key) {
                     let how = if own { "trashes" } else { "deletes" };
                     crate::ui::line(out, &format!("    {how} {}", file.display()))?;
+                    if own && let Ok(rel) = file.strip_prefix(dirs.manual()) {
+                        own_trashed.push(SourceKey::Manual(rel.into()));
+                    }
                     doomed.push((file, own));
                 }
             }
         }
+        trashed.push(own_trashed);
     }
     let own = doomed.iter().filter(|(_, own)| *own).count();
     let runs = read.manifest.settings.history.runs;
@@ -361,7 +369,7 @@ pub fn remove<W: Write>(
     if !confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
-    for n in &picked {
+    for (n, files) in picked.iter().zip(trashed) {
         let view = &read.views[*n];
         let Some(id) = view.id() else {
             continue;
@@ -369,6 +377,10 @@ pub fn remove<W: Write>(
         read.manifest.edit(Edit::Remove {
             key: id.clone(),
             note: view.note(),
+        });
+        read.manifest.edit(Edit::Trashed {
+            key: id.clone(),
+            files,
         });
     }
     let run = later.begin()?;
@@ -500,16 +512,27 @@ pub fn restore<R: crate::runner::Runner, W: Write>(
     let scratch = crate::atomic::Scratch::new()?;
     let hear = crate::reconcile::hearing(runner, scratch.path());
     let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
-    let gone: Vec<String> = picked
+    // A source is back where the sync after finds it, moved or not; a
+    // file beside it, as its `.lrc`, where it was.
+    let back = |k: &SourceKey, m: &crate::source::ManualKey| {
+        store.locate(k).is_some()
+            || moves.moved.contains_key(k)
+            || crate::relpath::on_disk(&dirs.manual(), m.path()).is_some()
+    };
+    let gone: std::collections::BTreeSet<String> = picked
         .iter()
-        .flat_map(|n| &manifest.removed[*n].sources)
+        .flat_map(|n| {
+            let removed = &manifest.removed[*n];
+            removed.sources.iter().chain(&removed.trashed)
+        })
         .filter_map(|k| match k {
-            SourceKey::Manual(m) if store.locate(k).is_none() && !moves.moved.contains_key(k) => {
+            SourceKey::Manual(m) if !back(k, m) => {
                 Some(format!("  {}", dirs.manual().join(m.path()).display()))
             }
             _ => None,
         })
         .collect();
+    let gone: Vec<String> = gone.into_iter().collect();
     if !gone.is_empty() {
         return Err(Refused(format!(
             "These files of your own are gone, as `remove --purge` moves them to the \

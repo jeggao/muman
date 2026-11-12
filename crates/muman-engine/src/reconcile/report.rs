@@ -175,17 +175,24 @@ pub(super) fn say_moves<W: Write>(
     out: &mut W,
 ) -> Result<()> {
     for ((n, r), d) in planned.iter().zip(decided) {
-        if let Doing::Move { from, .. } = d
+        if let Doing::Move { from, beside, .. } = d
             && showing.matches(*n)
         {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Would move: {} → {}",
-                    crate::relpath::show(from),
-                    crate::relpath::show(&path_of(r))
-                ),
-            )?;
+            let moving = crate::library::Relocation {
+                from: from.clone(),
+                to: path_of(r),
+                beside: beside.clone(),
+            };
+            for (a, b) in moving.said() {
+                crate::ui::info(
+                    out,
+                    &format!(
+                        "Would move: {} → {}",
+                        crate::relpath::show(a),
+                        crate::relpath::show(b)
+                    ),
+                )?;
+            }
         }
     }
     Ok(())
@@ -280,6 +287,10 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
             "not written, its source damaged since it was built".to_string(),
         ),
         Doing::Retag | Doing::Write => match before {
+            // Its file as it would be written, a file beside it is gone.
+            Some(p) if p == plan && *d == Doing::Retag => {
+                (Fate::Again, "a file beside it written again".to_string())
+            }
             Some(p) if p == plan => (Fate::Again, "written again".to_string()),
             Some(p) => (
                 Fate::Changed,
@@ -417,12 +428,17 @@ pub(super) fn status<W: Write>(
     if showing.matched.is_some() {
         return Ok(());
     }
+    let there = |file: &PathBuf| std::fs::symlink_metadata(dirs.library.join(file)).is_ok();
     for (path, fate) in &intent.pruned {
         match fate {
-            Pruned::Removed(_) => crate::ui::warning(
-                out,
-                &format!("Would remove: {}", crate::relpath::show(path)),
-            )?,
+            Pruned::Removed(files) => {
+                for file in files.iter().filter(|f| there(f)) {
+                    crate::ui::warning(
+                        out,
+                        &format!("Would remove: {}", crate::relpath::show(file)),
+                    )?;
+                }
+            }
             Pruned::LeftChanged => crate::ui::warning(
                 out,
                 &format!(

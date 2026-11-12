@@ -278,6 +278,10 @@ pub struct Removed {
     pub tags: Tags,
     /// What each source held when the song was last built.
     pub held: BTreeMap<SourceKey, crate::held::Held>,
+    /// The files of the user's own `remove --purge` moved to the trash,
+    /// each by its key in the manual folder, its `.lrc` and pictures
+    /// with it: `restore` waits for each to be back.
+    pub trashed: Vec<SourceKey>,
 }
 
 /// `held` with each key `moved` names under the key it names.
@@ -347,6 +351,13 @@ pub enum Edit {
     },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: Note },
+    /// The files of the user's own `remove --purge` moves to the trash
+    /// noted in the removed song listing `key`, each by its key in the
+    /// manual folder.
+    Trashed {
+        key: SourceKey,
+        files: Vec<SourceKey>,
+    },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
     /// `note`, as a song taken out by hand.
     Tombstone { key: SourceKey, note: String },
@@ -1378,9 +1389,28 @@ fn removed_of(doc: &DocumentMut, left_out: &mut Vec<String>) -> Result<Vec<Remov
             artist: named_by(t, "artist"),
             tags: tags_of(t.get("tags"), &what, left_out)?,
             held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
+            trashed: trashed_of(t, &what)?,
         });
     }
     Ok(removed)
+}
+
+/// The files a removed song's `trashed` names, each a manual key.
+fn trashed_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
+    let Some(item) = t.get("trashed") else {
+        return Ok(Vec::new());
+    };
+    let list = item
+        .as_array()
+        .with_context(|| format!("{what}: `trashed` must be a list of manual keys"))?;
+    list.iter()
+        .map(|v| {
+            v.as_str()
+                .and_then(|text| SourceKey::parse(text).ok())
+                .filter(|k| matches!(k, SourceKey::Manual(_)))
+                .with_context(|| format!("{what}: `trashed` must be a list of manual keys"))
+        })
+        .collect()
 }
 
 /// Refuse a key whose ID its site's `[sites]` table takes in no kind.
@@ -1728,6 +1758,17 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             };
             tables_mut(doc, "removed")?.push(tombstone(song, note, near));
         }
+        Edit::Trashed { key, files } => {
+            let text = key.to_string();
+            if let Some(gone) = doc
+                .get_mut("removed")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&text)))
+                .filter(|_| !files.is_empty())
+            {
+                gone.insert("trashed", key_array(files));
+            }
+        }
         Edit::Tombstone { key, note } => {
             let mut song = Table::new();
             song.insert("sources", key_array(std::slice::from_ref(key)));
@@ -1742,6 +1783,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             for key in NAMING {
                 song.remove(key);
             }
+            song.remove("trashed");
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
             let taken =

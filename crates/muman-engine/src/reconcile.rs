@@ -44,6 +44,7 @@ use crate::store::{Located, Store};
 
 pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
+use self::decide::foresee_failing;
 use self::decide::intend;
 pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built, left_in_place};
 pub(crate) use self::keys::arriving;
@@ -457,13 +458,15 @@ pub fn reconcile_into<R: Runner, W: Write>(
         drifts,
         damaged,
         decided,
+        freeable,
         ..
-    } = foresee(
+    } = foresee_failing(
         &manifest,
         &state,
         &planned,
         &dirs.library,
         (opts.force, opts.accept),
+        &failed,
     );
     let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept, &state);
     say_drifts(
@@ -519,7 +522,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let edits = crate::held::records(&manifest, &state.facts, &taken);
     let mut intent = intend(
         &planned,
-        decided,
+        (decided, &freeable),
         &manifest,
         &state.outputs,
         &dirs.library,

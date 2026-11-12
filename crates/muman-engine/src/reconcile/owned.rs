@@ -77,7 +77,7 @@ pub(super) fn blocking(
 /// move carries it with the song, so it is in the song's way at `to` as
 /// a changed file already there would be; one a move leaves as it is, as
 /// a new path template moves it, is not, nor a folder's file a move
-/// leaves in its folder, one of `filled` ([`stays`]).
+/// leaves in its folder ([`stays`]).
 pub(super) fn carried_edit(
     library: &Path,
     (old, filled): (&BTreeMap<PathBuf, Written>, &BTreeSet<String>),
@@ -85,6 +85,7 @@ pub(super) fn carried_edit(
     plan: &Plan,
 ) -> Option<PathBuf> {
     let written = old.get(from)?;
+    let changed = written.plan.as_ref() != Some(plan);
     let now = crate::artifact::parts(plan);
     let was = written.plan.as_ref().map(crate::artifact::parts);
     let kept: Vec<PathBuf> = now
@@ -97,31 +98,35 @@ pub(super) fn carried_edit(
         .sidecars
         .iter()
         .filter(|s| std::fs::symlink_metadata(library.join(&s.path)).is_ok())
-        .filter(|s| !sidecar_as_written(library, s) && !stays(library, filled, from, s))
+        .filter(|s| !sidecar_as_written(library, s) && !stays(library, (filled, changed), from, s))
         .find(|s| !kept.contains(&crate::outputs::moved(from, to, &s.path)))
         .map(|s| s.path.clone())
 }
 
 /// Whether `sidecar`, beside the song's file at `from`, stays where it is
 /// when the song moves: a folder's file the user changed since muman
-/// wrote it, in one of the folders `filled`, folded, that songs are in
-/// once the sync is done ([`crate::folder`]).
+/// wrote it, when the song moves for a change to it (`changed`, its plan
+/// not the one its file was written from), or when it is in one of the
+/// folders `filled`, folded, that songs are in once the sync is done
+/// ([`crate::folder`]). Only a new path template alone carries it off,
+/// with every song of its folder.
 pub(super) fn stays(
     library: &Path,
-    filled: &BTreeSet<String>,
+    (filled, changed): (&BTreeSet<String>, bool),
     from: &Path,
     sidecar: &Sidecar,
 ) -> bool {
     let folder = sidecar.path.parent().unwrap_or(Path::new(""));
     crate::outputs::of_folder(from, &sidecar.path)
-        && filled.contains(&crate::relpath::folded(folder))
+        && (changed || filled.contains(&crate::relpath::folded(folder)))
         && !sidecar_as_written(library, sidecar)
 }
 
 /// The files beside the song's file at `from`, as `written` records
 /// them, that moving it to `to` carries, each from and to: all but those
-/// that [`stay`](stays) in a folder of `filled`, and a folder's file
-/// `plan` does not make where it goes ([`crate::folder`]).
+/// gone, which are written anew where it goes, those that [`stay`](stays)
+/// in a folder of `filled`, and a folder's file `plan` does not make where
+/// it goes ([`crate::folder`]).
 pub(super) fn carried(
     library: &Path,
     filled: &BTreeSet<String>,
@@ -130,10 +135,12 @@ pub(super) fn carried(
     plan: &Plan,
 ) -> Vec<(PathBuf, PathBuf)> {
     let made = crate::artifact::parts(plan).files(to);
+    let changed = written.plan.as_ref() != Some(plan);
     written
         .sidecars
         .iter()
-        .filter(|s| !stays(library, filled, from, s))
+        .filter(|s| std::fs::symlink_metadata(library.join(&s.path)).is_ok())
+        .filter(|s| !stays(library, (filled, changed), from, s))
         .map(|s| (s.path.clone(), crate::outputs::moved(from, to, &s.path)))
         .filter(|(at, to)| !crate::outputs::of_folder(from, at) || made.contains(to))
         .collect()

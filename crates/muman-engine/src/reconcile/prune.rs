@@ -83,10 +83,54 @@ pub(super) fn prune_plan(
     plan
 }
 
+/// Remove the files of each output of `freed`, which no song keeps and
+/// a move lands where one is, before the moves: through the ledger, kept
+/// for `undo` apart from the files the run writes over
+/// ([`Ledger::free`]), each said, and the output let go of. A file beside
+/// it the user changed stays, theirs. Returns each file that could not
+/// go, held open, where no move may land.
+pub(super) fn free<W: Write>(
+    ledger: &mut Ledger<'_>,
+    freed: &[PathBuf],
+    outputs: &mut BTreeMap<PathBuf, Written>,
+    out: &mut W,
+) -> Result<Vec<PathBuf>> {
+    let root = ledger.root();
+    let there = |file: &&Path| std::fs::symlink_metadata(root.join(file)).is_ok();
+    let files: Vec<Owned> = (freed.iter())
+        .filter_map(|path| Some((path, outputs.get(path)?)))
+        .flat_map(|(path, written)| written.files(path))
+        .filter(there)
+        .filter_map(|file| ledger.owned(outputs, file, false))
+        .collect();
+    let removal = ledger.free(&files)?;
+    for file in &removal.gone {
+        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(file)))?;
+    }
+    for (file, e) in &removal.held {
+        crate::ui::warning(
+            out,
+            &format!(
+                "Could not remove {}: {e}; the next sync tries again",
+                file.display()
+            ),
+        )?;
+    }
+    let stuck: Vec<PathBuf> = removal.held.into_iter().map(|(f, _)| f).collect();
+    for path in freed {
+        if (outputs.get(path)).is_some_and(|w| !w.files(path).any(|f| stuck.iter().any(|s| s == f)))
+        {
+            outputs.remove(path);
+        }
+    }
+    Ok(stuck)
+}
+
 /// Delete every file `old` lists that `outputs` does not, through the
 /// ledger, which keeps each first, unless a song that failed this run
 /// made it, which keeps it. A file changed since it was written is left,
-/// and no longer muman's. Returns what went.
+/// and no longer muman's. Each file that goes is said, the files beside a
+/// song with it. Returns what went.
 pub(super) fn prune<W: Write>(
     ledger: &mut Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
@@ -140,8 +184,10 @@ pub(super) fn prune<W: Write>(
             .collect();
         if stuck.is_empty() {
             // A file deleted by hand is only let go of, not said removed.
-            if !files.iter().all(|f| gone_before.contains(f)) {
-                crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
+            for file in files.iter().filter(|f| removal.gone.contains(f)) {
+                if !gone_before.contains(file) {
+                    crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(file)))?;
+                }
             }
             continue;
         }

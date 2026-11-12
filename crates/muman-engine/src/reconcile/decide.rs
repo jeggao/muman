@@ -32,16 +32,28 @@ pub(super) fn current<'a>(
 ) -> Option<&'a Written> {
     let path = path_of(r);
     let written = old.get(&path)?;
-    let present = library.join(&path).metadata().is_ok_and(|m| m.len() > 0)
-        && written.sidecar_paths().all(|s| library.join(s).exists())
-        && folder_there(library, &path, &r.plan);
+    let present = own_there(library, &path) && beside_there(library, written, &path, &r.plan);
     (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
+}
+
+/// Whether a song's own file is at `file`, and not empty, as a disk that
+/// filled up leaves one: what decides whether the song is there to keep,
+/// move or tag again. A file beside it gone is no song gone: it is written
+/// again beside the song's file, which is left as it is ([`beside_there`]).
+pub(super) fn own_there(library: &Path, file: &Path) -> bool {
+    library.join(file).metadata().is_ok_and(|m| m.len() > 0)
+}
+
+/// Whether each file beside the song at `path` is there: each `written`
+/// records beside it, and each of its folder's files `plan` has it hold.
+pub(super) fn beside_there(library: &Path, written: &Written, path: &Path, plan: &Plan) -> bool {
+    written.sidecar_paths().all(|s| library.join(s).exists()) && folder_there(library, path, plan)
 }
 
 /// Whether each file of its folder `plan` has the song at `path` hold is
 /// there, muman's or one of the user's it leaves alone: one gone is
 /// written again.
-pub(super) fn folder_there(library: &Path, path: &Path, plan: &Plan) -> bool {
+fn folder_there(library: &Path, path: &Path, plan: &Plan) -> bool {
     crate::artifact::parts(plan)
         .folder_files(path)
         .iter()
@@ -103,7 +115,8 @@ pub enum Doing {
         retag: bool,
         order: usize,
     },
-    /// Only its tags changed: they are written into its file.
+    /// Only its tags changed, or a file beside it is gone: they are
+    /// written into its file, and that file beside it written again.
     Retag,
     /// Written from its sources.
     Write,
@@ -141,6 +154,9 @@ pub struct Foreseen {
     pub held: BTreeSet<usize>,
     pub damaged: BTreeSet<usize>,
     pub decided: Vec<Doing>,
+    /// The files no song keeps that the sync prunes, which a move may land
+    /// where one is ([`freeable`]).
+    pub freeable: BTreeSet<PathBuf>,
 }
 
 /// What a sync of `planned` into `library` decides, `force` and `accept`
@@ -151,14 +167,28 @@ pub fn foresee(
     state: &State,
     planned: &[PlannedSong],
     library: &Path,
+    asked: (bool, bool),
+) -> Foreseen {
+    foresee_failing(manifest, state, planned, library, asked, &BTreeSet::new())
+}
+
+/// [`foresee`], the sources of `failed` failing the sync, whose files it
+/// keeps.
+pub(super) fn foresee_failing(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    library: &Path,
     (force, accept): (bool, bool),
+    failed: &BTreeSet<SourceKey>,
 ) -> Foreseen {
     let files = files_of(planned.iter().map(|(n, _)| *n), manifest, &state.outputs);
     let (drifts, holding, damaged) = holding(manifest, state, planned, (force, accept));
+    let freeable = freeable(manifest, planned, &files, (&state.outputs, failed), library);
     let decided = decide(
         planned,
         &files,
-        &state.outputs,
+        (&state.outputs, &freeable),
         library,
         force,
         (&holding, &damaged),
@@ -169,7 +199,93 @@ pub fn foresee(
         held: holding.union(&damaged).copied().collect(),
         damaged,
         decided,
+        freeable,
     }
+}
+
+/// The outputs of `old` no song keeps that a sync prunes, before it is
+/// done, in the way of a file a song of `planned` has: each no song has
+/// for its file ([`files_of`]), none of whose own sources a song planned
+/// lists or whose sources `failed`, as a song that fails keeps its file,
+/// and not changed since written, which stays the user's, as only a file
+/// in the way is read to tell. A song may move where one of them is, as
+/// where another song moves away from: it is removed first, kept for
+/// `undo` ([`crate::library::Ledger::free`]).
+fn freeable(
+    manifest: &Manifest,
+    planned: &[PlannedSong],
+    files: &BTreeMap<usize, PathBuf>,
+    (old, failed): (&BTreeMap<PathBuf, Written>, &BTreeSet<SourceKey>),
+    library: &Path,
+) -> BTreeSet<PathBuf> {
+    let theirs: BTreeSet<&PathBuf> = files.values().collect();
+    let listed: BTreeSet<&SourceKey> = (planned.iter())
+        .flat_map(|(n, _)| &manifest.songs[*n].sources)
+        .filter(|k| !crate::manifest::shareable(k))
+        .collect();
+    let wanted: Vec<PathBuf> = (planned.iter())
+        .flat_map(|(_, r)| {
+            let path = path_of(r);
+            let beside = crate::artifact::parts(&r.plan).files(&path);
+            std::iter::once(path).chain(beside)
+        })
+        .collect();
+    let landing = Landing::of(wanted.iter());
+    old.iter()
+        .filter(|(p, w)| !theirs.contains(p) && w.files(p).any(|f| landing.blocks(f)))
+        .filter(|(_, w)| {
+            !w.sources
+                .iter()
+                .any(|k| failed.contains(k) || listed.contains(k))
+        })
+        .filter(|(p, _)| !edited_since_written(library, old, p))
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+
+/// Where files land, as moves or songs written: each a file of another
+/// name is in the way of, folded as NTFS and APFS fold names, and each
+/// folder they land in.
+struct Landing {
+    landed: BTreeSet<String>,
+    under: BTreeSet<String>,
+}
+
+impl Landing {
+    fn of<'a>(paths: impl Iterator<Item = &'a PathBuf>) -> Self {
+        use crate::relpath::folded;
+        let paths: Vec<&PathBuf> = paths.collect();
+        Self {
+            landed: paths.iter().map(|p| folded(p)).collect(),
+            under: (paths.iter())
+                .flat_map(|p| p.ancestors())
+                .map(folded)
+                .collect(),
+        }
+    }
+
+    /// Whether a file at `f` is in the way: at a path that lands, at a
+    /// folder of one, or under one, as a file is in the way of a folder of
+    /// its name.
+    fn blocks(&self, f: &Path) -> bool {
+        use crate::relpath::folded;
+        self.under.contains(&folded(f)) || f.ancestors().any(|a| self.landed.contains(&folded(a)))
+    }
+}
+
+/// The files of `written`, the output at `path`, that freeing its path
+/// removes: its own, and each beside it as muman wrote it; one the user
+/// changed stays theirs, in the way of a move as any file of theirs.
+fn freed_files<'a>(
+    library: &'a Path,
+    path: &'a Path,
+    written: &'a Written,
+) -> impl Iterator<Item = &'a Path> {
+    std::iter::once(path).chain(
+        (written.sidecars.iter())
+            .filter(|s| super::owned::sidecar_as_written(library, s))
+            .map(|s| s.path.as_path()),
+    )
 }
 
 /// The sources holding otherwise than their songs were built from, and
@@ -294,7 +410,7 @@ pub(super) type Holding<'a> = (&'a BTreeSet<usize>, &'a BTreeSet<usize>);
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
 /// | Elsewhere, beside a changed file a move would write again | Left where it is until `--force` |
-/// | At its path, of the same media | Its tags written, and each file beside it that differs |
+/// | At its path, of the same media | Its tags written, and each file beside it that differs or is gone |
 /// | Any, and a file not muman's at its path or its lyrics' | Left where it is until `--force` |
 /// | None, and a file not muman's at its path or its lyrics' | Left alone until `--force` |
 /// | Otherwise, or `force` | Written |
@@ -313,13 +429,14 @@ pub(super) type Holding<'a> = (&'a BTreeSet<usize>, &'a BTreeSet<usize>);
 /// would write again: the move would carry that file to where the song
 /// cannot write it ([`carried_edit`]). A folder's file the user changed
 /// is not carried, and keeps no song where it is
-/// ([`stays`](super::owned::stays)) while a song is left in its folder:
-/// decided again, with each folder a song is left in, until every folder
-/// the songs end in was counted.
+/// ([`stays`](super::owned::stays)), when its song moves for a change to
+/// it, or while a song is left in its folder: decided again, with each
+/// folder a song is left in, until every folder the songs end in was
+/// counted.
 pub(super) fn decide(
     planned: &[PlannedSong],
     files: &BTreeMap<usize, PathBuf>,
-    old: &BTreeMap<PathBuf, Written>,
+    (old, freeable): (&BTreeMap<PathBuf, Written>, &BTreeSet<PathBuf>),
     library: &Path,
     force: bool,
     holding: Holding<'_>,
@@ -331,9 +448,13 @@ pub(super) fn decide(
     let mut filled: BTreeSet<String> = planned.iter().map(|(_, r)| fold(&path_of(r))).collect();
     // Files no planned song has, as a failed song's, stay where they are.
     let theirs: BTreeSet<&PathBuf> = files.values().collect();
-    filled.extend(old.keys().filter(|p| !theirs.contains(p)).map(|p| fold(p)));
+    filled.extend(
+        (old.keys())
+            .filter(|p| !theirs.contains(p) && !freeable.contains(*p))
+            .map(|p| fold(p)),
+    );
     loop {
-        let decided = decide_in(planned, files, (old, &filled), library, holding);
+        let decided = decide_in(planned, files, (old, &filled, freeable), library, holding);
         let ended: BTreeSet<String> = planned
             .iter()
             .zip(&decided)
@@ -353,11 +474,16 @@ pub(super) fn decide(
 }
 
 /// [`decide`] once, a folder's file the user changed staying in each
-/// folder of `filled`, folded, that a song is in once the sync is done.
+/// folder of `filled`, folded, that a song is in once the sync is done,
+/// and the files of each output `freeable` free for a move.
 fn decide_in(
     planned: &[PlannedSong],
     files: &BTreeMap<usize, PathBuf>,
-    (old, filled): (&BTreeMap<PathBuf, Written>, &BTreeSet<String>),
+    (old, filled, freeable): (
+        &BTreeMap<PathBuf, Written>,
+        &BTreeSet<String>,
+        &BTreeSet<PathBuf>,
+    ),
     library: &Path,
     holding: Holding<'_>,
 ) -> Vec<Doing> {
@@ -367,8 +493,12 @@ fn decide_in(
     // Made in rounds: a move lands only where nothing is, or where a move
     // already chosen leaves, so the order chosen is an order they can run.
     let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
-    let mut held: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
-    let ours: BTreeSet<String> = held.clone();
+    let ours: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
+    let pruned: BTreeSet<String> = (freeable.iter())
+        .flat_map(|p| freed_files(library, p, &old[p]))
+        .map(folded)
+        .collect();
+    let mut held: BTreeSet<String> = ours.difference(&pruned).cloned().collect();
     let free = |held: &BTreeSet<String>, p: &Path| {
         p.ancestors().all(|a| !held.contains(&folded(a)))
             && (recorded.contains(p)
@@ -391,7 +521,7 @@ fn decide_in(
                 held.remove(&folded(a));
                 held.insert(folded(b));
             }
-            // A folder's file left behind is written anew where the song goes.
+            // A folder's file left behind, or one gone, is written anew where the song goes.
             let left = beside.len() < old[from].sidecars.len();
             decided[*i] = Some(Doing::Move {
                 from: from.clone(),
@@ -416,10 +546,7 @@ fn decide_in(
             let path = path_of(r);
             let file = files.get(n);
             let was = file.and_then(|f| old.get(f));
-            let present = file.is_some_and(|f| {
-                library.join(f).metadata().is_ok_and(|m| m.len() > 0)
-                    && was.is_none_or(|w| w.sidecar_paths().all(|s| library.join(s).exists()))
-            });
+            let present = file.is_some_and(|f| own_there(library, f));
             let redo = was
                 .and_then(|w| w.plan.as_ref())
                 .map(|p| crate::artifact::redo(p, &r.plan));
@@ -493,8 +620,7 @@ fn movable(
             continue;
         };
         let was = &old[from];
-        let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
-            && was.sidecar_paths().all(|s| library.join(s).exists());
+        let present = own_there(library, from);
         let redo = was.plan.as_ref().map(|p| crate::artifact::redo(p, &r.plan));
         let same_media = present && redo.is_some_and(|d| !d.build);
         let retag = was.plan.as_ref() != Some(&r.plan);
@@ -555,6 +681,9 @@ fn emptied(
 pub(super) struct Intent {
     /// What is done with each planned song, in the order of `planned`.
     pub decided: Vec<Doing>,
+    /// The outputs no song keeps whose files go before the moves, as a
+    /// move lands where one of them is ([`freeable`]).
+    pub freed: Vec<PathBuf>,
     /// Each song's file moved to its song's path, with the files beside it
     /// it carries, in an order the moves can be made.
     pub moves: Vec<Relocation>,
@@ -573,7 +702,7 @@ pub(super) struct Intent {
 /// leave, the files pruned, and the song list's records.
 pub(super) fn intend(
     planned: &[PlannedSong],
-    decided: Vec<Doing>,
+    (decided, freeable): (Vec<Doing>, &BTreeSet<PathBuf>),
     manifest: &Manifest,
     old: &BTreeMap<PathBuf, Written>,
     library: &Path,
@@ -602,7 +731,21 @@ pub(super) fn intend(
         .collect();
     moves.sort_by_key(|(order, _)| *order);
     let moves: Vec<Relocation> = moves.into_iter().map(|(_, m)| m).collect();
+    let landing = Landing::of(
+        (moves.iter()).flat_map(|m| std::iter::once(&m.to).chain(m.beside.iter().map(|(_, b)| b))),
+    );
+    let freed: Vec<PathBuf> = (freeable.iter())
+        .filter(|p| old[*p].files(p).any(|f| landing.blocks(f)))
+        .cloned()
+        .collect();
     let mut relocated = old.clone();
+    let mut pruned: Vec<(PathBuf, Pruned)> = Vec::new();
+    for path in &freed {
+        if let Some(written) = relocated.remove(path) {
+            let files = written.files(path).map(Path::to_path_buf).collect();
+            pruned.push((path.clone(), Pruned::Removed(files)));
+        }
+    }
     for m in &moves {
         if let Some(written) = relocated.remove(&m.from) {
             relocated.insert(m.to.clone(), moved_to(written, &m.beside));
@@ -634,9 +777,10 @@ pub(super) fn intend(
             after.insert(path, written);
         }
     }
-    let pruned = prune_plan(library, &relocated, &after, failed, forced);
+    pruned.extend(prune_plan(library, &relocated, &after, failed, forced));
     Intent {
         decided,
+        freed,
         moves,
         moved: relocated,
         pruned,

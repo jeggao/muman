@@ -411,6 +411,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A lossy copy made from another no longer wins by its encoder's
   noise**: a Vorbis file made from an MP3 counts as wide as the MP3,
   where it measured a step wider and replaced it.
+- **A deleted `.lrc` or folder cover is written again alone**: the song
+  beside it is no longer encoded again, the sync names the file it
+  writes, and `undo` no longer offers to put back the song's own file.
+- **Every file a sync or `remove` deletes is named**: a song's `.lrc`
+  and covers go said with it, and lyrics taken off a song, as by
+  `set lyrics=false`, are said removed.
+- **A song moves into the name a removed song leaves**: two songs of one
+  title, one removed, no longer encode the other again; the removed
+  song's file goes first, and `undo` puts both back.
+- **A folder cover you changed stays when its whole album moves**, as by
+  `set album=…`, as it does when one song of it moves; one a new path
+  template carries is named as it moves.
+- **`status` shows the gains a song left as built holds**: its track
+  gain is no longer measured from audio damaged or fetched again since.
+- **`restore` names every file `remove --purge` trashed**: a song's
+  `.lrc` and pictures too, and waits for each, rather than restore the
+  song without its lyrics once its audio alone is back.
 
 ## [0.11.0] - 2026-11-10
 
