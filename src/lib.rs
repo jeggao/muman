@@ -561,7 +561,12 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             // waited for rather than read as stopped, and no run begins
             // between the undo and its sync.
             let runs = Lock::runs(&dirs.home)?;
-            let planned = history::plan(dirs)?;
+            let scratch = crate::atomic::Scratch::new()?;
+            let plan = || {
+                let hear = reconcile::hearing(runner, scratch.path());
+                history::plan_hearing(dirs, job.settling, hear)
+            };
+            let planned = plan()?;
             ui::info(out, "Undoing the last run:")?;
             for line in planned.lines() {
                 ui::line(out, &format!("  {line}"))?;
@@ -583,7 +588,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let mut undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let _library = Lock::library(&dirs.library, dirs.lock_folder()?)?;
-                let again = history::plan(dirs)?;
+                let again = plan()?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(
                         "Another run changed the history meanwhile; run `undo` again".into(),
@@ -676,7 +681,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Restore { query, confirm } => {
             let mut later = Later::new(&dirs.home)?;
-            let changed = change::restore(runner, dirs, query, confirm, prompter, &mut later, out);
+            let changed = change::restore(
+                runner,
+                (dirs, job.settling),
+                query,
+                confirm,
+                prompter,
+                &mut later,
+                out,
+            );
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;

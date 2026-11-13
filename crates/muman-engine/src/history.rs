@@ -100,9 +100,10 @@
 //! which muman cannot take it back from on every platform. The run
 //! records each it trashed, and `undo` refuses until the user puts them
 //! back, rather than list their songs again with nothing to make them:
-//! where each was, or where a run since followed it, an `.lrc` or picture
-//! beside the song file it went to the trash with, as the list put back
-//! names it there ([`crate::manifest::moved_with`]).
+//! where each was, or elsewhere in the manual folder, where a run since
+//! followed it or the sync after the undo follows it, found as `restore`
+//! finds it ([`crate::reconcile::not_back`]), an `.lrc` or picture beside
+//! the song file it went to the trash with ([`crate::manifest::moved_with`]).
 //! What `add` copied into the sources is recorded with a digest of it,
 //! and `undo` takes each copy out with its song, else the next sync
 //! would list it again as a file dropped in: a copy as made is deleted,
@@ -1226,8 +1227,11 @@ pub enum Moves {
 /// its two renames finished, or taken as made under [`Moves::Foresee`];
 /// one into a path an earlier move left is a chain, as a song moving into
 /// another's old place. They are followed all at once, from the outputs
-/// as the run began, and only when the state still says so: the paths
-/// they left that no move went into are still listed.
+/// as the run began, each only while the state still holds at the path
+/// it left the record the run began with there: a record there since is
+/// another file's, as the run saves the state once its moves are made and
+/// may then record a new song about to be written at a path a move left,
+/// which a path alone would take for the file moved.
 ///
 /// A file beside a song that stayed where it was moves after the song
 /// under [`Moves::Follow`], but a folder's file the record lists no move
@@ -1256,28 +1260,19 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
         .collect();
     // A song's move, as the outputs stood when the run began; the rest
     // are its lyrics'.
-    let songs: Vec<&Moved> = made
+    let songs: Vec<(&Moved, &Written)> = made
         .iter()
-        .copied()
-        .filter(|m| record.was.contains_key(&m.from))
+        .filter_map(|m| Some((*m, record.was.get(&m.from)?)))
+        .filter(|(m, was)| state.outputs.get(&m.from) == Some(*was))
         .collect();
-    let into: BTreeSet<&PathBuf> = songs.iter().map(|m| &m.to).collect();
-    let left: Vec<&PathBuf> = songs
-        .iter()
-        .map(|m| &m.from)
-        .filter(|from| !into.contains(from))
-        .collect();
-    if left.is_empty() || !left.iter().all(|from| state.outputs.contains_key(*from)) {
+    if songs.is_empty() {
         return 0;
     }
     let went: BTreeMap<&PathBuf, &PathBuf> = made.iter().map(|m| (&m.from, &m.to)).collect();
     let listed = |rel: &Path| record.moves.iter().any(|m| m.from == rel);
-    let before = state.outputs.clone();
     let mut followed = BTreeMap::new();
-    for m in &songs {
-        let Some(mut written) = before.get(&m.from).cloned() else {
-            continue;
-        };
+    for (m, was) in &songs {
+        let mut written = (*was).clone();
         for sidecar in &mut written.sidecars {
             if let Some(to) = went.get(&sidecar.path) {
                 sidecar.path = (*to).clone();
@@ -1296,7 +1291,7 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
         }
         followed.insert(m.to.clone(), written);
     }
-    for m in &songs {
+    for (m, _) in &songs {
         state.outputs.remove(&m.from);
     }
     let n = followed.len();
@@ -1389,36 +1384,56 @@ impl UndoPlan {
 
 /// Refuse until every file of the user's the run trashed is back: its
 /// song would be listed again with no file to make it from. One put back
-/// elsewhere in the manual folder, and followed there by a run since, is
-/// back where the list put back names it ([`Record::put_back`]).
-fn all_trashed_back(dirs: &Dirs, record: &Record) -> Result<()> {
+/// elsewhere in the manual folder is back where the sync after the undo
+/// follows it, found as `restore` finds it ([`crate::reconcile::not_back`]),
+/// or where a run since followed it, as the list put back names it
+/// ([`Record::put_back`]); `hear` reads what a song file holds, and a
+/// file arrived within `settling` is still being copied in.
+fn all_trashed_back(
+    dirs: &Dirs,
+    (record, state): (&Record, &State),
+    settling: std::time::Duration,
+    hear: impl FnMut(&crate::store::Located) -> Option<String>,
+) -> Result<()> {
+    if record.trashed.is_empty() {
+        return Ok(());
+    }
     let home = &dirs.home;
     let manual = dirs.manual();
     let key_of = |rel: &Path| {
         let from = home.join(rel);
         Some(SourceKey::Manual(from.strip_prefix(&manual).ok()?.into()))
     };
+    let mut gone: BTreeSet<PathBuf> = (record.trashed.iter())
+        .filter(|rel| key_of(rel).is_none() && crate::relpath::on_disk(home, rel).is_none())
+        .map(|rel| home.join(rel))
+        .collect();
     let trashed: Vec<SourceKey> = record.trashed.iter().filter_map(|r| key_of(r)).collect();
     let media = |k: &&SourceKey| match k {
         SourceKey::Manual(m) => store::kind_of(m.path()) == Some(store::Kind::Media),
         _ => false,
     };
     let songs: Vec<SourceKey> = trashed.iter().filter(media).cloned().collect();
-    // A file beside a song file followed went with it, as the list does.
-    let moved = crate::manifest::moved_with(&songs, &trashed, &record.followed);
-    let followed = |rel: &Path| {
-        let SourceKey::Manual(to) = moved.get(&key_of(rel)?)? else {
-            return None;
-        };
-        crate::relpath::on_disk(&manual, to.path())
+    let store = crate::store::Store::scan(dirs)?;
+    let back = |moved: &BTreeMap<SourceKey, SourceKey>| {
+        crate::reconcile::not_back(&manual, &store, moved, (&songs, &trashed))
     };
-    let gone: Vec<String> = record
-        .trashed
-        .iter()
-        .filter(|rel| crate::relpath::on_disk(home, rel).is_none() && followed(rel).is_none())
-        .map(|rel| format!("  {}", home.join(rel).display()))
-        .collect();
+    let mut waiting = back(&record.followed);
+    if !waiting.is_empty() {
+        let manifest = crate::manifest::Manifest::load(home)?;
+        let found = crate::reconcile::found_moves(&manifest, state, &store, settling, hear);
+        let mut moved = record.followed.clone();
+        moved.extend(found.moved);
+        waiting = back(&moved);
+    }
+    gone.extend(waiting.iter().filter_map(|k| match k {
+        SourceKey::Manual(m) => Some(manual.join(m.path())),
+        _ => None,
+    }));
     if !gone.is_empty() {
+        let gone: Vec<String> = (gone.iter())
+            .map(|source| format!("  {}", source.display()))
+            .collect();
         return Err(crate::errors::Refused(format!(
             "The last run moved these to the trash; put them back there, then undo \
              again:\n{}",
@@ -1429,9 +1444,6 @@ fn all_trashed_back(dirs: &Dirs, record: &Record) -> Result<()> {
     Ok(())
 }
 
-/// What undoing the latest run would do, refused as `undo` itself would
-/// be: when the song list changed since, or the run wrote another
-/// library folder.
 /// Refuse to undo `record` in another library than the one it wrote. A
 /// run stopped before its sync, as an add after its copies, wrote none.
 fn refuse_another_library(record: &Record, state: &State, dirs: &Dirs) -> Result<()> {
@@ -1512,7 +1524,23 @@ fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()
     Ok(())
 }
 
+/// What undoing the latest run would do, refused as `undo` itself would
+/// be: when the song list changed since, the run wrote another library
+/// folder, or a file of the user's it trashed is not back
+/// ([`plan_hearing`]), one put back elsewhere found by what measuring
+/// kept of it alone.
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
+    plan_hearing(dirs, store::SETTLING, |_| None)
+}
+
+/// [`plan`], `hear` reading what a song file put back from the trash
+/// elsewhere holds, as `restore` reads it, one arrived within `settling`
+/// still being copied in.
+pub fn plan_hearing(
+    dirs: &Dirs,
+    settling: std::time::Duration,
+    hear: impl FnMut(&crate::store::Located) -> Option<String>,
+) -> Result<UndoPlan> {
     let home = &dirs.home;
     let state = State::load(home)?;
     let (dir, record) = latest(home, &state.outputs)?;
@@ -1532,7 +1560,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     refuse_another_library(&record, &state, dirs)?;
     refuse_writing_over(&record, &state, dirs)?;
-    all_trashed_back(dirs, &record)?;
+    all_trashed_back(dirs, (&record, &state), settling, hear)?;
     let mut lines = Vec::new();
     if record.undoing {
         lines.push("Finish the undo stopped partway".to_string());
@@ -2717,6 +2745,35 @@ mod tests {
             follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
             0
         );
+    }
+
+    #[test]
+    fn a_move_the_state_said_is_not_followed_onto_a_song_about_to_be_written_where_it_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("A/x two.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("A/x two.opus")).unwrap();
+        // Saved once moved, then a new song recorded ahead at the path left.
+        let moved = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        state.outputs.insert("A/x two.opus".into(), moved);
+        let about_to_be = Written {
+            sources: vec![SourceKey::Manual("new/c.flac".into())],
+            stamp: None,
+            ..written()
+        };
+        state.outputs.insert("A/x.opus".into(), about_to_be);
+        run.changing(Path::new("A/x.opus"));
+        run.checkpoint(&d.home).unwrap();
+        drop(run);
+        let saved = state.outputs.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            0
+        );
+        assert_eq!(state.outputs, saved, "each record stays with its own file");
     }
 
     #[test]

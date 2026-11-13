@@ -3104,19 +3104,25 @@ fn a_library_folder_left_keeps_its_records_while_away_and_the_last_few_only() {
         state.left.insert(away, one(n as u128));
     }
     let emptied = dir.path().join("emptied");
-    std::fs::create_dir_all(&emptied).unwrap();
+    std::fs::create_dir_all(emptied.join("B")).unwrap();
+    std::fs::write(emptied.join("B").join("other.flac"), "the user's").unwrap();
     state.left.insert(emptied.clone(), one(99));
+    // A share's mount point while it is not mounted, as a desktop shows it.
+    let unmounted = dir.path().join("unmounted");
+    std::fs::create_dir_all(unmounted.join("empty")).unwrap();
+    std::fs::write(unmounted.join(".DS_Store"), "").unwrap();
+    state.left.insert(unmounted.clone(), one(98));
     adopt(&mut state, &dir.path().join("next")).unwrap();
     let kept: Vec<PathBuf> = state.left.keys().cloned().collect();
-    let mut expected: Vec<PathBuf> = (3..=LEFT_KEPT + 1)
+    let mut expected: Vec<PathBuf> = (4..=LEFT_KEPT + 1)
         .map(|n| dir.path().join(format!("away{n}")))
-        .chain([dir.path().join("now")])
+        .chain([dir.path().join("now"), unmounted])
         .collect();
     expected.sort();
-    assert_eq!(kept, expected, "away1 and away2 written into longest ago");
+    assert_eq!(kept, expected, "away1 to away3 written into longest ago");
     assert!(
         !state.left.contains_key(&emptied),
-        "there, and holds none of its files"
+        "holds files, none of them its own"
     );
 }
 

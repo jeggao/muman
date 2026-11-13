@@ -436,6 +436,10 @@ pub enum Edit {
     /// `key`, which no song lists, kept under `[[removed]]`, named by
     /// `note`, as a song taken out by hand.
     Tombstone { key: SourceKey, note: String },
+    /// `key`, a file no song lists that holds what the removed song
+    /// listing `with` held, added to its sources: kept out with it, and
+    /// listed with it again by `restore`.
+    KeptOut { with: SourceKey, key: SourceKey },
     /// The removed song listing `key` listed again, without any file a
     /// song lists meanwhile.
     Restore(SourceKey),
@@ -1855,6 +1859,19 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 .filter(|_| !files.is_empty())
             {
                 gone.insert("trashed", key_array(files));
+            }
+        }
+        Edit::KeptOut { with, key } => {
+            let (with, key) = (with.to_string(), key.to_string());
+            let sources = doc
+                .get_mut("removed")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&with)))
+                .and_then(|t| t.get_mut("sources"))
+                .and_then(Item::as_array_mut)
+                .with_context(|| format!("no removed song lists {with}"))?;
+            if !sources.iter().any(|v| v.as_str() == Some(key.as_str())) {
+                sources.push(key.as_str());
             }
         }
         Edit::Tombstone { key, note } => {

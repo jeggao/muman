@@ -9,6 +9,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song written at a path another song just moved away from stays
+  its own after a stopped run**: the next run follows a move only while
+  the state holds the moved song's record where it left, where it gave
+  the moved song's file the new song's record, failed the new song on
+  its own `.part`, then deleted the moved song's file for good while
+  `check` found no problems.
+- **A library folder that is there but empty while away keeps its
+  records**: a share's mount point while the share is not mounted is no
+  sign its files are gone, where pointed back at it, its untouched
+  files read as yours and a changed song was never written.
+- **`undo` of a `remove --purge` finds your files put back in another
+  folder**, as `restore` does, its song's `.lrc` and pictures looked for
+  beside them, where it refused and named the old paths until a sync
+  followed them.
+- **A copy of a removed song's file dropped in stays out with it**: it
+  joins the removed song's `sources`, as a copy of a listed song joins
+  that song, and `restore` lists the song once with it, where the next
+  sync listed the copy as a new song, and `restore` the song twice.
+- **`info` counts no removed song's file as dropped in**, nor a file
+  moved or copied that the next sync follows or keeps out, where it
+  counted each under "Dropped in, not listed".
 - **A rename of case a stopped run left halfway is finished, whatever
   failed before it**: the next sync follows every move the run made, not
   only those before the first that failed, as over a file held open, and
@@ -16,9 +37,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   deleted the file and your edits to it with it.
 - **A library folder away at a switch is still muman's when pointed back
   at**: what muman wrote in a folder not there, as a drive unplugged, is
-  kept until the folder holds none of those files or is not one of the
-  few folders it wrote into last, where it was forgotten at the next
-  switch and the folder's untouched files read as yours.
+  kept until the folder holds other files and none of those, or is not
+  one of the few folders it wrote into last, where it was forgotten at
+  the next switch and the folder's untouched files read as yours.
 - **A library put back without its times is judged once it is vouched
   for**: every command, `remove`'s listing and the sync's plan among
   them, takes the library as found before it judges any file, where

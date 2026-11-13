@@ -53,7 +53,7 @@ pub use self::decide::{
 };
 pub(crate) use self::keys::arriving;
 use self::keys::sites_found;
-pub use self::keys::{Following, Moves, Unlisted, deleted, hearing, moved};
+pub use self::keys::{Following, Moves, Unlisted, deleted, found_moves, hearing, moved, not_back};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
 pub use self::measure::{analyze_mixes, compare};

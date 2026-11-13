@@ -546,7 +546,7 @@ fn removal(
 /// was.
 pub fn restore<R: crate::runner::Runner, W: Write>(
     runner: &R,
-    dirs: &Dirs,
+    (dirs, settling): (&Dirs, std::time::Duration),
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
@@ -578,37 +578,23 @@ pub fn restore<R: crate::runner::Runner, W: Write>(
     // listed with nothing to make it from, and every sync failing.
     // A file moved within the folder is followed by the sync after.
     let store = Store::scan(dirs)?;
-    let mut unlisted =
-        crate::reconcile::Unlisted::of(&manifest, &state, &store, crate::store::SETTLING);
     let scratch = crate::atomic::Scratch::new()?;
     let hear = crate::reconcile::hearing(runner, scratch.path());
-    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
-    // A source is back where the sync after finds it, moved or not; a
-    // file beside it, as its `.lrc`, where it was or beside the source,
-    // where it is asked for once the source moved.
-    let on_disk = |k: &SourceKey| match k {
-        SourceKey::Manual(m) => crate::relpath::on_disk(&dirs.manual(), m.path()).is_some(),
-        _ => false,
-    };
-    let (store, moves) = (&store, &moves);
+    let moves = crate::reconcile::found_moves(&manifest, &state, &store, settling, hear);
     let gone: std::collections::BTreeSet<String> = picked
         .iter()
         .flat_map(|n| {
             let removed = &manifest.removed[*n];
-            let with = manifest::moved_with(&removed.sources, &removed.trashed, &moves.moved);
-            (removed.sources.iter().chain(&removed.trashed)).filter_map(move |k| {
-                let to = with.get(k);
-                let back = store.locate(k).is_some()
-                    || moves.moved.contains_key(k)
-                    || on_disk(k)
-                    || to.is_some_and(on_disk);
-                match to.unwrap_or(k) {
-                    SourceKey::Manual(m) if !back => {
-                        Some(format!("  {}", dirs.manual().join(m.path()).display()))
-                    }
-                    _ => None,
-                }
-            })
+            crate::reconcile::not_back(
+                &dirs.manual(),
+                &store,
+                &moves.moved,
+                (&removed.sources, &removed.trashed),
+            )
+        })
+        .filter_map(|k| match k {
+            SourceKey::Manual(m) => Some(format!("  {}", dirs.manual().join(m.path()).display())),
+            _ => None,
         })
         .collect();
     let gone: Vec<String> = gone.into_iter().collect();

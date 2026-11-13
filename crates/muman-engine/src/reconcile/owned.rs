@@ -16,8 +16,10 @@
 //! The records of a library folder muman was pointed away from are kept
 //! while it is not there, as a drive unplugged or a share not mounted, so
 //! pointed back at it, its files as muman wrote them are muman's again
-//! ([`rehome`]). A folder's records go when the folder is there and holds
-//! none of the files they name, or past the [`LEFT_KEPT`] folders muman
+//! ([`rehome`]). A folder that is there but holds no file, as the mount
+//! point of a share not mounted, is as good as not there: it is no sign
+//! the files are gone. A folder's records go when the folder holds files
+//! and none of those they name, or past the [`LEFT_KEPT`] folders muman
 //! wrote into last, so the state does not grow with every folder it was
 //! ever pointed at.
 
@@ -440,13 +442,15 @@ pub fn adopt(state: &mut State, library: &Path) -> Result<Option<Adopted>> {
     Ok(adopted)
 }
 
-/// Let go of the records of each folder of `left` that is there and holds
-/// no file they name, and of all but the [`LEFT_KEPT`] folders muman wrote
+/// Let go of the records of each folder of `left` that holds files and
+/// none they name, and of all but the [`LEFT_KEPT`] folders muman wrote
 /// into last, by the newest time a record of each holds. A folder not
-/// there keeps its records: a drive unplugged comes back.
+/// there keeps its records, as a drive unplugged comes back, and so does
+/// one that holds no file, as a share's mount point while it is not
+/// mounted.
 fn forget_left(left: &mut BTreeMap<PathBuf, BTreeMap<PathBuf, Written>>) {
     left.retain(|folder, outputs| {
-        !folder.is_dir()
+        !holds_files(folder)
             || (outputs.iter())
                 .flat_map(|(path, w)| w.files(path))
                 .any(|file| std::fs::symlink_metadata(folder.join(file)).is_ok())
@@ -467,6 +471,23 @@ fn forget_left(left: &mut BTreeMap<PathBuf, BTreeMap<PathBuf, Written>>) {
     for (_, folder) in by_age.into_iter().take(over) {
         left.remove(&folder);
     }
+}
+
+/// Whether `folder`, or a folder in it, holds a file other than a hidden
+/// one, as a desktop leaves in any folder it shows: an empty folder is
+/// no sign the files once in it are gone.
+fn holds_files(folder: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let hidden = entry.file_name().to_string_lossy().starts_with('.');
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => holds_files(&entry.path()),
+            Ok(_) => !hidden,
+            Err(_) => true,
+        }
+    })
 }
 
 /// Take the library `dirs` names as it is found, before any of its files

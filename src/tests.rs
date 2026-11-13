@@ -1854,6 +1854,79 @@ fn a_removed_song_s_file_retagged_in_place_stays_out() {
 }
 
 #[test]
+fn a_copy_of_a_removed_song_s_file_dropped_in_stays_out_with_it() {
+    let s = Setup::new();
+    let fake = Fake {
+        hashes: vec![("b.flac".into(), 7), ("retagged.flac".into(), 7)],
+        ..flacs()
+    };
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(&fake, &["sync"]).0);
+    let (ok, text) = s.run(&fake, &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    s.written(
+        "home/sources/manual/rips/b.flac",
+        "home/sources/manual/b.flac",
+    );
+    s.written("home/sources/manual/rips/retagged.flac", "other tags");
+    s.written("home/sources/manual/rips/encoded.flac", "another encoding");
+    let (_, report) = s.run(&fake, &["status"]);
+    assert!(
+        report.contains(
+            "Holds what removed manual:b.flac held, kept out with it by the next sync: \
+             manual:rips/b.flac"
+        ) && !report.contains("added by the next sync: manual:rips/b.flac"),
+        "{report}"
+    );
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    for copy in ["rips/b.flac", "rips/retagged.flac"] {
+        assert!(
+            text.contains(&format!("so kept out with it: manual:{copy}")),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("rips/encoded.flac".into())]
+        ],
+        "another encoding is a new file: {text}"
+    );
+    let (ok, info) = s.report(&fake, &["info"]);
+    assert!(ok && info.contains("Dropped in, not listed   0"), "{info}");
+    let (ok, text) = s.run(&fake, &["restore", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs()[1..],
+        [
+            vec![
+                SourceKey::Manual("b.flac".into()),
+                SourceKey::Manual("rips/b.flac".into()),
+                SourceKey::Manual("rips/retagged.flac".into())
+            ],
+            vec![SourceKey::Manual("rips/encoded.flac".into())]
+        ],
+        "one song again, its copies with it"
+    );
+}
+
+#[test]
+fn info_counts_no_removed_song_s_file_as_dropped_in() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    let (ok, info) = s.report(&flacs(), &["info", "--verbose"]);
+    assert!(ok && info.contains("Dropped in, not listed   0"), "{info}");
+    assert!(!info.contains("manual:b.flac"), "{info}");
+}
+
+#[test]
 fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
     let s = Setup::new();
     let built = copies_listed(&s, &copies());
@@ -6876,6 +6949,39 @@ fn undo_of_a_purge_follows_its_file_put_back_in_another_folder() {
         assert!(ok, "{text}");
     }
     assert_eq!(s.songs().len(), 2);
+    assert!(
+        s.songs()
+            .contains(&vec![SourceKey::Manual("back/a.flac".into())]),
+        "{:?}",
+        s.songs()
+    );
+}
+
+#[test]
+fn undo_of_a_purge_finds_its_files_put_back_in_another_folder_as_restore_does() {
+    let lyrics = "[00:01.00]Paper comets\n";
+    let s = Setup::new();
+    s.file("home/sources/manual/in/a.flac");
+    s.written("home/sources/manual/in/a.lrc", lyrics);
+    s.file("home/sources/manual/in/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:in/a.flac"]);
+    assert!(ok, "{text}");
+    s.written(
+        "home/sources/manual/back/a.flac",
+        "home/sources/manual/in/a.flac",
+    );
+    let said = s.refused(&["undo", "-y"]);
+    assert!(
+        said.contains(&Path::new("back").join("a.lrc").display().to_string())
+            && !said.contains("a.flac"),
+        "its lyrics asked for beside its song file, as `restore` asks: {said}"
+    );
+    s.written("home/sources/manual/back/a.lrc", lyrics);
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok && text.contains("manual:back/a.flac"), "{text}");
+    assert_eq!(s.songs().len(), 2, "one undo, no sync between: {text}");
     assert!(
         s.songs()
             .contains(&vec![SourceKey::Manual("back/a.flac".into())]),

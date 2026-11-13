@@ -607,11 +607,16 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     group(out, c.verbose, "Sources missing", &missing)?;
     group(out, c.verbose, "Sources to measure", &to_measure)?;
-    let (unlisted, settling) = c
-        .store
-        .unlisted(&listed, SystemTime::now(), crate::store::SETTLING);
+    // As the next sync finds them: a removed song's files, and a file moved
+    // or a copy of one, are not listed by it.
+    let mut found =
+        reconcile::Unlisted::of(&c.manifest, &c.state, &c.store, crate::store::SETTLING);
+    reconcile::moved(&c.manifest, &c.state, &c.store, &mut found, |_| None);
+    let reconcile::Unlisted {
+        ready, settling, ..
+    } = found;
     let mut new = Group::default();
-    for key in unlisted {
+    for key in ready {
         new.add(&key.to_string());
     }
     for path in settling {

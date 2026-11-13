@@ -257,10 +257,10 @@ yours `version = 3`, and a song listing a torrent's file `version = 4`.
 
 `muman remove` moves a song to `[[removed]]`, with `next` and `prev`
 naming the songs it stood between. A key there that no song lists is a
-tombstone: no playlist or dropped file adds what it held again; other
-audio at its file's name is a new file. `muman restore`, adding its
-video alone by URL, or deleting the table lets it back in; `restore`
-puts it back where it stood, so two songs of one name keep their paths.
+tombstone: no playlist or dropped file adds what it held again, a copy
+of its file joining its `sources`; other audio is a new file. `restore`,
+adding its video alone by URL, or deleting the table lets it back in,
+`restore` where it stood, so two songs of one name keep their paths.
 
 A song you delete from the list by hand is kept out the same way: the
 next `sync` puts its files in `sources/manual` under `[[removed]]`, and
