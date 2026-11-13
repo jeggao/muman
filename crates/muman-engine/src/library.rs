@@ -559,23 +559,24 @@ pub fn finish_move(library: &Path, from: &Path, to: &Path) -> bool {
         && crate::atomic::rename(&library.join(named(to, MOVING)), &library.join(to)).is_ok()
 }
 
-/// Each folder below `library` that every file `outputs` records in it
-/// spells alike, renamed to that spelling where a filesystem blind to
+/// Each file and folder below `library` that the records of `outputs`
+/// spell one way, renamed to that spelling where a filesystem blind to
 /// case keeps it under another, as each renamed, from and to.
 ///
 /// A move or a write into `Chan/Lantern` lands, on such a filesystem, in
-/// a `Chan/lantern` already there, so a song retitled in case alone kept
-/// its folder's old spelling, while a filesystem that tells case apart
-/// makes the folder anew: the records then named a path the disk spelled
-/// otherwise, and `check` took the song's own file for another's. A
-/// folder is renamed only where the spelling the records agree on opens
-/// that very folder, so a filesystem that tells case apart, where it
-/// would open another or none, never has one renamed; a folder whose
-/// files' records spell it two ways is left as it is. No run records the
-/// rename: the sync after an `undo` spells the folder back as the records
-/// it puts back do.
+/// a `Chan/lantern` already there, and a write of `Lantern.lrc` may end in
+/// the `lantern.lrc` a stopped run left, so a song retitled in case alone
+/// could keep an old spelling, while a filesystem that tells case apart
+/// makes each anew: the records then named a path the disk spelled
+/// otherwise, and `check` took the song's own file for another's. A path
+/// is renamed only where the spelling the records agree on opens that
+/// very file or folder, so a filesystem that tells case apart, where it
+/// would open another or none, never has one renamed; a folder the
+/// records spell two ways is left as it is. No run records the rename:
+/// the sync after an `undo` spells each path back as the records it puts
+/// back do.
 #[must_use]
-pub fn spell_folders(
+pub fn spell_as_recorded(
     library: &Path,
     outputs: &BTreeMap<PathBuf, Written>,
 ) -> Vec<(PathBuf, PathBuf)> {
@@ -583,22 +584,25 @@ pub fn spell_folders(
     let mut spellings: BTreeMap<String, BTreeSet<&Path>> = BTreeMap::new();
     for (path, written) in outputs {
         for file in written.files(path) {
-            for folder in file.ancestors().skip(1) {
-                if !folder.as_os_str().is_empty() {
-                    spellings.entry(folded(folder)).or_default().insert(folder);
+            for spelled in file.ancestors() {
+                if !spelled.as_os_str().is_empty() {
+                    spellings
+                        .entry(folded(spelled))
+                        .or_default()
+                        .insert(spelled);
                 }
             }
         }
     }
-    let mut folders: Vec<&Path> = (spellings.into_values())
+    let mut paths: Vec<&Path> = (spellings.into_values())
         .filter(|s| s.len() == 1)
         .flatten()
         .collect();
-    // A folder's parent is spelled first, so the folder is found under it.
-    folders.sort_by_key(|f| f.components().count());
+    // A path's folder is spelled first, so the path is found in it.
+    paths.sort_by_key(|f| f.components().count());
     let mut renamed = Vec::new();
-    for folder in folders {
-        let (Some(parent), Some(name)) = (folder.parent(), folder.file_name()) else {
+    for spelled in paths {
+        let (Some(parent), Some(name)) = (spelled.parent(), spelled.file_name()) else {
             continue;
         };
         let Ok(entries) = std::fs::read_dir(library.join(parent)) else {
@@ -613,14 +617,14 @@ pub fn spell_folders(
             continue;
         };
         let was = parent.join(found);
-        if !same_file::is_same_file(library.join(&was), library.join(folder)).unwrap_or(false) {
+        if !same_file::is_same_file(library.join(&was), library.join(spelled)).unwrap_or(false) {
             continue;
         }
-        // Spells a folder anew in place: no file moves, so no ledger is kept.
+        // Spells a path anew in place: nothing moves, so no ledger is kept.
         #[expect(clippy::disallowed_methods)]
-        let spelled = crate::atomic::rename(&library.join(&was), &library.join(folder));
-        if spelled.is_ok() {
-            renamed.push((was, folder.to_path_buf()));
+        let done = crate::atomic::rename(&library.join(&was), &library.join(spelled));
+        if done.is_ok() {
+            renamed.push((was, spelled.to_path_buf()));
         }
     }
     renamed
@@ -866,12 +870,12 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_is_spelled_as_its_records_agree_where_case_is_one_name_to_the_disk() {
+    fn a_path_is_spelled_as_its_records_agree_where_case_is_one_name_to_the_disk() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         for file in [
             "Chan/lantern/Lantern.opus",
-            "Chan/lantern/Lantern.lrc",
+            "Chan/lantern/lantern.lrc",
             "Two/a/x.opus",
         ] {
             std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
@@ -887,7 +891,7 @@ mod tests {
             (PathBuf::from("Two/a/y.opus"), written(None, None)),
         ]);
         let blind = root.join("Chan/Lantern").exists();
-        let renamed = spell_folders(root, &outputs);
+        let renamed = spell_as_recorded(root, &outputs);
         let names = |dir: &str| -> Vec<String> {
             let entries = std::fs::read_dir(root.join(dir)).unwrap();
             let mut names: Vec<String> = (entries.flatten())
@@ -897,12 +901,18 @@ mod tests {
             names
         };
         if blind {
-            let moved = (PathBuf::from("Chan/lantern"), PathBuf::from("Chan/Lantern"));
-            assert_eq!(renamed, [moved]);
+            let folder = (PathBuf::from("Chan/lantern"), PathBuf::from("Chan/Lantern"));
+            let lyrics = (
+                PathBuf::from("Chan/Lantern/lantern.lrc"),
+                PathBuf::from("Chan/Lantern/Lantern.lrc"),
+            );
+            assert_eq!(renamed, [folder, lyrics]);
             assert_eq!(names("Chan"), ["Lantern"]);
+            assert_eq!(names("Chan/Lantern"), ["Lantern.lrc", "Lantern.opus"]);
         } else {
             assert_eq!(renamed, []);
             assert_eq!(names("Chan"), ["lantern"]);
+            assert_eq!(names("Chan/lantern"), ["Lantern.opus", "lantern.lrc"]);
         }
         assert_eq!(names("Two"), ["a"]);
     }

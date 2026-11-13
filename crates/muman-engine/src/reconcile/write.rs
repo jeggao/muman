@@ -308,7 +308,7 @@ pub(super) fn apply<R: Runner, W: Write>(
         .collect();
     crate::library::remove_empty_folders(library, &emptied);
     let removed = prune(ledger, &old, &mut outputs, failed, force, out)?;
-    for (was, now) in crate::library::spell_folders(library, &outputs) {
+    for (was, now) in crate::library::spell_as_recorded(library, &outputs) {
         let (was, now) = (crate::relpath::show(&was), crate::relpath::show(&now));
         crate::ui::info(out, &format!("Moved: {was} → {now}"))?;
     }

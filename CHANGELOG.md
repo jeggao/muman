@@ -718,10 +718,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`until = ["has:genre"]` is taken by `acoustid` and `musicbrainz`**,
   whose records give the genres MusicBrainz's users voted for, where the
   song list was refused.
-- **A folder renamed in case alone is renamed on macOS and Windows**: a
-  song retitled `Lantern` from `lantern` kept its folder's old spelling
-  there, as a filesystem blind to case finds the old folder for the new
-  name, and `check` then took the song's own file for another's.
+- **A song renamed in case alone is spelled anew on macOS and Windows**:
+  a song retitled `Lantern` from `lantern` could keep its folder's or its
+  `.lrc`'s old spelling there, as a filesystem blind to case finds the
+  old name for the new one, and `check` then took the song's own file
+  for another's.
 
 ## [0.11.0] - 2026-11-10
 
