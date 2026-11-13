@@ -3884,9 +3884,9 @@ fn a_song_mixed_to_fit_max_size_is_levelled_by_its_mix() {
 
         // The FLAC is rendered to learn whether it fits, and the fake's
         // rendered files take a few KiB.
-        let (h, fake) = surround_home(&format!(
-            "{loudness}[library]\nmax_size = \"10 KiB\"\n[audio]\nlossy = \"mp3\"\n"
-        ));
+        let fitting =
+            format!("{loudness}[library]\nmax_size = \"10 KiB\"\n[audio]\nlossy = \"mp3\"\n");
+        let (h, fake) = surround_home(&fitting);
         let (ok, text) = h.run(&fake, Options::default());
         assert!(ok, "{text}");
         let fitted = plans(&h)[0].clone();

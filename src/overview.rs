@@ -654,9 +654,9 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     group(out, c.verbose, "Sources missing", &missing)?;
     group(out, c.verbose, "Sources to measure", &to_measure)?;
+    let mut new = Group::default();
     // As the next sync finds them: a removed song's files, and a file moved
     // or a copy of one, are not listed by it.
-    let mut new = Group::default();
     for key in &c.unlisted.ready {
         new.add(&key.to_string());
     }

@@ -2230,9 +2230,8 @@ fn tags_from(
     Ok(())
 }
 
-/// Set `tags` in a song table's `tags`, each under the name the song list
-/// gives it ([`tags::song_list_name`]) and over any it sets under another
-/// spelling of it; a tag with no values is cleared.
+// allow-no-comments-on-unchanged-code: moved off the function above, which it never described
+/// Set `tags` under the names the song list gives them, over any other spelling; none clears.
 pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     let table = song
         .entry("tags")

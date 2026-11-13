@@ -329,8 +329,8 @@ struct Clues {
     length_ms: Option<i64>,
     grace: (f64, f64),
     ids: BTreeSet<String>,
-    /// The name it gives a song file, folded: its own, or a cue sheet
-    /// track's file's.
+    // allow-no-comments-on-unchanged-code: the name now pairs with `folder` below
+    /// The name it gives a song file, folded: its own, or a cue sheet track's file's.
     stem: String,
     /// The folder that name stands in: its own, or its cue sheet's with
     /// the track's file's folders below it.

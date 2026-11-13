@@ -1537,11 +1537,8 @@ fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()
     Ok(())
 }
 
-/// What undoing the latest run would do, refused as `undo` itself would
-/// be: when the song list changed since, the run wrote another library
-/// folder, or a file of the user's it trashed is not back
-/// ([`plan_hearing`]), one put back elsewhere found by what measuring
-/// kept of it alone.
+// allow-no-comments-on-unchanged-code: moved off `refuse_another_library`, which it never described
+/// [`plan_hearing`] with no audio heard: a trashed file put back elsewhere is found by its bytes.
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     plan_hearing(dirs, store::SETTLING, |_| None)
 }
