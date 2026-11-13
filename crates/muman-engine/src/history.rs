@@ -100,8 +100,9 @@
 //! which muman cannot take it back from on every platform. The run
 //! records each it trashed, and `undo` refuses until the user puts them
 //! back, rather than list their songs again with nothing to make them:
-//! where each was, or where a run since followed it, as the list put back
-//! names it there.
+//! where each was, or where a run since followed it, an `.lrc` or picture
+//! beside the song file it went to the trash with, as the list put back
+//! names it there ([`crate::manifest::moved_with`]).
 //! What `add` copied into the sources is recorded with a digest of it,
 //! and `undo` takes each copy out with its song, else the next sync
 //! would list it again as a file dropped in: a copy as made is deleted,
@@ -1374,11 +1375,21 @@ impl UndoPlan {
 /// back where the list put back names it ([`Record::put_back`]).
 fn all_trashed_back(dirs: &Dirs, record: &Record) -> Result<()> {
     let home = &dirs.home;
-    let followed = |rel: &Path| {
-        let manual = dirs.manual();
+    let manual = dirs.manual();
+    let key_of = |rel: &Path| {
         let from = home.join(rel);
-        let key = SourceKey::Manual(from.strip_prefix(&manual).ok()?.into());
-        let SourceKey::Manual(to) = record.followed.get(&key)? else {
+        Some(SourceKey::Manual(from.strip_prefix(&manual).ok()?.into()))
+    };
+    let trashed: Vec<SourceKey> = record.trashed.iter().filter_map(|r| key_of(r)).collect();
+    let media = |k: &&SourceKey| match k {
+        SourceKey::Manual(m) => store::kind_of(m.path()) == Some(store::Kind::Media),
+        _ => false,
+    };
+    let songs: Vec<SourceKey> = trashed.iter().filter(media).cloned().collect();
+    // A file beside a song file followed went with it, as the list does.
+    let moved = crate::manifest::moved_with(&songs, &trashed, &record.followed);
+    let followed = |rel: &Path| {
+        let SourceKey::Manual(to) = moved.get(&key_of(rel)?)? else {
             return None;
         };
         crate::relpath::on_disk(&manual, to.path())

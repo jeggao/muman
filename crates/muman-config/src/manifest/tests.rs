@@ -1513,3 +1513,53 @@ fn a_file_moved_is_followed_alike_in_the_file_and_in_memory_wherever_a_key_names
         [manual("back/b.flac"), manual("back/b.lrc")]
     );
 }
+
+#[test]
+fn a_trashed_sidecar_follows_the_song_file_it_went_to_the_trash_beside() {
+    let manual = |rel: &str| SourceKey::Manual(rel.into());
+    let body = "[[removed]]\nnote = \"Lantern Weather\"\nsources = [\"manual:in/01.flac\"]\n\
+         trashed = [\"manual:in/01.flac\", \"manual:in/01.en.LRC\", \"manual:in/cover.jpg\", \
+         \"manual:in/02.lrc\"]\n\n\
+         [[removed]]\nnote = \"Copper Moth\"\n\
+         sources = [\"manual:two/a.flac\", \"manual:two/b.flac\"]\n\
+         trashed = [\"manual:two/a.flac\", \"manual:two/b.flac\", \"manual:two/folder.png\", \
+         \"manual:two/b.lrc\"]\n";
+    let moved: BTreeMap<SourceKey, SourceKey> = [
+        (manual("in/01.flac"), manual("back/Lantern.flac")),
+        (manual("two/a.flac"), manual("else/a.flac")),
+    ]
+    .into_iter()
+    .collect();
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), body);
+    let mut in_memory = Manifest::load(dir.path()).unwrap();
+    in_memory.rekey(&moved);
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        moved_in(&text(dir.path()), &moved),
+    )
+    .unwrap();
+    let in_file = Manifest::load(dir.path()).unwrap();
+    assert_eq!(in_file.removed, in_memory.removed);
+    assert_eq!(
+        in_memory.removed[0].trashed,
+        [
+            manual("back/Lantern.flac"),
+            manual("back/Lantern.en.LRC"),
+            manual("back/cover.jpg"),
+            manual("in/02.lrc"),
+        ],
+        "named as its song file, renamed with it; the folder's picture by its name; \
+         one named as no song file of it stays"
+    );
+    assert_eq!(
+        in_memory.removed[1].trashed,
+        [
+            manual("else/a.flac"),
+            manual("two/b.flac"),
+            manual("two/folder.png"),
+            manual("two/b.lrc"),
+        ],
+        "a song file still in the folder keeps its picture and its own .lrc there"
+    );
+}

@@ -49,9 +49,10 @@ Exit codes:
   5  A query did not read, or one for a change matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
      and was left out, a change, an undo or an export's output was
-     refused, the library template cannot name every song, the song list
-     sets commands or servers not trusted, with no terminal to ask on, or
-     a hook ran muman on its run's library under another home
+     refused, another run changed a song while a change to it waited,
+     the library template cannot name every song, the song list sets
+     commands or servers not trusted, with no terminal to ask on, or a
+     hook ran muman on its run's library under another home
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started";
 

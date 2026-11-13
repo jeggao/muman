@@ -33,7 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use unicode_width::UnicodeWidthStr;
 
 use crate::album::Album;
@@ -675,7 +675,8 @@ fn apply<W: Write>(
         .save_if_unchanged(&expected, later.begin()?)?;
     if !changed.is_empty() {
         found.manifest.discard();
-        bail!("the song list changed while this ran; nothing was changed, run it again");
+        let why = "the song list changed while this ran; nothing was changed, run it again";
+        return Err(Refused(why.into()).into());
     }
     Ok(true)
 }

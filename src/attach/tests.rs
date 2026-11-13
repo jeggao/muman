@@ -20,7 +20,7 @@ fn cand(title: &str, artist: &str, album: &str, seconds: i64) -> Candidate {
         albums: vec![Name::new(album)],
         track: None,
         length_ms: Some(seconds * 1000),
-        stems: [similar::fold(title)].into(),
+        files: vec![PathBuf::from(format!("{title}.flac"))],
         ids: BTreeSet::new(),
         looks: Vec::new(),
         digests: BTreeSet::new(),
@@ -43,7 +43,7 @@ fn said(title: &str, artist: Option<&str>) -> Clues {
 }
 
 fn top(cands: &[Candidate], clues: &Clues, what: What) -> (usize, Verdict, Vec<String>) {
-    let j = judge(cands, clues, what).remove(0);
+    let j = judge(cands, clues, what, None).remove(0);
     (j.song, j.verdict, j.reasons)
 }
 

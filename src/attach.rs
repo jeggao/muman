@@ -9,7 +9,14 @@
 //!    song's. A file whose bytes a source of the song already holds is
 //!    the song's already, and nothing is added.
 //! 1. **Its name**: the name of one of the song's files, as a sidecar is
-//!    named after its song; two songs so named are each only maybe.
+//!    named after its song; two songs so named are each only maybe. A
+//!    name stands in a folder, the file's own or, for a cue sheet's
+//!    `FILE`, the sheet's with the folders it names below it, as a player
+//!    reads it: of the songs with a file so named, only those whose
+//!    file's folders that folder ends with the most of are named, so
+//!    `CD2/disc.cue`'s `01.flac` is `CD2/01.flac`, not `CD1/01.flac`. A
+//!    song's files are its song files, its library file, and where a song
+//!    file given with it came from; `--to` names the songs weighed.
 //! 1. **Its fields**: title, artist, album, track and length, from an
 //!    `.lrc`'s ID tags, a tag file, or its file name read every way beets'
 //!    `fromfilename` reads one; compared by [`crate::similar`] against
@@ -249,7 +256,10 @@ struct Candidate {
     albums: Vec<Name>,
     track: Option<u32>,
     length_ms: Option<i64>,
-    stems: BTreeSet<String>,
+    /// Every path whose name a file named after the song may share: its
+    /// song files, its library file, and where a song file given with
+    /// the loose files came from.
+    files: Vec<PathBuf>,
     ids: BTreeSet<String>,
     looks: Vec<Look>,
     digests: BTreeSet<String>,
@@ -302,10 +312,14 @@ struct Clues {
     length_ms: Option<i64>,
     grace: (f64, f64),
     ids: BTreeSet<String>,
+    /// The name it gives a song file, folded: its own, or a cue sheet
+    /// track's file's.
     stem: String,
-    file: Option<String>,
-    /// The songs given in the same command from its folder, by stem.
-    with: BTreeSet<String>,
+    /// The folder that name stands in: its own, or its cue sheet's with
+    /// the track's file's folders below it.
+    folder: Option<PathBuf>,
+    /// The song files given in the same command from its folder.
+    with: BTreeSet<SourceKey>,
     digest: Option<String>,
     look: Option<Look>,
     words: Option<(BTreeSet<String>, Option<icu_properties::props::Script>)>,
@@ -391,7 +405,7 @@ fn candidates(
     manifest: &Manifest,
     state: &State,
     store: &Store,
-    dirs: &Dirs,
+    (dirs, beside): (&Dirs, &[(PathBuf, SourceKey)]),
 ) -> Result<Vec<Candidate>> {
     let views = query::resolved_views(manifest, state, &dirs.library)?;
     let mut out = Vec::new();
@@ -426,7 +440,7 @@ fn candidates(
             .or_else(|| facts.iter().copied().find(|f| f.audio.is_some()))
             .and_then(facts::Facts::length)
             .map(|s| (s * 1000.0).round() as i64);
-        let mut stems = BTreeSet::new();
+        let mut files = Vec::new();
         let mut ids = BTreeSet::new();
         let mut looks = Vec::new();
         let mut digests = BTreeSet::new();
@@ -440,7 +454,7 @@ fn candidates(
             if let Some(l) = &located
                 && l.kind == Kind::Media
             {
-                stems.insert(folded_stem(&l.path));
+                files.push(l.path.clone());
             }
             let Some(f) = state.facts.get(key) else {
                 continue;
@@ -459,12 +473,13 @@ fn candidates(
             }
         }
         if let Some(r) = &resolved {
-            stems.insert(folded_stem(&r.stem.with_extension("x")));
+            files.push(dirs.library.join(r.stem.with_extension("x")));
         }
+        let given = beside.iter().filter(|(_, key)| song.sources.contains(key));
+        files.extend(given.map(|(origin, _)| origin.clone()));
         for field in ["ISRC", "MUSICBRAINZ_TRACKID"] {
             ids.extend(values(tags, field).map(|v| v.to_lowercase()));
         }
-        stems.remove("");
         let album = view.first("album");
         let album_key = format!(
             "{}\u{1f}{}",
@@ -480,7 +495,7 @@ fn candidates(
             albums,
             track: view.first("tracknumber").parse().ok(),
             length_ms,
-            stems,
+            files,
             ids,
             looks,
             digests,
@@ -534,12 +549,56 @@ fn score(c: &Candidate, f: &Fields, clues: &Clues) -> (f64, f64, Vec<&'static st
     )
 }
 
-/// How every song stands against `clues`, likeliest first.
-fn judge(cands: &[Candidate], clues: &Clues, what: What) -> Vec<Judged> {
+/// How far `c`'s files named `stem` stand in `folder`: how many of their
+/// folders, from the nearest up, `folder` ends with, the most of any;
+/// none when no file of it is so named.
+fn named_depth(c: &Candidate, stem: &str, folder: Option<&Path>) -> Option<usize> {
+    let names = |p: &Path| -> Vec<String> {
+        p.components()
+            .filter_map(|part| match part {
+                std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let theirs = folder.map(names).unwrap_or_default();
+    c.files
+        .iter()
+        .filter(|f| folded_stem(f) == stem)
+        .map(|f| {
+            let ours = f.parent().map(names).unwrap_or_default();
+            (ours.iter().rev())
+                .zip(theirs.iter().rev())
+                .take_while(|(a, b)| similar::caseless(a, b))
+                .count()
+        })
+        .max()
+}
+
+/// How every song, or every song of `among`, stands against `clues`,
+/// likeliest first.
+fn judge(cands: &[Candidate], clues: &Clues, what: What, among: Option<&[usize]>) -> Vec<Judged> {
+    let within = |n: usize| among.is_none_or(|a| a.contains(&n));
+    // A name a song file in another folder shares is no name for it, as a
+    // cue sheet's `01.flac` is the one beside it, not another disc's.
+    let depths: Vec<Option<usize>> = cands
+        .iter()
+        .enumerate()
+        .map(|(n, c)| {
+            (within(n) && !clues.stem.is_empty())
+                .then(|| named_depth(c, &clues.stem, clues.folder.as_deref()))
+                .flatten()
+        })
+        .collect();
+    let deepest = depths.iter().flatten().max().copied();
     let mut judged: Vec<Judged> = cands
         .iter()
         .enumerate()
-        .map(|(n, c)| judge_one(n, c, clues, what))
+        .filter(|(n, _)| within(*n))
+        .map(|(n, c)| {
+            let named_as = depths[n].is_some() && depths[n] == deepest;
+            judge_one(n, c, clues, what, named_as)
+        })
         .collect();
     let named = |j: &Judged| j.reasons.iter().any(|r| r == "named as its file");
     let stem_shared = judged.iter().filter(|j| named(j)).count();
@@ -590,7 +649,7 @@ fn order(judged: &mut [Judged]) {
 
 // Each kind of evidence weighed in turn, as the guide's table lists them.
 #[expect(clippy::too_many_lines)]
-fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
+fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What, named_as: bool) -> Judged {
     let mut reasons = Vec::new();
     let mut verdict = Verdict::Different;
     let mut by_fields = false;
@@ -605,13 +664,11 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         verdict = Verdict::Same;
         reasons.push("named by its ID".to_string());
     }
-    let named_as = (!clues.stem.is_empty() && c.stems.contains(&clues.stem))
-        || clues.file.as_ref().is_some_and(|f| c.stems.contains(f));
     if named_as {
         verdict = verdict.max(Verdict::Same);
         reasons.push("named as its file".to_string());
     }
-    if !clues.with.is_disjoint(&c.stems) {
+    if c.view.keys.iter().any(|k| clues.with.contains(k)) {
         verdict = Verdict::Same;
         reasons.push("came with it".to_string());
     }
@@ -864,6 +921,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
     );
     let mut clues = Clues {
         stem: folded_stem(path),
+        folder: folder_of(path),
         grace: (GRACE_MS, SPAN_MS),
         digest: crate::hash::digest_file(path),
         ..Clues::default()
@@ -971,7 +1029,7 @@ fn read_streams<R: Runner>(runner: &R, cands: &mut [Candidate], items: &[Item], 
         .iter()
         .filter(|i| i.what == What::Lyrics && i.clues.words.is_some())
     {
-        let likeliest: Vec<usize> = judge(cands, &item.clues, What::Lyrics)
+        let likeliest: Vec<usize> = judge(cands, &item.clues, What::Lyrics, None)
             .iter()
             .take(STREAMED)
             .map(|j| j.song)
@@ -1334,7 +1392,7 @@ pub fn attach<R: Runner, W: Write>(
     {
         state.keep_since(&dirs.home, &mut base)?;
     }
-    let mut cands = candidates(&manifest, &state, &store, dirs)?;
+    let mut cands = candidates(&manifest, &state, &store, (dirs, beside))?;
     let extractors = query::extractors(&manifest);
     let pool: Option<Vec<usize>> = if how.to.is_empty() {
         None
@@ -1386,9 +1444,9 @@ pub fn attach<R: Runner, W: Write>(
             for (origin, key) in beside {
                 if folder.is_some()
                     && folder_of(origin) == folder
-                    && let SourceKey::Manual(m) = key
+                    && matches!(key, SourceKey::Manual(_))
                 {
-                    item.clues.with.insert(folded_stem(m.path()));
+                    item.clues.with.insert(key.clone());
                 }
             }
         }
@@ -1510,6 +1568,25 @@ fn folder_of(path: &Path) -> Option<PathBuf> {
     dunce::canonicalize(parent).ok()
 }
 
+/// The name a sheet's `FILE`, `file`, gives a song file, folded, and the
+/// folder it stands in: the sheet's own, `folder`, with the folders it
+/// names below it, as a player opens it.
+fn sheet_file(folder: Option<&Path>, file: &str) -> (String, Option<PathBuf>) {
+    let mut parts: Vec<&str> = file.split('/').filter(|p| !p.is_empty()).collect();
+    let name = parts.pop().unwrap_or_default();
+    let below = parts.iter().filter(|p| **p != ".").try_fold(
+        folder.map(Path::to_path_buf).unwrap_or_default(),
+        |at, part| match *part {
+            ".." => at.parent().map(Path::to_path_buf),
+            part => Some(at.join(part)),
+        },
+    );
+    (
+        folded_stem(Path::new(name)),
+        below.filter(|p| !p.as_os_str().is_empty()),
+    )
+}
+
 /// Whether `n` may be given a file: a song with a source only it lists.
 fn ownable(c: &Candidate) -> bool {
     !manifest::shareable(&c.id)
@@ -1528,10 +1605,9 @@ fn decide<W: Write>(
     {
         return decide_sheet(ask, item, sheet, pool);
     }
-    let judged: Vec<Judged> = judge(cands, &item.clues, item.what)
+    let judged: Vec<Judged> = judge(cands, &item.clues, item.what, pool)
         .into_iter()
         .filter(|j| ownable(&cands[j.song]))
-        .filter(|j| pool.is_none_or(|p| p.contains(&j.song)))
         .collect();
     // A song that holds it already is told so; a picture still goes to
     // the other songs it is meant for.
@@ -1748,7 +1824,7 @@ fn decide_sheet<W: Write>(
         .find(|f| named(f) > 1)
         && cands
             .iter()
-            .any(|c| c.stems.contains(&folded_stem(Path::new(file))))
+            .any(|c| named_depth(c, &folded_stem(Path::new(file)), None).is_some())
     {
         bail!(
             "{} splits {file} into tracks, which muman keeps as one song; \
@@ -1759,22 +1835,24 @@ fn decide_sheet<W: Write>(
     let mut per_track: Vec<Vec<Judged>> = Vec::new();
     for (n, track) in sheet.tracks.iter().enumerate() {
         let tags = sheet.tags_of(n);
+        let (stem, folder) = track
+            .file
+            .as_deref()
+            .filter(|f| named(f) == 1)
+            .map(|f| sheet_file(item.clues.folder.as_deref(), f))
+            .unwrap_or_default();
         let clues = Clues {
             readings: vec![fields_of(&tags)],
             length_ms: track.length_ms,
             grace: (CUE_GRACE_MS, CUE_SPAN_MS),
             ids: ids_of(&tags),
-            file: track
-                .file
-                .as_deref()
-                .filter(|f| named(f) == 1)
-                .map(|f| folded_stem(Path::new(f))),
+            stem,
+            folder,
             ..Clues::default()
         };
-        let judged: Vec<Judged> = judge(cands, &clues, What::Tags)
+        let judged: Vec<Judged> = judge(cands, &clues, What::Tags, pool)
             .into_iter()
             .filter(|j| ownable(&cands[j.song]))
-            .filter(|j| pool.is_none_or(|p| p.contains(&j.song)))
             .take(PER_TRACK)
             .collect();
         per_track.push(judged);

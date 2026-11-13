@@ -83,7 +83,9 @@
 //! and library renamed up into place. The folder named is never removed
 //! or replaced, so a link to it or a card's mount point stays; one there
 //! already is taken only when empty, so no file of another's is written
-//! over or mixed in.
+//! over or mixed in. An export stopped partway leaves its scratch folder,
+//! beside the zip or inside the folder, holding a lock no run holds any
+//! more; the next export there removes it first ([`crate::atomic::Scratch`]).
 //! Each file counts whole blocks of `[library] block_size`, as the
 //! library does, since a card's filesystem spends them.
 
@@ -969,7 +971,8 @@ fn there_already(output: &Path) -> crate::errors::Refused {
 }
 
 /// The folder `output` names, to be made: one not there, in a folder
-/// that is, or one empty. A folder holding anything is refused, so no
+/// that is, or one empty once the scratch folder a stopped export left
+/// in it is cleared. A folder holding anything else is refused, so no
 /// file of another's is written over or mixed in with the export.
 fn folder_at(output: &Path) -> Result<PathBuf> {
     let parent = output
@@ -992,6 +995,7 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
         .into());
     }
     if output.exists() {
+        crate::atomic::clear_scratch(output);
         let empty = fs::read_dir(output)
             .with_context(|| format!("reading {}", output.display()))?
             .next()

@@ -488,6 +488,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`remove` lists library files with `/` on every system**, relative to
   the library as every other message names them, as does a sync's
   "Could not remove" warning.
+- **Each disc's cue sheet tags its own disc's songs**: a cue sheet's
+  `FILE "01.flac"`, and a loose file named as a song file, name the
+  file in their own folder first, so `CD1/disc.cue` and `CD2/disc.cue`
+  go to their own discs, where both went to the first disc's songs and
+  disc 2's titles were written over disc 1's. `--to` keeps the matching
+  among the songs it names.
+- **`restore` and `undo` find a purged song's `.lrc` and pictures beside
+  its file put back in another folder**, as the sync follows them with
+  it, where they kept asking for them at their old path.
+- **A stopped export's or sync's scratch folder goes with the next run
+  there**: the next export clears one it left beside its zip or inside
+  its `--folder`, where it refused that folder as not empty, and a run
+  clears a stopped run's scratch folder at once rather than after a
+  minute, while a folder so named that holds no lock of muman's stays.
+- **A placeholder in any brackets is dropped**: `{unknown}`, as an ID3
+  genre `(12){unknown}` leaves, or `(no label)`, as `[unknown]` and
+  `[no label]` are, where it was written as the song's value.
+- **A change refused because another run changed its song meanwhile
+  exits 5**, as every refusal does, where `set`, `remove`, `restore`,
+  `duplicates --merge` and stepping through `set` exited 4.
 
 ## [0.11.0] - 2026-11-10
 

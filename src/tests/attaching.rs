@@ -568,6 +568,83 @@ fn a_cue_sheet_retags_the_songs_its_file_lines_name() {
     }
 }
 
+/// A disc's cue sheet naming its own `01.flac` and `02.flac`.
+fn disc_cue(disc: u32) -> String {
+    format!(
+        "PERFORMER \"Marlo Venn\"\nTITLE \"The Glass Orchards\"\nREM DISCNUMBER {disc}\n\
+         FILE \"01.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Ember {disc}\"\n    INDEX 01 00:00:00\n\
+         FILE \"02.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Tide {disc}\"\n    INDEX 01 00:00:00\n"
+    )
+}
+
+fn discs() -> Fake {
+    library()
+        .probe("01.flac", &flac("Track", "Marlo Venn", "", 1, 200, ""))
+        .probe("02.flac", &flac("Track", "Marlo Venn", "", 2, 210, ""))
+}
+
+fn title_and_disc(s: &Setup, file: &str) -> (String, String) {
+    let song = s.song_with(file);
+    let tag = |name: &str| {
+        (song.tags.iter())
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.join("; "))
+            .unwrap_or_default()
+    };
+    (tag("title"), tag("disc"))
+}
+
+#[test]
+fn each_disc_s_cue_sheet_names_the_files_beside_it() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+        s.written(&format!("rips/Orchards/CD{disc}/disc.cue"), &disc_cue(disc));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    for disc in [1, 2] {
+        for (file, title) in [("01", "Ember"), ("02", "Tide")] {
+            assert_eq!(
+                title_and_disc(&s, &format!("Orchards/CD{disc}/{file}")),
+                (format!("{title} {disc}"), disc.to_string()),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_cue_sheet_given_later_names_the_files_of_its_own_folder_or_of_to() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let second = s.written("notes/CD2/disc.cue", &disc_cue(2));
+    let (ok, text) = s.run(&fake, &["add", &second]);
+    assert!(ok, "the folder it is in names its disc: {text}");
+    let first = s.written("notes/first.cue", &disc_cue(1));
+    let said = s.not_added(&fake, &["add", &first]);
+    assert!(said.contains("not surely a song's"), "{said}");
+    let (ok, text) = s.run(&fake, &["add", &first, "--to", "key:CD1"]);
+    assert!(ok, "--to leaves the other disc out: {text}");
+    for disc in [1, 2] {
+        assert_eq!(
+            title_and_disc(&s, &format!("Orchards/CD{disc}/01")),
+            (format!("Ember {disc}"), disc.to_string()),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     let s = Setup::new();

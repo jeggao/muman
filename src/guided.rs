@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::rc::Rc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use unicode_width::UnicodeWidthStr;
 
 use crate::change::{self, Ask, Assign, Read};
@@ -158,7 +158,10 @@ pub fn edit<W: Write>(
         )?;
         read = Read::new(dirs, terms)?;
     }
-    bail!("the song list kept changing while this ran; nothing was changed, run it again")
+    Err(change::Refused(
+        "the song list kept changing while this ran; nothing was changed, run it again".into(),
+    )
+    .into())
 }
 
 /// What the menu offers.

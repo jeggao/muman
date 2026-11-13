@@ -12,7 +12,11 @@
 //! as `Show OST 2`, on 38 as their artist.
 //!
 //! - A **placeholder** is a value `placeholders.txt` lists for its field,
-//!   compared whole, case, spacing and typography aside, or a credit that names a soundtrack
+//!   compared whole, case, spacing, typography and the kind of brackets
+//!   around it all aside ([`BRACKETS`]): taggers write MusicBrainz's
+//!   `[unknown]` as `{unknown}` or `(unknown)` too, and an `ID3v2.3`
+//!   genre such as `(12){unknown}` leaves its braced text once its number
+//!   is read as `Other`. Or it is a credit that names a soundtrack
 //!   rather than anyone, ending in `OST` and perhaps its volume: files
 //!   tagged by album, their artist filled with the album's short name.
 //!   A release country that is no two-letter code, as a group's name
@@ -92,16 +96,39 @@ static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<String>>> = LazyL
     table
 });
 
+/// The brackets a placeholder may be written in, each read as `[` and
+/// `]` when they hold the whole value.
+const BRACKETS: [(char, char); 8] = [
+    ('(', ')'),
+    ('{', '}'),
+    ('<', '>'),
+    ('（', '）'),
+    ('［', '］'),
+    ('｛', '｝'),
+    ('【', '】'),
+    ('〔', '〕'),
+];
+
 /// `value` as a placeholder is compared: its spaces one space each, its
-/// quotes and hyphens as ASCII writes them, lower-cased.
+/// quotes and hyphens as ASCII writes them, brackets around it all as
+/// `[` and `]`, lower-cased.
 fn plain(value: &str) -> String {
     let words: Vec<&str> = value.split_whitespace().collect();
-    words
+    let plain = words
         .join(" ")
         .chars()
         .map(crate::clean::plain_punctuation)
         .collect::<String>()
-        .to_lowercase()
+        .to_lowercase();
+    let mut chars = plain.chars();
+    let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
+        return plain;
+    };
+    let inner = chars.as_str();
+    match BRACKETS.iter().find(|(o, c)| *o == first && *c == last) {
+        Some(&(o, c)) if !inner.contains([o, c]) => format!("[{}]", inner.trim()),
+        _ => plain,
+    }
 }
 
 /// Whether `value` stands for no value in `field`.
@@ -324,6 +351,26 @@ mod tests {
         }
         assert!(placeholder(Field::Artist, "Unknown\u{a0}Artist"));
         assert!(!placeholder(Field::Album, "[non album tracks]"));
+    }
+
+    #[test]
+    fn a_placeholder_is_one_in_any_brackets_around_it_all() {
+        for value in [
+            "{unknown}",
+            "(Unknown)",
+            "<unknown>",
+            "（unknown）",
+            "{ unknown }",
+        ] {
+            assert!(placeholder(Field::Genre, value), "{value}");
+        }
+        assert!(placeholder(Field::Label, "(no label)"));
+        assert!(
+            !placeholder(Field::Title, "(Unknown) Shore"),
+            "a title of its own"
+        );
+        assert!(!placeholder(Field::Title, "(unknown) (live)"));
+        assert!(!placeholder(Field::Label, "{no label"));
     }
 
     #[test]

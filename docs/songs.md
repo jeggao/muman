@@ -82,9 +82,11 @@ quietly matches nothing, or every song when negated.
   over, choose among or clear. You choose a pin among the song's
   sources, each shown with what was measured of it, and type the lyrics
   offset as a time; "Another tag…" names any other field. For songs all
-  on one album, you can set an album field, such as the genre or date,
+  on one album added whole, an [`[[album]]`](guide.md#the-song-list) in
+  the song list, you can set an album field, such as the genre or date,
   on the album itself, for its songs and any added later, which clears
-  each song's own. Nothing is saved until "Review and save", which says
+  each song's own; songs that only share an album name have no table to
+  hold it, so the field is set on each. Nothing is saved until "Review and save", which says
   each change and asks. A choice that leaves the songs as they are, as
   an empty offset left empty, is no change: it is neither marked nor
   counted, and a field set on the album counts once.
@@ -112,7 +114,10 @@ quietly matches nothing, or every song when negated.
 - **`restore`** lists removed songs again, fetching any source purged.
   It refuses until you take back from the trash the files of yours that
   `--purge` moved there, a song's `.lrc` and pictures with it, and
-  names each, as its `[[removed]]` entry keeps them.
+  names each, as its `[[removed]]` entry keeps them. A song file put
+  back in another folder of `sources/manual` is followed there, and its
+  `.lrc` and pictures are looked for beside it, where they serve it;
+  `undo` of the purge looks for them alike.
 - **`undo`** puts the song list and the library back as before the last
   run that changed them, one run further back each time.
 
@@ -173,7 +178,7 @@ can put back, and asks by name, as "Remove 2 songs?":
 every song it names. `edit` needs a terminal for its editor and takes
 no `-y`. A question waiting for your answer holds no other run back,
 and a song changed meanwhile, by hand or by another run, refuses
-the save of `remove`, `restore` or `set NAME=VALUE`. `edit` opens again
+the save of `remove`, `restore` or `set NAME=VALUE`, with exit code 5. `edit` opens again
 on the songs as they are now, naming each field the change set, with
 your edits over them: a field you changed stays as you made it, any
 other shows the change. Save again to apply your edits, or quit
@@ -207,7 +212,10 @@ muman matches each file by the strongest evidence it shows:
 
 1. An ID it shares with the song: a video ID in its name, an ISRC or a
    MusicBrainz recording ID.
-1. Its name, as the song's file is named.
+1. Its name, as the song's file is named. A name names the song file
+   in its own folder first, and a cue sheet's `FILE "01.flac"` the
+   `01.flac` beside the cue sheet, so the cue sheets of `CD1` and `CD2`
+   each go to their own disc's songs.
 1. Its fields: an `.lrc`'s `[ti:]`, `[ar:]`, `[al:]` and `[length:]`,
    a tag file's, or its own name read as `03 - Artist - Title`,
    `Artist - Title` or `Title`.

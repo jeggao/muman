@@ -284,6 +284,76 @@ pub struct Removed {
     pub trashed: Vec<SourceKey>,
 }
 
+/// `moved`, with each of a removed song's `trashed` files that went to
+/// the trash beside a song file `moved` follows following it: an `.lrc`
+/// or picture named as the song file is, renamed as the file it is
+/// named after is, and a picture named as none, the folder's, by its own
+/// name, into the folder that file went to. A sidecar serves its song
+/// only beside it, so beside it is where `restore` and `undo` wait for
+/// it. One named as more than one song file, or a folder's picture whose
+/// song files did not all go to one folder, is left where it was.
+#[must_use]
+pub fn moved_with(
+    sources: &[SourceKey],
+    trashed: &[SourceKey],
+    moved: &BTreeMap<SourceKey, SourceKey>,
+) -> BTreeMap<SourceKey, SourceKey> {
+    let manual = |k: &SourceKey| match k {
+        SourceKey::Manual(m) => Some(m.path().to_path_buf()),
+        _ => None,
+    };
+    let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
+    let to_of = |k: &SourceKey| moved.get(k).and_then(manual);
+    let mut out = moved.clone();
+    for key in trashed.iter().filter(|k| !moved.contains_key(k)) {
+        let Some(file) = manual(key) else { continue };
+        let (Some(name), Some(folder)) = (file.file_name(), file.parent()) else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        let lower = name.to_lowercase();
+        let beside: Vec<(&SourceKey, PathBuf)> = (sources.iter())
+            .filter(|k| *k != key)
+            .filter_map(|k| Some((k, manual(k)?)))
+            .filter(|(_, p)| p.parent() == Some(folder))
+            .collect();
+        let named_as: BTreeSet<&SourceKey> = (beside.iter())
+            .filter(|(_, p)| stem(p).is_some_and(|s| lower.starts_with(&format!("{s}."))))
+            .map(|(k, _)| *k)
+            .collect();
+        let to = if named_as.is_empty() {
+            if crate::store::kind_of(&file) != Some(crate::store::Kind::Image) {
+                continue;
+            }
+            // A folder's picture, which every song file there must go with.
+            let gone: BTreeSet<Option<PathBuf>> = (beside.iter())
+                .map(|(k, _)| to_of(k).and_then(|t| t.parent().map(Path::to_path_buf)))
+                .collect();
+            match gone.into_iter().collect::<Vec<_>>().as_slice() {
+                [Some(to)] => to.join(name.as_ref()),
+                _ => continue,
+            }
+        } else {
+            let [one] = named_as.into_iter().collect::<Vec<_>>()[..] else {
+                continue;
+            };
+            let (Some(old), Some(to)) = (manual(one), to_of(one)) else {
+                continue;
+            };
+            let (Some(old), Some(new)) = (old.file_stem(), to.file_stem()) else {
+                continue;
+            };
+            let rest: String = name
+                .chars()
+                .skip(old.to_string_lossy().chars().count())
+                .collect();
+            to.with_file_name(format!("{}{rest}", new.to_string_lossy()))
+        };
+        out.insert(key.clone(), SourceKey::Manual(to.into()));
+    }
+    out
+}
+
 /// `held` with each key `moved` names under the key it names.
 fn rekeyed<T>(
     held: BTreeMap<SourceKey, T>,
@@ -726,6 +796,11 @@ impl Manifest {
     /// wherever a song, an album or a removed song names it, here alone;
     /// [`Edit::Moved`] writes it in the file.
     pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
+        let mut with = moved.clone();
+        for removed in &self.removed {
+            with.extend(moved_with(&removed.sources, &removed.trashed, moved));
+        }
+        let moved = &with;
         for song in &mut self.songs {
             song.rekey(moved);
         }
@@ -1882,7 +1957,15 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             respell(doc, &|k| (k == from).then(|| to.clone()));
         }
         Edit::Moved(moved) => {
-            let moved: BTreeMap<String, String> = (moved.iter())
+            let mut with = moved.clone();
+            for t in tables(doc, "removed") {
+                let sources: Vec<SourceKey> = (listed_keys(t).iter())
+                    .filter_map(|k| SourceKey::parse(k).ok())
+                    .collect();
+                let trashed = trashed_of(t, "").unwrap_or_default();
+                with.extend(moved_with(&sources, &trashed, moved));
+            }
+            let moved: BTreeMap<String, String> = (with.iter())
                 .map(|(from, to)| (from.to_string(), to.to_string()))
                 .collect();
             respell(doc, &|k| moved.get(k).cloned());
