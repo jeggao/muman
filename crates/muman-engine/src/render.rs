@@ -231,9 +231,11 @@ impl Staged {
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(anyhow!(
                 "{} is not muman's, and is in the way of writing it; move it aside",
-                crate::relpath::show(part.strip_prefix(library).unwrap_or(part))
+                crate::library::shown(library, part)
             )),
-            Err(e) => Err(e).with_context(|| format!("creating {}", part.display())),
+            Err(e) => {
+                Err(e).with_context(|| format!("creating {}", crate::library::shown(library, part)))
+            }
         }
     }
 
@@ -329,7 +331,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         .collect();
     let audio_path = job.library.join(&audio_rel);
     let dir = audio_path.parent().unwrap_or(job.library);
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating {}", crate::library::shown(job.library, dir)))?;
     let audio_part = part(&audio_path);
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
     fs::create_dir_all(job.scratch)?;
@@ -414,7 +417,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             return Err(anyhow!("{e}"));
         }
         if made.audio.format.codec().container() == Container::Flac {
-            state_samples(&audio_part, &mut problems)?;
+            state_samples(job.library, &audio_part, &mut problems)?;
         }
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
@@ -451,7 +454,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         // A cover the tags cannot hold costs the song only its cover.
         let write = |picture| {
             write_tags(
-                &audio_part,
+                (job.library, &audio_part),
                 made.audio.format,
                 &tags,
                 made.tags.language,
@@ -466,7 +469,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             problems.push(format!("no cover: {e:#}"));
             write(None)?;
         }
-        set_opus_header(&audio_part, made.tags.opus_header)?;
+        set_opus_header(job.library, &audio_part, made.tags.opus_header)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
         let mut held = match text {
             Some(text) => lyrics::contents(made, &text),
@@ -534,7 +537,7 @@ fn stage_beside(
             continue;
         }
         std::io::Write::write_all(&mut staging.stage(job.library, part)?, content)
-            .with_context(|| format!("writing {}", part.display()))?;
+            .with_context(|| format!("writing {}", crate::library::shown(job.library, part)))?;
         staged.push(rel.clone());
     }
     Ok(staged)
@@ -671,18 +674,19 @@ pub(crate) fn retag<R: Runner>(
     let staged = part(&path);
     // Into a new file, as a song written anew is: a copy would carry over
     // a read-only mode and refuse the tags.
+    let shown = crate::relpath::show(audio);
     let mut staging = Staged::default();
     let mut into = staging.stage(library, &staged)?;
     std::io::copy(
-        &mut fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?,
+        &mut fs::File::open(&path).with_context(|| format!("opening {shown}"))?,
         &mut into,
     )
-    .with_context(|| format!("copying {}", path.display()))?;
+    .with_context(|| format!("copying {shown}"))?;
     drop(into);
     let result = (|| -> Result<Vec<String>> {
         // The copy is the file byte for byte, and a `.part` names no format.
         let held = crate::tags::read_tagged(&path)
-            .with_context(|| format!("reading the tags of {}", path.display()))?;
+            .with_context(|| format!("reading the tags of {shown}"))?;
         let tag = held.primary_tag();
         let picture = tag
             .and_then(|t| {
@@ -707,14 +711,14 @@ pub(crate) fn retag<R: Runner>(
         }
         let covered = picture.is_some();
         write_tags(
-            &staged,
+            (library, &staged),
             made.audio.format,
             &tags,
             made.tags.language,
             picture,
             made.tags.chapters,
         )?;
-        set_opus_header(&staged, made.tags.opus_header)?;
+        set_opus_header(library, &staged, made.tags.opus_header)?;
         Ok(verify(&staged, &tags, covered))
     })();
     let verified = result?;
@@ -825,34 +829,36 @@ fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<Str
     problems
 }
 
-/// The `gain` an Opus header holds, set in `path` once its tags are
-/// written, as [`crate::ogg`] sets it.
+/// The `gain` an Opus header holds, set in `path`, in the library `root`,
+/// once its tags are written, as [`crate::ogg`] sets it.
 // Sets the gain of a staged file's Opus header in place.
 #[expect(clippy::disallowed_methods)]
-fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
+fn set_opus_header(root: &Path, path: &Path, gain: Option<i16>) -> Result<()> {
     let Some(gain) = gain else {
         return Ok(());
     };
+    let shown = || crate::library::shown(root, path);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {}", shown()))?;
     crate::ogg::set_output_gain(&mut file, gain)
-        .with_context(|| format!("setting the gain of {}", path.display()))
+        .with_context(|| format!("setting the gain of {}", shown()))
 }
 
-/// The sample count of the FLAC at `path` stated where its STREAMINFO
-/// states none, as a stream copied from a pipe's FLAC or an Ogg FLAC
-/// does ([`crate::flac`]); one that cannot be counted is said.
+/// The sample count of the FLAC at `path`, in the library `root`, stated
+/// where its STREAMINFO states none, as a stream copied from a pipe's
+/// FLAC or an Ogg FLAC does ([`crate::flac`]); one that cannot be counted
+/// is said.
 // Sets the count in a staged file's STREAMINFO in place.
 #[expect(clippy::disallowed_methods)]
-fn state_samples(path: &Path, problems: &mut Vec<String>) -> Result<()> {
+fn state_samples(root: &Path, path: &Path, problems: &mut Vec<String>) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {}", crate::library::shown(root, path)))?;
     if let Err(e) = crate::flac::state_samples(&mut file) {
         problems.push(format!("no length stated in the file: {e:#}"));
     }
@@ -881,7 +887,8 @@ pub fn place(
     let copy_in = |rel: &Path| -> Result<()> {
         let to = library.join(rel);
         if let Some(dir) = to.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            fs::create_dir_all(dir)
+                .with_context(|| format!("creating {}", crate::library::shown(library, dir)))?;
         }
         let staged = part(&to);
         let mut staging = Staged::default();
@@ -893,7 +900,7 @@ pub fn place(
                 Ok(())
             })
             .and_then(|()| crate::library::put(library, &staged, rel, claim))
-            .with_context(|| format!("copying {} into the library", rel.display()))?;
+            .with_context(|| format!("copying {} into the library", crate::relpath::show(rel)))?;
         staging.placed();
         Ok(())
     };
@@ -1035,41 +1042,43 @@ const FFMPEG_VENDOR: &str = "ffmpeg";
 /// cover and the chapters, keeping the encoder's vendor string and a
 /// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
 /// `lyrics` is the ISO 639-2 code of the language the `LYRICS` tag is in.
+/// The file is at `path` in the library `root`.
 // Writes a staged file's tags in place.
 #[expect(clippy::disallowed_methods)]
 fn write_tags(
-    path: &Path,
+    (root, path): (&Path, &Path),
     format: Format,
     tags: &[(String, Vec<String>)],
     lyrics: Option<&str>,
     picture: Option<Picture>,
     chapters: &[Chapter],
 ) -> Result<()> {
+    let shown = crate::library::shown(root, path);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {shown}"))?;
     let codec = format.codec();
     if codec.container() == Container::Mp4 {
         drop_meta_atoms(&mut file, &[*b"ilst", *b"free"])
             .and_then(|()| file.rewind())
-            .with_context(|| format!("writing tags to {}", path.display()))?;
+            .with_context(|| format!("writing tags to {shown}"))?;
     }
-    crate::errors::caught(|| save_tags(&mut file, path, codec, tags, lyrics, picture, chapters))
-        .with_context(|| format!("writing tags to {}", path.display()))?;
+    crate::errors::caught(|| save_tags(&mut file, &shown, codec, tags, lyrics, picture, chapters))
+        .with_context(|| format!("writing tags to {shown}"))?;
     if codec.container() == Container::Mp4 {
         drop_meta_atoms(&mut file, &[*b"free"])
-            .with_context(|| format!("writing tags to {}", path.display()))?;
+            .with_context(|| format!("writing tags to {shown}"))?;
     }
     Ok(())
 }
 
-/// [`write_tags`]'s tags written into `file` at `path` by the container's
-/// own writer.
+/// [`write_tags`]'s tags written into `file`, named `shown`, by the
+/// container's own writer.
 fn save_tags(
     file: &mut fs::File,
-    path: &Path,
+    shown: &str,
     codec: Codec,
     tags: &[(String, Vec<String>)],
     lyrics: Option<&str>,
@@ -1078,9 +1087,9 @@ fn save_tags(
 ) -> Result<()> {
     let written = match codec.container() {
         Container::Flac => {
-            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            let comments = vorbis_comments(file, shown, codec, tags, picture, chapters)?;
             if write_flac_blocks(file, &comments)
-                .with_context(|| format!("writing tags to {}", path.display()))?
+                .with_context(|| format!("writing tags to {shown}"))?
             {
                 return Ok(());
             }
@@ -1088,7 +1097,7 @@ fn save_tags(
             comments.save_to(file, WriteOptions::default())
         }
         Container::Ogg => {
-            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            let comments = vorbis_comments(file, shown, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(file, WriteOptions::default().preferred_padding(0))
         }
@@ -1098,7 +1107,7 @@ fn save_tags(
         Container::Mp4 => ilst_of(tags, picture).save_to(file, WriteOptions::default()),
         Container::WavPack => ape_tag(tags, picture).save_to(file, WriteOptions::default()),
     };
-    written.with_context(|| format!("writing tags to {}", path.display()))
+    written.with_context(|| format!("writing tags to {shown}"))
 }
 
 /// Remove the atoms of each of `kinds` in an MP4's `moov.udta.meta`.
@@ -1336,7 +1345,7 @@ const CHANNEL_MASK: &str = "WAVEFORMATEXTENSIBLE_CHANNEL_MASK";
 
 fn vorbis_comments(
     file: &mut fs::File,
-    path: &Path,
+    shown: &str,
     codec: Codec,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
@@ -1345,7 +1354,7 @@ fn vorbis_comments(
     // The vendor string is all that is read: the audio's properties are
     // not, as lofty refuses an Opus stream of mapping family 255 for them.
     let options = ParseOptions::new().read_properties(false);
-    let reading = || format!("reading {} as {codec}", path.display());
+    let reading = || format!("reading {shown} as {codec}");
     let (vendor, mask) = match codec {
         Codec::Opus => (
             OpusFile::read_from(file, options)

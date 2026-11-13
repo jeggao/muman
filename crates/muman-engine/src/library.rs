@@ -274,12 +274,31 @@ pub fn half_written(e: anyhow::Error, changed: bool) -> anyhow::Error {
 pub fn put(root: &Path, staged: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
     let plain = std::fs::symlink_metadata(staged).is_ok_and(|m| m.file_type().is_file());
     if !plain {
-        return Err(anyhow!("{} is not the file muman staged", staged.display()));
+        return Err(anyhow!(
+            "{} is not the file muman staged",
+            shown(root, staged)
+        ));
     }
     held(root, rel, claim)?;
-    let to = root.join(rel);
-    crate::atomic::rename(staged, &to)
-        .with_context(|| format!("renaming {} → {}", staged.display(), to.display()))
+    crate::atomic::rename(staged, &root.join(rel)).with_context(|| {
+        format!(
+            "renaming {} → {}",
+            shown(root, staged),
+            crate::relpath::show(rel)
+        )
+    })
+}
+
+/// `file`, in the library `root`, named as every message names a library
+/// file, from the root with `/` ([`crate::relpath::show`]); one outside
+/// it, a scratch file, as the platform writes it.
+#[must_use]
+pub fn shown(root: &Path, file: &Path) -> String {
+    let Ok(rel) = file.strip_prefix(root) else {
+        let scratch = file;
+        return scratch.display().to_string();
+    };
+    crate::relpath::show(rel)
 }
 
 /// Remove `rel` from the library `root` if a file is there, as `claim`
@@ -288,10 +307,9 @@ pub fn put(root: &Path, staged: &Path, rel: &Path, claim: &[Owned]) -> Result<()
 #[expect(clippy::disallowed_methods)]
 pub fn clear(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
     held(root, rel, claim)?;
-    let path = root.join(rel);
-    match crate::atomic::remove(&path) {
+    match crate::atomic::remove(&root.join(rel)) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        r => r.with_context(|| format!("removing {}", path.display())),
+        r => r.with_context(|| format!("removing {}", crate::relpath::show(rel))),
     }
 }
 
@@ -368,25 +386,30 @@ impl Relocation {
 // Renames a library file, the ledger's own change.
 #[expect(clippy::disallowed_methods)]
 fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
-    let (from, to) = (library.join(from), library.join(to));
     if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::create_dir_all(library.join(dir))
+            .with_context(|| format!("creating {}", crate::relpath::show(dir)))?;
     }
     let step = |a: &Path, b: &Path| {
-        crate::atomic::rename(a, b)
-            .with_context(|| format!("moving {} to {}", a.display(), b.display()))
-    };
-    if crate::relpath::folded(&from) == crate::relpath::folded(&to) {
-        let temp = named(&to, MOVING);
-        step(&from, &temp)?;
-        step(&temp, &to).inspect_err(|_| {
-            let _ = crate::atomic::rename(&temp, &from);
+        crate::atomic::rename(&library.join(a), &library.join(b)).with_context(|| {
+            format!(
+                "moving {} to {}",
+                crate::relpath::show(a),
+                crate::relpath::show(b)
+            )
         })
-    } else if to.exists() {
+    };
+    if crate::relpath::folded(&library.join(from)) == crate::relpath::folded(&library.join(to)) {
+        let temp = named(to, MOVING);
+        step(from, &temp)?;
+        step(&temp, to).inspect_err(|_| {
+            let _ = crate::atomic::rename(&library.join(&temp), &library.join(from));
+        })
+    } else if library.join(to).exists() {
         // Left by a move before it that failed.
-        Err(anyhow!("{} is taken", to.display()))
+        Err(anyhow!("{} is taken", crate::relpath::show(to)))
     } else {
-        step(&from, &to)
+        step(from, to)
     }
 }
 
@@ -688,7 +711,27 @@ mod tests {
             beside: vec![("A/x.lrc".into(), "B/x.lrc".into())],
         }];
         let done = ledger.relocate(&moves, &mut Vec::new()).unwrap();
-        assert!(done[0].is_err());
+        let Err(e) = &done[0] else {
+            panic!("moved onto a file taken");
+        };
+        assert_eq!(format!("{e:#}"), "B/x.lrc is taken");
         assert!(root.join("A/x.opus").exists() && !root.join("B/x.opus").exists());
+    }
+
+    #[test]
+    fn a_library_file_is_named_in_an_error_from_the_root_with_slashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let staged = root.join("A").join("x.opus.part");
+        let e = put(root, &staged, Path::new("A/x.opus"), &[]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "A/x.opus.part is not the file muman staged"
+        );
+        let e = move_file(root, Path::new("A/y.opus"), Path::new("B/y.opus")).unwrap_err();
+        assert!(
+            format!("{e:#}").starts_with("moving A/y.opus to B/y.opus: "),
+            "{e:#}"
+        );
     }
 }

@@ -69,22 +69,23 @@ its own. Anything else in the library folder stays as it is:
 
 - A file of yours at a song's path, or where a file beside the song
   goes, holds that song back until `sync --force`.
-- A file muman wrote that you changed since, as a tagger changes a
-  song or an editor its `.lrc`, stays with a warning, and yours once its
-  song goes. A new path template still moves it, your change with it,
-  but a change to the song leaves it alone: a song whose `.lrc` you
-  changed keeps its old name when retitled, and a folder's cover you
-  changed stays when any of its songs moves to another folder.
-  `sync --force` writes it again, and `undo` brings your change back.
+- A file muman wrote that you changed since, as a tagger changes a song
+  or an editor its `.lrc`, stays with a warning, and yours once its song
+  goes. A new path template still moves it, your change with it, but a
+  change to the song leaves it alone: a song whose `.lrc` you changed
+  keeps its old name when retitled, and a folder's cover you changed
+  stays when any of its songs moves to another folder. `sync --force`
+  writes it again, or removes one its song no longer has, as a `.lrc`
+  once lyrics are off, and `undo` brings your change back.
 - muman knows its files by their size and modification time, else by
   their bytes, so a restored backup or a copy without its times is
   still muman's. A file whose bytes changed under the same size and
   time, as some taggers leave one, is caught as muman is about to
   write over it or remove it.
 
-muman writes every file as its name and `.part`, renamed into place so
-a player never sees half a track; a file of yours so named stays.
-Library paths in messages use `/` on every system.
+muman writes every file as its name and `.part`, renamed into place so a
+player never sees half a track; a file of yours so named stays. Messages
+name a library file from the library folder, with `/` on every system.
 
 ### Progress and output
 
@@ -245,13 +246,12 @@ know, CRLF line endings and a byte-order mark survive every write, and
 two runs at once keep each other's songs. Each write fills in the common
 `tags.<name>` keys a song lacks, empty, so you can see what to set.
 
-These stop a run before anything is written: a key that does not
-parse, a file two songs list, and a pin to a source the song does not
-list. muman writes each song list in the oldest format that holds its
-songs, and an older muman refuses a newer format rather than misread
-it. Songs sharing a lookup's record need `version = 2`, songs sharing a
-picture of yours `version = 3`, and a song listing a torrent's file
-`version = 4`.
+These stop a run before anything is written: a key that does not parse,
+a file two songs list, and a pin to a source the song does not list.
+muman writes each song list in the oldest format that holds its songs,
+and an older muman refuses a newer format rather than misread it. Songs
+sharing a lookup's record need `version = 2`, songs sharing a picture of
+yours `version = 3`, and a song listing a torrent's file `version = 4`.
 
 ### Removed songs
 

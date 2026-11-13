@@ -29,6 +29,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `<song>.lrc.part` of yours, where it failed with exit 4, `--force` too.
 - **"The library moved" counts files**, a song's and those beside it,
   where it counted songs as files.
+- **A song moving into a folder whose cover holder leaves is moved**,
+  carrying its own folder cover, as `status` says, where the sync found
+  the cover's place taken, said "Could not move" and wrote the song
+  again from its source.
+- **`remove` lists what its sync does with a folder cover**: one the
+  next song of its folder takes is neither said deleted nor counted, and
+  that song's sync no longer says it added a cover that was there. A
+  file you changed of a song that leaves is listed alone, not with the
+  untouched files beside it.
+- **`sync --force` keeps a changed file of a removed song that shared
+  only a picture with a listed one**: it stays yours, as it does without
+  the picture, where the forced sync deleted it, its `.lrc` too.
+- **`check` and the sync say `sync --force` removes a file you changed
+  that the song no longer has**, as a `.lrc` of a song set to take no
+  lyrics, where they said it writes it again or over it.
+- **A failed move, write or undo names library files from the library
+  folder, with `/`**, as every other message does, where it gave their
+  full paths in the system's form.
 - **A song half written stays muman's**: when its file cannot be
   replaced after its `.lrc` was, as a file a player holds open on
   Windows, the song is said half written and the next sync writes it

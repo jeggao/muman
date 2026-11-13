@@ -16,13 +16,15 @@
 //! not be enough to put it there.
 //!
 //! What `remove` says of the library files it deletes and leaves is what
-//! the sync after it decides ([`crate::reconcile::leaving`]): a file
-//! beside a song that the user changed since muman wrote it is left in
-//! place, said so and not counted, as the sync leaves it.
+//! the sync after it decides ([`crate::reconcile::pruned`]), of the songs
+//! planned as the list is without the songs it removes: a file beside a
+//! song that the user changed since muman wrote it is left in place, said
+//! so and not counted, as the sync leaves it, and a folder's file the next
+//! song of its folder takes is not said at all.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::ui::Prompter;
 use anyhow::{Context, Result, bail};
@@ -307,12 +309,12 @@ pub fn remove<W: Write>(
     // `[[removed]]` so `restore` waits for every one of them.
     let mut trashed: Vec<Vec<SourceKey>> = Vec::new();
     let mut deleted = 0;
-    let leaving = Leaving::of(dirs, &read.state, picked.iter().map(|n| &read.views[*n]));
+    let leaving = Leaving::of(dirs, &mut read, &picked)?;
     for n in &picked {
         let mut own_trashed = Vec::new();
         let view = &read.views[*n];
         crate::ui::line(out, &format!("  − {}", named(view)))?;
-        deleted += leaving.say(dirs, &read.state, view, out)?;
+        deleted += leaving.say(&read.state, view, out)?;
         if purge {
             // A record another song still lists stays for that song.
             let shared = |k: &SourceKey| {
@@ -380,27 +382,59 @@ pub fn remove<W: Write>(
 }
 
 /// What the sync after `remove` does with each library file of the songs
-/// it removes, as it decides it ([`crate::reconcile::leaving`]).
+/// it removes, as it decides it ([`crate::reconcile::pruned`]).
 struct Leaving(BTreeMap<PathBuf, Pruned>);
 
 impl Leaving {
-    fn of<'a>(dirs: &Dirs, state: &State, views: impl Iterator<Item = &'a View>) -> Self {
-        let paths: BTreeSet<PathBuf> = views.flat_map(|v| files_of(state, v)).collect();
-        let fates = crate::reconcile::leaving(&dirs.library, &state.outputs, &paths);
-        Self(fates.into_iter().collect())
+    /// What the sync after the songs at `picked` leave `read`'s list
+    /// decides of their files: of the songs planned as the list is
+    /// without them, as a folder's file the next song of its folder
+    /// takes. A list whose settings the sync refuses removes nothing.
+    fn of(dirs: &Dirs, read: &mut Read, picked: &[usize]) -> Result<Self> {
+        let paths: BTreeSet<PathBuf> = (picked.iter())
+            .flat_map(|n| files_of(&read.state, &read.views[*n]))
+            .collect();
+        let listed = std::mem::take(&mut read.manifest.songs);
+        read.manifest.songs = (listed.iter().enumerate())
+            .filter(|(n, _)| !picked.contains(n))
+            .map(|(_, song)| song.clone())
+            .collect();
+        let (library, state) = (&dirs.library, &read.state);
+        let fates = match crate::reconcile::plan(
+            &read.manifest,
+            state,
+            library,
+            None,
+            &mut std::io::sink(),
+        ) {
+            Ok((mut planned, failed)) => {
+                crate::limit::as_written(&read.manifest, state, &mut planned);
+                crate::reconcile::pruned(&read.manifest, state, (&planned, &failed), library)
+            }
+            Err(e) if e.downcast_ref::<crate::errors::Refused>().is_some() => Vec::new(),
+            Err(e) => {
+                read.manifest.songs = listed;
+                return Err(e);
+            }
+        };
+        read.manifest.songs = listed;
+        Ok(Self(
+            (fates.into_iter())
+                .filter(|(path, _)| paths.contains(path))
+                .collect(),
+        ))
     }
 
     /// Say what becomes of each file of `view`'s song; how many go.
-    fn say<W: Write>(&self, dirs: &Dirs, state: &State, view: &View, out: &mut W) -> Result<usize> {
-        let there = |file: &&Path| std::fs::symlink_metadata(dirs.library.join(file)).is_ok();
+    fn say<W: Write>(&self, state: &State, view: &View, out: &mut W) -> Result<usize> {
         let mut deleted = 0;
         for path in files_of(state, view) {
             let Some(fate) = self.0.get(&path) else {
                 continue;
             };
-            let left: Vec<&Path> = match fate {
-                Pruned::LeftChanged => std::iter::once(path.as_path()).filter(there).collect(),
-                _ => fate.left().iter().map(PathBuf::as_path).collect(),
+            let left: &[PathBuf] = match fate {
+                Pruned::LeftChanged => std::slice::from_ref(&path),
+                _ => fate.left(),
             };
             for file in fate.gone() {
                 deleted += 1;

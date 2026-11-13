@@ -414,6 +414,42 @@ fn lyrics_taken_off_a_song_are_said_removed() {
 }
 
 #[test]
+fn a_changed_lrc_of_a_song_taking_no_lyrics_is_said_removed_by_force() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let lrc = "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc";
+    std::fs::write(h.lib(lrc), "[00:09.00]my own line\n").unwrap();
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nlyrics = false\n");
+    let said = crate::diagnose::diagnose(&h.dirs).unwrap().said;
+    let forced = format!("{lrc} (`sync --force` removes it)");
+    assert!(
+        (said.iter())
+            .any(|s| matches!(s, crate::diagnose::Said::Problem(l) if l.ends_with(&forced))),
+        "{said:?}"
+    );
+    let (_, text) = h.run(&fake, Options::default());
+    let text = crate::ui::plain(&text);
+    assert!(
+        text.contains(&format!(
+            "{lrc} changed since muman wrote it (`sync --force` removes it)"
+        )),
+        "{text}"
+    );
+    assert!(h.lib(lrc).exists(), "{text}");
+    let force = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&fake, force);
+    assert!(ok, "{text}");
+    assert!(text.contains(&format!("Removed: {lrc}")), "{text}");
+    assert!(!h.lib(lrc).exists(), "{text}");
+}
+
+#[test]
 fn lyrics_taken_off_a_song_whose_file_holds_none_name_its_lrc_alone() {
     let h = home();
     listing(&h, "", &["a"]);
@@ -2150,6 +2186,112 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
             }
         )]
     );
+}
+
+#[test]
+fn a_forced_sync_leaves_a_changed_file_whose_song_shared_only_a_picture() {
+    let h = home();
+    std::fs::create_dir_all(h.lib("A")).unwrap();
+    for file in ["A/kite.opus", "A/kite.lrc", "A/tide.opus"] {
+        std::fs::write(h.lib(file), "audio").unwrap();
+    }
+    let key = |k: &str| SourceKey::parse(k).unwrap();
+    // A stamp no file has: the file reads as changed since written.
+    let written = |own: &str, stamp: &str| Written {
+        sources: vec![key(own), key("manual:added/cover.jpg")],
+        sidecars: Vec::new(),
+        plan: None,
+        stamp: Some(stamp.to_string()),
+        digest: None,
+    };
+    let old = BTreeMap::from([
+        (
+            PathBuf::from("A/kite.opus"),
+            written("manual:kite.flac", "0 0"),
+        ),
+        (
+            PathBuf::from("A/tide.opus"),
+            written("manual:tide.flac", "0 0"),
+        ),
+    ]);
+    let mut now = BTreeMap::from([(
+        PathBuf::from("A/tide.opus"),
+        written("manual:tide.flac", "0 0"),
+    )]);
+    let forced = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new(), true);
+    assert_eq!(
+        forced,
+        [(PathBuf::from("A/kite.opus"), Pruned::LeftChanged)]
+    );
+    // Its own source written elsewhere, the song's file it changed goes.
+    now.insert(
+        PathBuf::from("B/kite.opus"),
+        written("manual:kite.flac", "0 0"),
+    );
+    let forced = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new(), true);
+    assert!(
+        matches!(&forced[..], [(_, Pruned::Removed { gone, .. })] if gone == &[PathBuf::from("A/kite.opus")]),
+        "{forced:?}"
+    );
+}
+
+#[test]
+fn a_song_moving_into_a_folder_whose_cover_holder_leaves_carries_its_own_cover() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    listing(&h, folder, &["a", "b", "c"]);
+    let fake = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("b.flac", &tagged_flac("Tide", 2, "Record", false))
+        .probe("c.flac", &tagged_flac("Moth", 1, "Other", false));
+    assert!(h.run(&fake, Options::default()).0);
+    assert!(h.lib("Artist/Record/cover.jpg").exists());
+    assert!(h.lib("Artist/Other/cover.jpg").exists());
+    // The song holding Record's cover leaves, and Other's only song takes its place.
+    h.songs(&format!(
+        "{folder}[[song]]\nsources = [\"manual:b.flac\"]\n\
+         [[song]]\nsources = [\"manual:c.flac\"]\n\
+         tags = {{ title = \"Kite\", track = \"1\", album = \"Record\" }}\n"
+    ));
+    let said = h.status(&fake, &[], false);
+    let before = fake.calls().len();
+    let (ok, done) = h.run(&fake, Options::default());
+    assert!(ok, "{done}");
+    let done = crate::ui::plain(&done);
+    assert!(
+        said.contains("Would move: Artist/Other/01 Moth.flac → Artist/Record/01 Kite.flac"),
+        "{said}"
+    );
+    assert!(
+        done.contains("Moved: Artist/Other/01 Moth.flac → Artist/Record/01 Kite.flac"),
+        "{done}"
+    );
+    assert!(!done.contains("Could not move"), "{done}");
+    assert!(
+        !done.contains("Added: "),
+        "moved, not written again: {done}"
+    );
+    let lines = |text: &str, lead: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| Some(l.split_once(lead)?.1.trim().to_string()))
+            .collect()
+    };
+    assert_eq!(
+        lines(&said, "Would move: "),
+        lines(&done, "Moved: "),
+        "{said}\n{done}"
+    );
+    assert_eq!(
+        lines(&said, "Would remove: "),
+        lines(&done, "Removed: "),
+        "{said}\n{done}"
+    );
+    assert!(
+        !(fake.calls()[before..].iter()).any(|c| c.iter().any(|a| a.ends_with("c.flac"))),
+        "the song moved is read from no source: {done}"
+    );
+    assert!(!h.lib("Artist/Other").exists(), "{done}");
+    h.audit(&[], &done);
 }
 
 #[test]

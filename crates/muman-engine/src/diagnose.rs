@@ -10,12 +10,14 @@
 //!
 //! A file the state records is said as the next sync takes it: one a
 //! listed song has ([`crate::reconcile::files_of`]) missing, empty or
-//! changed is that song's to write again, and one no listed song has is
-//! judged as pruning judges it ([`crate::reconcile::leaving`]), let go of
+//! changed is that song's to write again, or, changed, for `sync --force`
+//! to write again or remove as its plan has it or not
+//! ([`crate::reconcile::Forced`]); and one no listed song has is said as
+//! the sync's intent prunes it ([`crate::reconcile::pruned`]), let go of
 //! when gone and left in place, the user's, when changed, neither a
 //! problem.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -126,14 +128,41 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         )?;
     }
 
+    // Each song as a sync would resolve it, from the sources it reads: one
+    // whose source is missing, which `sync` fetches again, waits, and one
+    // whose source reads as none is held.
+    let listed = manifest.keys();
+    let (on_disk, waiting): (BTreeSet<SourceKey>, BTreeSet<SourceKey>) =
+        listed.iter().cloned().partition(|k| store.has(k));
+    let on_disk = on_disk
+        .into_iter()
+        .filter(|k| !crate::reconcile::unread(&state, &store, k))
+        .collect();
+    let resolution = crate::reconcile::resolve_songs(
+        &manifest,
+        &manifest.settings,
+        &state,
+        library,
+        (Some(&on_disk), &waiting),
+        (false, false),
+    );
+    let planned = resolution.as_ref().map_or(&[][..], |r| &r.planned);
+    let mut failed = waiting.clone();
+    for (n, _) in resolution.iter().flat_map(|r| &r.unresolved) {
+        failed.extend(
+            (manifest.songs[*n].sources.iter())
+                .filter(|k| !crate::manifest::shareable(k))
+                .cloned(),
+        );
+    }
+
     let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
     let songs = crate::reconcile::files_of(0..manifest.songs.len(), &manifest, &state.outputs);
-    let kept: BTreeSet<&PathBuf> = songs.values().collect();
-    let unkept: BTreeSet<PathBuf> = (state.outputs.keys())
-        .filter(|p| !kept.contains(p))
-        .cloned()
-        .collect();
-    for (path, fate) in crate::reconcile::leaving(library, &state.outputs, &unkept) {
+    let kept: BTreeMap<&PathBuf, usize> = songs.iter().map(|(n, p)| (p, *n)).collect();
+    let plans: BTreeMap<usize, &crate::resolve::Resolved> =
+        planned.iter().map(|(n, r)| (*n, r)).collect();
+    let pruned = crate::reconcile::pruned(&manifest, &state, (planned, &failed), library);
+    for (path, fate) in pruned.into_iter().filter(|(p, _)| !kept.contains_key(p)) {
         if busy {
             continue;
         }
@@ -152,12 +181,13 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             ))?;
         }
     }
+    let forcing = crate::reconcile::Forced::of(planned);
     for (path, written) in &state.outputs {
         owned.insert(path.clone());
         owned.extend(written.sidecar_paths().cloned());
-        if unkept.contains(path) {
+        let Some(song) = kept.get(path) else {
             continue;
-        }
+        };
         let file = library.join(path);
         match std::fs::metadata(&file) {
             // A run under way may be moving it, or about to write it.
@@ -199,13 +229,16 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                     .iter()
                     .filter(|s| !crate::reconcile::sidecar_as_written(library, s))
                     .map(|s| &s.path);
+                let plan = plans.get(song);
                 for changed in std::iter::once(path).filter(|_| changed).chain(beside) {
-                    said.problem(
-                        format!(
-                            "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
-                            crate::relpath::show(changed)
-                        ),
-                    )?;
+                    let forced = match plan {
+                        Some(r) if !forcing.writes(r, path, changed) => "removes it",
+                        _ => "writes it again",
+                    };
+                    said.problem(format!(
+                        "Changed since muman wrote it, so left alone: {} (`sync --force` {forced})",
+                        crate::relpath::show(changed)
+                    ))?;
                 }
             }
         }
@@ -236,7 +269,6 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         }
     }
 
-    let listed = manifest.keys();
     let unread: std::collections::BTreeSet<&str> = listed
         .iter()
         .filter_map(|k| match k {
@@ -335,24 +367,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             ))?;
         }
     }
-    // Each song as a sync would resolve it, from the sources it reads: one
-    // whose source is missing, which `sync` fetches again, waits, and one
-    // whose source reads as none is held.
-    let (on_disk, waiting): (BTreeSet<SourceKey>, BTreeSet<SourceKey>) =
-        listed.iter().cloned().partition(|k| store.has(k));
-    let on_disk = on_disk
-        .into_iter()
-        .filter(|k| !crate::reconcile::unread(&state, &store, k))
-        .collect();
-    let resolution = crate::reconcile::resolve_songs(
-        &manifest,
-        &manifest.settings,
-        &state,
-        library,
-        (Some(&on_disk), &waiting),
-        (false, false),
-    );
-    match resolution {
+    match &resolution {
         Ok(r) => {
             for (n, e) in &r.unresolved {
                 let song = manifest.songs[*n]

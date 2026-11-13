@@ -1115,10 +1115,10 @@ fn let_go(dir: &Path) -> Result<()> {
         }
         None => vec![dir.to_path_buf()],
     };
-    for gone in gone {
-        match std::fs::remove_dir_all(&gone) {
+    for dir in gone {
+        match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(e).with_context(|| format!("removing {}", gone.display()));
+                return Err(e).with_context(|| format!("removing {}", dir.display()));
             }
             _ => {}
         }
@@ -1745,11 +1745,10 @@ fn put_back_as(
 /// Move the run kept in `dir` on to the song list `now`, the user's files
 /// `followed` followed in the list its own undo puts back too.
 fn move_on(dir: &Path, now: &str, followed: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {
-    let file = dir.join(RECORD);
-    let mut record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
-    )
-    .with_context(|| format!("reading {}", file.display()))?;
+    let reading = || format!("reading {}", dir.join(RECORD).display());
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(RECORD)).with_context(reading)?)
+            .with_context(reading)?;
     record["songs_after"] = serde_json::Value::String(now.to_string());
     if !followed.is_empty() {
         let its: BTreeMap<SourceKey, SourceKey> =
@@ -1785,18 +1784,11 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     // In the reverse of the order the run went: it moved a file before it
     // wrote over it where it moved to, as a song retagged and moved.
     for rel in &record.kept {
-        let to = dirs.library.join(rel);
         let from = dir.join("files").join(rel);
         if !from.exists() {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        atomic::rename(&from, &to)
-            .or_else(|_| std::fs::copy(&from, &to).map(drop))
-            .with_context(|| format!("putting back {}", to.display()))?;
+        put_file_back(&from, &dirs.library, rel)?;
         changed.written += 1;
         // A file the run moved and then wrote over is said as it moves back.
         if !record.moves.iter().any(|m| m.to == *rel) {
@@ -1813,11 +1805,12 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         if from.exists() || !to.exists() {
             continue;
         }
-        if let Some(parent) = from.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+        if let Some(parent) = m.from.parent() {
+            std::fs::create_dir_all(dirs.library.join(parent))
+                .with_context(|| format!("creating {}", crate::relpath::show(parent)))?;
         }
-        atomic::rename(&to, &from).with_context(|| format!("moving back {}", to.display()))?;
+        atomic::rename(&to, &from)
+            .with_context(|| format!("moving back {}", crate::relpath::show(&m.to)))?;
         changed.moved += 1;
         crate::ui::info(
             out,
@@ -1827,17 +1820,11 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     // Where a move landed, so after the moves back; over a song written
     // there for a move that failed, as a file kept is put back.
     for rel in &record.freed {
-        let (from, to) = (dir.join(FREED).join(rel), dirs.library.join(rel));
+        let from = dir.join(FREED).join(rel);
         if !from.exists() {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        atomic::rename(&from, &to)
-            .or_else(|_| std::fs::copy(&from, &to).map(drop))
-            .with_context(|| format!("putting back {}", to.display()))?;
+        put_file_back(&from, &dirs.library, rel)?;
         changed.written += 1;
         crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
     }
@@ -1850,8 +1837,8 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     crate::library::Leftovers::of(&state.outputs, moving).clear(&dirs.library);
     let made = made_by_run(&record, &state.outputs, &dirs.library);
     for rel in &made {
-        let path = dirs.library.join(rel);
-        atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+        atomic::remove(&dirs.library.join(rel))
+            .with_context(|| format!("removing {}", crate::relpath::show(rel)))?;
         changed.removed += 1;
         crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(rel)))?;
     }
@@ -1872,6 +1859,21 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     Ok(Undone { dir, changed })
+}
+
+/// Put the file kept at `kept` back at `rel` in the `library`, moved, or
+/// copied where it cannot be.
+// Puts a kept file back in the library, as undo.
+#[expect(clippy::disallowed_methods)]
+fn put_file_back(kept: &Path, library: &Path, rel: &Path) -> Result<()> {
+    let to = library.join(rel);
+    if let Some(parent) = rel.parent() {
+        std::fs::create_dir_all(library.join(parent))
+            .with_context(|| format!("creating {}", crate::relpath::show(parent)))?;
+    }
+    atomic::rename(kept, &to)
+        .or_else(|_| std::fs::copy(kept, &to).map(drop))
+        .with_context(|| format!("putting back {}", crate::relpath::show(rel)))
 }
 
 /// What undoing does with each copy `add` made that is still there, a
@@ -1995,7 +1997,9 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
                 continue;
             }
             Copy::Unsure(files) => {
-                let files: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+                let files: Vec<String> = (files.iter())
+                    .map(|copy| copy.display().to_string())
+                    .collect();
                 crate::ui::warning(
                     out,
                     &format!(

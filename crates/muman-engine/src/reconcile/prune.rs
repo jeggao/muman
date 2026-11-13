@@ -2,12 +2,15 @@
 //! ledger, or left in place as the user's.
 //!
 //! What becomes of each file of an output no song keeps is decided in one
-//! place, [`removal`], and every message about it is made from that
-//! decision: `status` says it, `remove` lists it before asking, and the
-//! sync's freeing and pruning carry it out and say what they did. A file
-//! there that is muman's goes; one beside the song the user changed since
-//! muman wrote it stays, theirs, said so; one not there, or another
-//! output's, is only let go of, said by no one.
+//! place, [`removal`], over the outputs as the sync's intent leaves them
+//! ([`pruned`](super::decide::pruned)), and every message about it is
+//! made from that decision: `status` says it, `remove` lists it before
+//! asking, `check` reads it, and the sync's freeing and pruning carry it
+//! out and say what they did. A file there that is muman's goes; one
+//! beside the song the user changed since muman wrote it stays, theirs,
+//! said so; one not there, or one a song kept or written has, as a
+//! folder's file the next song of its folder takes, is only let go of,
+//! said by no one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -86,7 +89,12 @@ pub(super) fn removal(
 /// What pruning `old` against `outputs` does to each file, deciding
 /// alone, for a sync to carry out and a dry run to show. A `forced` run
 /// wrote every song again, so a changed file of a song now written
-/// elsewhere goes, kept for `undo` as any file written over is.
+/// elsewhere goes, kept for `undo` as any file written over is: a song
+/// written from one of its own sources, as [`files_of`] tells a song's
+/// file, never one it only shares with others, as a picture of the
+/// user's given to an album.
+///
+/// [`files_of`]: super::decide::files_of
 pub(super) fn prune_plan(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
@@ -120,9 +128,10 @@ pub(super) fn prune_plan(
             continue;
         }
         let rewritten = forced
-            && outputs
-                .values()
-                .any(|w| w.sources.iter().any(|k| written.sources.contains(k)));
+            && outputs.values().any(|w| {
+                (w.sources.iter())
+                    .any(|k| !crate::manifest::shareable(k) && written.sources.contains(k))
+            });
         let fate = if written.sources.iter().any(|k| failed.contains(k)) {
             Pruned::KeptForFailed
         } else if edited_since_written(library, old, path) && !rewritten {
@@ -133,22 +142,6 @@ pub(super) fn prune_plan(
         plan.push((path.clone(), fate));
     }
     plan
-}
-
-/// What a sync does with each output of `old` at `leaving`, whose songs
-/// leave the song list, the other outputs kept as they are: what `remove`
-/// says before it asks.
-#[must_use]
-pub fn leaving(
-    library: &Path,
-    old: &BTreeMap<PathBuf, Written>,
-    leaving: &BTreeSet<PathBuf>,
-) -> Vec<(PathBuf, Pruned)> {
-    let kept: BTreeMap<PathBuf, Written> = (old.iter())
-        .filter(|(p, _)| !leaving.contains(*p))
-        .map(|(p, w)| (p.clone(), w.clone()))
-        .collect();
-    prune_plan(library, old, &kept, &BTreeSet::new(), false)
 }
 
 /// Say what pruning or freeing as `fate` did, by `removal`: each file

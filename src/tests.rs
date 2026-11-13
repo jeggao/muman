@@ -799,6 +799,17 @@ fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
     let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
     let (ok, text) = s.run(&flacs(), &["remove", "-y", &holder.to_string()]);
     assert!(ok, "{text}");
+    // Neither `remove` nor its sync says the cover the other song takes goes or comes.
+    assert!(
+        text.contains("1 song leaves the list, 1 file deleted"),
+        "{text}"
+    );
+    for gone in [
+        "deletes Artist/Record/cover.jpg",
+        "Added: Artist/Record/cover.jpg",
+    ] {
+        assert!(!text.contains(gone), "{text}");
+    }
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
     assert_eq!(

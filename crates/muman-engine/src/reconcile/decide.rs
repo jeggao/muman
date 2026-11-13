@@ -4,8 +4,11 @@
 //! The decisions and what follows from them, the moves in their order,
 //! the outputs they leave and the files pruned, make one [`Intent`]:
 //! `status` shows it and a sync carries it out, so the two cannot say
-//! different things. A sync departs from it only where a move or a write
-//! fails, and judges pruning again by what was done.
+//! different things, and `remove` and `check` read the files it prunes
+//! ([`pruned`]). What it does with each file follows from the moves
+//! chosen: a file a move lands on is freed for it, never handed to a
+//! song as a folder's file it takes over. A sync departs from it only where a
+//! move or a write fails, and judges pruning again by what was done.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -262,6 +265,11 @@ impl Landing {
                 .map(folded)
                 .collect(),
         }
+    }
+
+    /// Whether a file lands at `f`, folded.
+    fn lands(&self, f: &Path) -> bool {
+        self.landed.contains(&crate::relpath::folded(f))
     }
 
     /// Whether a file at `f` is in the way: at a path that lands, at a
@@ -689,6 +697,9 @@ pub(super) struct Intent {
     /// Each folder's file of `freed` a song's plan has where it ends,
     /// with the song's file whose record takes it before the moves: the
     /// song writes it over rather than it be removed and written again.
+    /// One a move lands on is not handed but freed, as [`decide`] counted
+    /// it when it chose that move: a song moving into a folder with the
+    /// folder's file it holds carries it there.
     pub handed: BTreeMap<PathBuf, PathBuf>,
     /// Each song's file moved to its song's path, with the files beside it
     /// it carries, in an order the moves can be made.
@@ -752,7 +763,9 @@ pub(super) fn intend(
         if let Some(written) = relocated.remove(path) {
             handed.extend(
                 (written.sidecars.iter())
-                    .filter(|s| super::owned::sidecar_as_written(library, s))
+                    .filter(|s| {
+                        super::owned::sidecar_as_written(library, s) && !landing.lands(&s.path)
+                    })
                     .filter_map(|s| Some((s.path.clone(), holders.get(&s.path)?.clone()))),
             );
             let fate = removal(library, (path, &written), false, |f| handed.contains_key(f));
@@ -799,6 +812,65 @@ pub(super) fn intend(
         moved: relocated,
         pruned,
         edits,
+    }
+}
+
+/// What a sync of `planned` does with each file of the library no song
+/// keeps, the songs of `failed` sources not written: the files [`intend`]
+/// frees and prunes, which `status` says. `remove` and `check` read this
+/// one decision, so none of them says otherwise of a file than the sync
+/// does with it: a folder's file handed to a song that stays, or one a
+/// move lands on, is said as the sync takes it.
+#[must_use]
+pub fn pruned(
+    manifest: &Manifest,
+    state: &State,
+    (planned, failed): (&[PlannedSong], &BTreeSet<SourceKey>),
+    library: &Path,
+) -> Vec<(PathBuf, Pruned)> {
+    let foreseen = foresee_failing(manifest, state, planned, library, (false, false), failed);
+    let intent = intend(
+        planned,
+        (foreseen.decided, &foreseen.freeable),
+        manifest,
+        &state.outputs,
+        library,
+        (failed, false),
+        Vec::new(),
+    );
+    intent.pruned
+}
+
+/// The files a forced sync of the songs planned writes, each song's own
+/// and each its plan has beside it: what it says it writes again, or
+/// writes over, of a file left alone now, and every other file of a
+/// song's it removes, as a `.lrc` the user changed beside a song that
+/// takes no lyrics any more.
+#[derive(Debug, Default)]
+pub struct Forced(BTreeSet<PathBuf>);
+
+impl Forced {
+    #[must_use]
+    pub fn of(planned: &[PlannedSong]) -> Self {
+        Self(
+            (planned.iter())
+                .flat_map(|(_, r)| {
+                    let path = path_of(r);
+                    let beside = crate::artifact::parts(&r.plan).files(&path);
+                    std::iter::once(path).chain(beside)
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether a forced sync writes `file` again, one of the files of
+    /// `r`'s song at `from`, where the song goes: else it removes it.
+    #[must_use]
+    pub fn writes(&self, r: &Resolved, from: &Path, file: &Path) -> bool {
+        file == from
+            || self
+                .0
+                .contains(&crate::outputs::moved(from, &path_of(r), file))
     }
 }
 

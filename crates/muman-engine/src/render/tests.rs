@@ -575,7 +575,7 @@ fn an_opus_file_with_no_speakers_named_is_tagged() {
     );
     let tags = vec![("TITLE".to_string(), vec!["Song".to_string()])];
     write_tags(
-        &path,
+        (path.parent().unwrap(), &path),
         Format::Copy { codec: Codec::Opus },
         &tags,
         None,
@@ -1223,7 +1223,15 @@ fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
 
     let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
     let codec = Format::Copy { codec: Codec::Mp3 };
-    write_tags(&path, codec, &every_kind(), Some("fra"), Some(cover()), &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        codec,
+        &every_kind(),
+        Some("fra"),
+        Some(cover()),
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
     let id3 = mp3.id3v2().unwrap();
@@ -1277,10 +1285,25 @@ fn an_m4a_s_tags_shrinking_by_any_length_are_written() {
     let long = "Lantern Weather Sampler";
     for shrink in 1..=12 {
         let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
-        write_tags(&path, codec, &album(long), None, None, &[]).unwrap();
+        write_tags(
+            (path.parent().unwrap(), &path),
+            codec,
+            &album(long),
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
         let short = album(&long[..long.len() - shrink]);
-        write_tags(&path, codec, &short, None, None, &[])
-            .unwrap_or_else(|e| panic!("{shrink} bytes shorter: {e:#}"));
+        write_tags(
+            (path.parent().unwrap(), &path),
+            codec,
+            &short,
+            None,
+            None,
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{shrink} bytes shorter: {e:#}"));
         assert_eq!(verify(&path, &short, false), [] as [String; 0], "{shrink}");
     }
 }
@@ -1294,8 +1317,24 @@ fn a_tag_writer_that_panics_fails_the_write_alone() {
     let mut bytes = crate::testing::SILENCE_M4A.to_vec();
     bytes.extend_from_slice(&[0, 0, 0, 8, b'f', b'r', b'e', b'e']);
     let (_dir, path) = written(&bytes, "song.m4a");
-    write_tags(&path, codec, &album("Paper Comet Sampler"), None, None, &[]).unwrap();
-    let e = write_tags(&path, codec, &album("Paper Comet"), None, None, &[]).unwrap_err();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        codec,
+        &album("Paper Comet Sampler"),
+        None,
+        None,
+        &[],
+    )
+    .unwrap();
+    let e = write_tags(
+        (path.parent().unwrap(), &path),
+        codec,
+        &album("Paper Comet"),
+        None,
+        None,
+        &[],
+    )
+    .unwrap_err();
     assert!(format!("{e:#}").contains("(a panic at "), "{e:#}");
 }
 
@@ -1305,7 +1344,15 @@ fn an_m4a_holds_each_field_in_the_atom_picard_writes() {
 
     let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
     let codec = Format::Copy { codec: Codec::Aac };
-    write_tags(&path, codec, &every_kind(), None, Some(cover()), &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        codec,
+        &every_kind(),
+        None,
+        Some(cover()),
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
     let ilst = m4a.ilst().unwrap();
@@ -1356,7 +1403,15 @@ fn a_wavpack_file_holds_each_field_in_the_item_picard_writes() {
     let codec = Format::Copy {
         codec: Codec::WavPack,
     };
-    write_tags(&path, codec, &every_kind(), None, Some(cover()), &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        codec,
+        &every_kind(),
+        None,
+        Some(cover()),
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let wv = lofty::wavpack::WavPackFile::read_from(&mut file, ParseOptions::new()).unwrap();
     let ape = wv.ape().unwrap();
@@ -1390,7 +1445,7 @@ fn a_total_with_no_place_is_kept_where_a_place_cannot_hold_it() {
     let tags = vec![("TRACKTOTAL".to_string(), vec!["9".to_string()])];
     let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
     write_tags(
-        &path,
+        (path.parent().unwrap(), &path),
         Format::Copy { codec: Codec::Mp3 },
         &tags,
         None,
@@ -1415,9 +1470,25 @@ fn a_cover_or_a_tag_the_file_does_not_hold_as_written_is_told() {
     let format = Format::Copy {
         codec: Codec::WavPack,
     };
-    write_tags(&path, format, &tags, None, Some(cover()), &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        format,
+        &tags,
+        None,
+        Some(cover()),
+        &[],
+    )
+    .unwrap();
     assert_eq!(verify(&path, &tags, true), Vec::<String>::new());
-    write_tags(&path, format, &tags, None, None, &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        format,
+        &tags,
+        None,
+        None,
+        &[],
+    )
+    .unwrap();
     assert_eq!(verify(&path, &tags, true), ["cover not held as written"]);
     let more = vec![
         ("TITLE".to_string(), vec!["Lantern Weather".to_string()]),
@@ -1493,7 +1564,15 @@ fn every_field_is_read_back_from_every_container_as_written() {
         (SILENCE_WV, "song.wv", Codec::WavPack),
     ] {
         let (_dir, path) = written(fixture, name);
-        write_tags(&path, Format::Copy { codec }, &tags, None, None, &[]).unwrap();
+        write_tags(
+            (path.parent().unwrap(), &path),
+            Format::Copy { codec },
+            &tags,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(verify(&path, &tags, false), [] as [String; 0], "{name}");
     }
 }
@@ -1515,7 +1594,15 @@ fn a_total_alone_is_read_back_from_every_container_as_written() {
             (SILENCE_WV, "song.wv", Codec::WavPack),
         ] {
             let (_dir, path) = written(fixture, name);
-            write_tags(&path, Format::Copy { codec }, &tags, None, None, &[]).unwrap();
+            write_tags(
+                (path.parent().unwrap(), &path),
+                Format::Copy { codec },
+                &tags,
+                None,
+                None,
+                &[],
+            )
+            .unwrap();
             assert_eq!(
                 verify(&path, &tags, false),
                 [] as [String; 0],
@@ -1545,7 +1632,7 @@ fn chapters_are_written_in_each_container_s_own_form() {
     let title = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
     let (_d1, flac) = written(crate::testing::SILENCE_FLAC, "song.flac");
     write_tags(
-        &flac,
+        (flac.parent().unwrap(), &flac),
         Format::Copy { codec: Codec::Flac },
         &title,
         None,
@@ -1561,7 +1648,7 @@ fn chapters_are_written_in_each_container_s_own_form() {
 
     let (_d2, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
     write_tags(
-        &mp3,
+        (mp3.parent().unwrap(), &mp3),
         Format::Copy { codec: Codec::Mp3 },
         &title,
         None,
@@ -1596,12 +1683,20 @@ fn chapters_are_written_in_each_container_s_own_form() {
 fn a_flac_tagged_after_none_names_the_vendor_a_build_does() {
     let (_dir, path) = written(crate::testing::SILENCE_FLAC, "song.flac");
     let flac = Format::Copy { codec: Codec::Flac };
-    write_tags(&path, flac, &[], None, None, &[]).unwrap();
+    write_tags((path.parent().unwrap(), &path), flac, &[], None, None, &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let bare = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
     assert!(bare.vorbis_comments().is_none(), "no tags, no block");
     let title = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
-    write_tags(&path, flac, &title, None, None, &[]).unwrap();
+    write_tags(
+        (path.parent().unwrap(), &path),
+        flac,
+        &title,
+        None,
+        None,
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let read = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
     assert_eq!(read.vorbis_comments().unwrap().vendor(), FFMPEG_VENDOR);
@@ -1654,7 +1749,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
 
     let (_d1, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
     write_tags(
-        &mp3,
+        (mp3.parent().unwrap(), &mp3),
         Format::Copy { codec: Codec::Mp3 },
         &extended(),
         None,
@@ -1689,7 +1784,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
 
     let (_d2, m4a) = written(crate::testing::SILENCE_M4A, "song.m4a");
     write_tags(
-        &m4a,
+        (m4a.parent().unwrap(), &m4a),
         Format::Copy { codec: Codec::Aac },
         &extended(),
         None,
@@ -1715,7 +1810,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
 
     let (_d3, opus) = written(crate::testing::SILENCE_OPUS, "song.opus");
     write_tags(
-        &opus,
+        (opus.parent().unwrap(), &opus),
         Format::Copy { codec: Codec::Opus },
         &extended(),
         None,
@@ -1757,7 +1852,7 @@ fn a_key_tkey_cannot_hold_is_kept_as_its_vorbis_name() {
     let tags = vec![("KEY".to_string(), vec!["8A".to_string()])];
     let (_dir, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
     write_tags(
-        &mp3,
+        (mp3.parent().unwrap(), &mp3),
         Format::Copy { codec: Codec::Mp3 },
         &tags,
         None,

@@ -50,7 +50,7 @@ use crate::source::SourceKey;
 use crate::state::{self, Sidecar, State, Written};
 use crate::store::{self, Located};
 
-use super::decide::{Doing, Intent, beside_there, kept, moved_to};
+use super::decide::{Doing, Forced, Intent, beside_there, kept, moved_to};
 use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::{free, prune};
@@ -290,7 +290,7 @@ pub(super) fn apply<R: Runner, W: Write>(
     let due = due(planned, &doing);
     let anew = rewrites(job, &old, &due, &shared);
     let (mut pending, claims) = before_writing(job, (&due, &anew), state, ledger, force, out)?;
-    say_left(&doing, job.manifest.settings.history.runs, out)?;
+    say_left(planned, &doing, job.manifest.settings.history.runs, out)?;
     let mut outputs = kept(planned, &doing, job.manifest, &old);
     outputs.extend(unfreed);
     let wrote = render_due(
@@ -636,10 +636,25 @@ fn kept_beside(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -
 }
 
 /// Say which songs' files a sync leaves alone, and why, `runs` kept to
-/// undo it by.
-fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
+/// undo it by, and what `sync --force` does with the file in the way: one
+/// a song's plan has is written over or again, and any other removed
+/// ([`Forced`]).
+fn say_left<W: Write>(
+    planned: &[PlannedSong],
+    doing: &[Doing],
+    runs: usize,
+    out: &mut W,
+) -> Result<()> {
+    let forced = Forced::of(planned);
     let mut unowned = Vec::new();
-    for d in doing {
+    for ((_, r), d) in planned.iter().zip(doing) {
+        let over = |from: &Path, by: &Path, over: &'static str| {
+            if forced.writes(r, from, by) {
+                over
+            } else {
+                "removes it"
+            }
+        };
         match d {
             Doing::Guard { file } => crate::ui::warning(
                 out,
@@ -651,22 +666,26 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
             Doing::Unowned { by, edited: true } => crate::ui::warning(
                 out,
                 &format!(
-                    "Left alone, {} changed since muman wrote it (`sync --force` writes it again)",
-                    crate::relpath::show(by)
+                    "Left alone, {} changed since muman wrote it (`sync --force` {})",
+                    crate::relpath::show(by),
+                    over(&path_of(r), by, "writes it again")
                 ),
             )?,
-            Doing::Unowned { by, .. } => unowned.push(by.clone()),
+            Doing::Unowned { by, .. } => {
+                unowned.push((by.clone(), over(&path_of(r), by, "writes over it")));
+            }
             Doing::Blocked { file, by, edited } => crate::ui::warning(
                 out,
                 &format!(
-                    "Left at {}: {} {} (`sync --force` writes over it)",
+                    "Left at {}: {} {} (`sync --force` {})",
                     crate::relpath::show(file),
                     crate::relpath::show(by),
                     if *edited {
                         "changed since muman wrote it"
                     } else {
                         "is not muman's"
-                    }
+                    },
+                    over(file, by, "writes over it")
                 ),
             )?,
             _ => {}
@@ -677,11 +696,11 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
     } else {
         ", and `undo` puts it back"
     };
-    for path in unowned.iter().take(NAMED) {
+    for (path, forced) in unowned.iter().take(NAMED) {
         crate::ui::warning(
             out,
             &format!(
-                "Left alone, not muman's: {} (`sync --force` writes over it{undo})",
+                "Left alone, not muman's: {} (`sync --force` {forced}{undo})",
                 crate::relpath::show(path)
             ),
         )?;
@@ -805,8 +824,9 @@ fn render_due<R: Runner, W: Write>(
 /// Say which files writing a song wrote, `verb` saying what became of
 /// the song `before` recorded: its own file where it was written, else
 /// each file beside it written in its place, so a song whose `.lrc` alone
-/// was gone is said by its `.lrc`. A file beside it it had none of is
-/// added, one gone is written again, and each its last build left that it
+/// was gone is said by its `.lrc`. A file beside it it had none of, not
+/// there before, is added, one there it takes over is said with the song,
+/// one gone is written again, and each its last build left that it
 /// has none of now is said removed, or left in place where the user
 /// changed it: a song whose lyrics were taken off is said by its `.lrc`
 /// removed. Its own file is named unwritten only where nothing else is.
@@ -830,7 +850,8 @@ fn say_written<W: Write>(
         )?;
     }
     for path in wrote {
-        let said = if !had(path) {
+        // A folder's file another song held is there already: this one takes it over.
+        let said = if !had(path) && rewrite.gone.contains(path) {
             "Added"
         } else if !own {
             verb

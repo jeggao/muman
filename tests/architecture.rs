@@ -700,17 +700,21 @@ const LIBRARY_NAMING: &[&str] = &[
     "crates/muman-engine/src/reconcile/",
     "crates/muman-engine/src/diagnose.rs",
     "crates/muman-engine/src/folder.rs",
+    "crates/muman-engine/src/history.rs",
+    "crates/muman-engine/src/library.rs",
     "crates/muman-engine/src/outputs.rs",
+    "crates/muman-engine/src/render.rs",
     "src/change.rs",
 ];
 
 /// The paths those modules show as the platform writes them, each from
 /// the root: the library folder, the place it moved from, its root as a
 /// folder whose time is set, scratch folders, a leftover found by
-/// walking the library, and the store's sources; and a path joined to a
-/// folder of the home. One joined to the library's is a library file.
+/// walking the library, the store's sources and the copies `add` made of
+/// them; and a path joined to a folder of the home. One joined to the
+/// library's is a library file.
 const FROM_THE_ROOT: &[&str] = &[
-    "library", "before", "dir", "scratch", "part", "source", "unused",
+    "library", "before", "dir", "scratch", "part", "source", "unused", "copy",
 ];
 
 #[test]

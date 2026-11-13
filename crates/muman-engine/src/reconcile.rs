@@ -48,7 +48,9 @@ pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::foresee_failing;
 use self::decide::intend;
-pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built, left_in_place};
+pub use self::decide::{
+    Doing, Forced, Foreseen, files_of, foresee, left_as_built, left_in_place, pruned,
+};
 pub(crate) use self::keys::arriving;
 use self::keys::sites_found;
 pub use self::keys::{Following, Moves, Unlisted, deleted, hearing, moved};
@@ -63,7 +65,7 @@ use self::plan::plan_awaiting;
 pub use self::plan::{
     Planned, Resolver, name_of, path_of, plan, plan_with, resolve_as_fitted, resolve_songs,
 };
-pub use self::prune::{Pruned, leaving};
+pub use self::prune::Pruned;
 pub use self::report::{Fate, verdict};
 use self::report::{Showing, Shown, fit_summary, left_out, status};
 use self::write::{Writing, apply, touch};
