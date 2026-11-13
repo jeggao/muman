@@ -2794,7 +2794,7 @@ fn a_path_named_that_is_no_file_or_folder_is_refused_before_it_is_read() {
             "{name}: {e:#}"
         );
     }
-    assert!(s.songs().is_empty());
+    assert_eq!(s.songs(), Vec::<Vec<SourceKey>>::new());
 }
 
 #[cfg(unix)]

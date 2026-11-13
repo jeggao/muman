@@ -398,7 +398,7 @@ fn an_address_naming_no_video_adds_nothing_and_fails() {
         }
         .urls(&urls, false)
         .unwrap();
-        assert!(add.proposals.is_empty());
+        assert_eq!(add.proposals, Vec::<Proposal>::new());
         (ok, String::from_utf8(out).unwrap())
     };
     let (ok, text) = fetch(&["https://empty"], BTreeSet::new());
