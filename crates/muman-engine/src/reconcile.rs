@@ -5,8 +5,11 @@
 //! file muman wrote that no song makes now deleted.
 //!
 //! This module runs the steps in order; each is a module of its own:
-//! the library taken as found before any file of it is judged
-//! ([`as_found`], as every command takes it), `measure` the sources,
+//! the grounds gathered, in the one way every command that does or says
+//! what a sync does gathers them ([`gather`]): the library taken as found
+//! before any file of it is judged ([`as_found`]), the moved sources
+//! followed, heard as the sync hears them (`keys`), and what the sync
+//! waits on and fetches; then `measure` the sources,
 //! `keys` renamed or followed, `damage` noted,
 //! each song resolved to its `plan`, what to do with its file decided
 //! (`decide`) by what is muman's (`owned`), the files moved and written
@@ -49,7 +52,7 @@ use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::Found;
 pub use self::decide::{
     Ahead, Doing, Fated, Forced, Foreseen, Foresight, Foretold, Grounds, Intent, Rewrite, Rewrites,
-    files_of, foresee, foresight, left_as_built, left_in_place,
+    as_held, files_of, foresee, foresight, left_as_built, left_in_place,
 };
 pub(crate) use self::keys::arriving;
 use self::keys::sites_found;
@@ -136,6 +139,255 @@ fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()>
     }
 }
 
+/// What every command that does or says what a sync does reads, gathered
+/// once, by [`gather`], in one way for all of them: the song list with each
+/// manual file it names followed to where it moved, heard as the sync hears
+/// it; the state as the library is found; the sources there; and what the
+/// sync waits on and fetches first. [`Ground::grounds`] lends it to the
+/// sync's decisions ([`Grounds`]) and to every forecast's ([`foresight`]),
+/// so no forecast lacks an input the sync has.
+#[derive(Debug)]
+pub struct Ground {
+    /// The song list, each moved file followed: in memory alone for a dry
+    /// run.
+    pub manifest: Manifest,
+    pub state: State,
+    pub store: Store,
+    pub ahead: Ahead,
+    /// The sources as the song list names them, before any is followed.
+    pub listed: BTreeSet<SourceKey>,
+    /// What following found, what it cannot tell among it.
+    pub moves: Moves,
+    /// The files no song names that are none of those followed.
+    pub unlisted: Unlisted,
+    /// The library folder named anew, as the state takes it.
+    pub adopted: Option<Adopted>,
+}
+
+impl Ground {
+    /// What a sync into `library`, `asked` to force and to accept, decides
+    /// from.
+    #[must_use]
+    pub fn grounds<'a>(&'a self, library: &'a Path, asked: (bool, bool)) -> Grounds<'a> {
+        Grounds {
+            manifest: &self.manifest,
+            state: &self.state,
+            store: &self.store,
+            library,
+            ahead: &self.ahead,
+            asked,
+        }
+    }
+}
+
+/// How [`gather`] gathers the grounds: following moves as `following`
+/// says, saving them under its lock or, for a dry run, in memory alone;
+/// and whether the sync it is for `fetches` before it plans, counting what
+/// it fetches as there, as a dry run does (`Some`, with whether
+/// `--retry` was given).
+#[derive(Debug)]
+pub struct Gathering<'a> {
+    pub following: Following<'a>,
+    pub fetches: Option<bool>,
+}
+
+impl Gathering<'_> {
+    /// As a command that changes nothing reads what the next sync does:
+    /// a dry run of it, holding no lock, a file arrived within `settling`
+    /// still being copied in.
+    #[must_use]
+    pub fn forecast(home: &Path, settling: Duration) -> Gathering<'_> {
+        Gathering {
+            following: Following {
+                home,
+                lock: None,
+                rec: crate::history::Recording::DryRun,
+                dry_run: true,
+                settling,
+                listing: false,
+            },
+            fetches: Some(false),
+        }
+    }
+}
+
+/// The grounds a run in `dirs` reads, `manifest` the song list it was
+/// given ([`Ground`]): the state taken as the library is found
+/// ([`as_found`]), what it adopted said to `out`; for a run that changes
+/// the library, what a stopped run left there cleared; the sources
+/// scanned; each manual file followed, heard by `hear` where nothing
+/// measured tells it ([`Following::follow`]); and what the sync waits on
+/// and fetches ([`Ahead::of`]).
+pub fn gather<W: Write>(
+    dirs: &Dirs,
+    mut manifest: Manifest,
+    how: Gathering<'_>,
+    hear: impl FnMut(&Located) -> Option<String>,
+    out: &mut W,
+) -> Result<Ground> {
+    let Gathering {
+        mut following,
+        fetches,
+    } = how;
+    let mut state = State::load(&dirs.home)?;
+    let same =
+        (state.library.as_deref()).is_some_and(|l| crate::platform::same_path(l, &dirs.library));
+    let moves = if following.dry_run {
+        crate::history::Moves::Foresee
+    } else {
+        crate::history::Moves::Follow
+    };
+    let adopted = as_found(dirs, &mut state, moves)?;
+    if let Some(adopted) = &adopted {
+        adopted.say(out)?;
+    }
+    if !following.dry_run {
+        if let Some(run) = following.rec.run().filter(|_| same) {
+            run.forget_unmade(&dirs.library);
+        }
+        let moving = crate::history::moving(&dirs.home);
+        crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
+    }
+    let store = Store::scan(dirs)?;
+    let listed = manifest.keys();
+    let settling = following.settling;
+    let (moves, unlisted) = following.follow(&mut manifest, &mut state, &store, hear, out)?;
+    let ahead = Ahead::of(&manifest, &state, &store, &moves, settling, fetches);
+    Ok(Ground {
+        manifest,
+        state,
+        store,
+        ahead,
+        listed,
+        moves,
+        unlisted,
+        adopted,
+    })
+}
+
+/// A forecast's [`gather`]: the grounds a command that changes nothing
+/// reads in `dirs`, a moved file heard by `runner` as the sync hears it,
+/// its files written below `scratch`.
+pub fn foreground<R: Runner>(
+    runner: &R,
+    dirs: &Dirs,
+    settling: Duration,
+    scratch: &Path,
+) -> Result<Ground> {
+    let manifest = Manifest::load(&dirs.home)?;
+    gather(
+        dirs,
+        manifest,
+        Gathering::forecast(&dirs.home, settling),
+        hearing(runner, scratch),
+        &mut std::io::sink(),
+    )
+}
+
+/// What fitting the songs into `[library] max_size` reads: the song list,
+/// the sources and the library, the sources on disk, fetched first and
+/// failing, and whether the sync was asked to force and to accept.
+pub(crate) struct Fitting<'a> {
+    pub manifest: &'a Manifest,
+    pub store: &'a Store,
+    pub library: &'a Path,
+    pub found: (
+        &'a BTreeSet<SourceKey>,
+        &'a BTreeSet<SourceKey>,
+        &'a BTreeSet<SourceKey>,
+    ),
+    pub asked: (bool, bool),
+}
+
+/// Where fitting learns the sizes it fits by: by measuring and rendering
+/// from `located`, below `scratch` and in the `workshop`, as a sync does;
+/// with none, from what the state records alone, as a forecast does.
+pub(crate) struct Learning<'a> {
+    pub located: &'a BTreeMap<SourceKey, Located>,
+    pub scratch: &'a Path,
+    pub workshop: Option<&'a Path>,
+}
+
+/// What [`Fitting::fit`] did: the fit, the songs rendered to measure them,
+/// and whether it measured anything the state keeps.
+pub(crate) struct Fit {
+    pub fitted: limit::Fitted,
+    pub made: limit::Made,
+    pub learnt: bool,
+}
+
+impl Fitting<'_> {
+    /// The songs of `planned` fitted as the module says, the one way the
+    /// sync and every forecast fit them: each copy's audio bytes measured
+    /// where its facts lack them, the songs fitted ([`limit::fit_library`])
+    /// and those lowered levelled again at the format fitting gave them, a
+    /// song rendered at the gains it had before rendered again. Learning
+    /// from the state alone, a size it records none of is an estimate, and
+    /// its song is in [`limit::Fitted::guessed`]. None when no limit is set.
+    pub fn fit<R: Runner, W: Write>(
+        &self,
+        runner: &R,
+        state: &mut State,
+        planned: &mut Planned,
+        learning: &Learning<'_>,
+        out: &mut W,
+    ) -> Result<Option<Fit>> {
+        if self.manifest.settings.library.max_size.is_none() {
+            return Ok(None);
+        }
+        let (on_disk, to_fetch, failed) = self.found;
+        let mut learnt = false;
+        let mut unmeasured = BTreeSet::new();
+        if learning.workshop.is_some() {
+            learnt |= sizes(runner, self.store, planned, state, learning.scratch, out)?;
+        } else {
+            unmeasured = measure::unmeasured(planned, state);
+        }
+        let block = self.manifest.settings.library.block_size.0;
+        let held = left_as_built(self.manifest, state, planned, self.library, self.asked);
+        let at = limit::Workshop {
+            sources: learning.located,
+            scratch: learning.workshop.unwrap_or(learning.scratch),
+            library: self.library,
+            kept: limit::kept(state, self.library, failed, block),
+            force: self.asked.0,
+            held: &held,
+            renders: learning.workshop.is_some(),
+        };
+        let Some((mut fitted, mut made)) =
+            limit::fit_library(runner, self.manifest, state, planned, &at, out)?
+        else {
+            return Ok(None);
+        };
+        learnt |= fitted.rendered > 0;
+        fitted.guessed.extend(unmeasured);
+        if fitted.lowered > 0 {
+            let as_fitted: BTreeMap<usize, crate::resolve::Plan> =
+                planned.iter().map(|(n, r)| (*n, r.plan.clone())).collect();
+            let found = (Some(on_disk), to_fetch);
+            plan::level_as_fitted(
+                self.manifest,
+                state,
+                self.library,
+                found,
+                self.asked,
+                planned,
+            )?;
+            // A song rendered at the gains it had before is rendered again.
+            for (n, r) in planned.iter() {
+                if as_fitted.get(n) != Some(&r.plan) {
+                    made.remove(n);
+                }
+            }
+        }
+        Ok(Some(Fit {
+            fitted,
+            made,
+            learnt,
+        }))
+    }
+}
+
 /// What a sync did: whether every song was written, and the song list's
 /// hooks with what the run changed, to run once its command has let go
 /// of the home.
@@ -200,7 +452,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     } else {
         Some(Lock::library(&dirs.library, dirs.lock_folder()?)?)
     };
-    let mut manifest = Manifest::load(home)?;
+    let manifest = Manifest::load(home)?;
     if let Some(run) = rec.run() {
         run.saw(&manifest);
     }
@@ -209,39 +461,28 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .map(|r| Query::parse(r.query, &crate::query::extractors(&manifest)))
         .transpose()?
         .filter(|q| !q.is_empty());
-    let mut state = State::load(home)?;
-    let same =
-        (state.library.as_deref()).is_some_and(|l| crate::platform::same_path(l, &dirs.library));
-    let moves = if opts.dry_run {
-        crate::history::Moves::Foresee
-    } else {
-        crate::history::Moves::Follow
-    };
-    if let Some(adopted) = as_found(dirs, &mut state, moves)? {
-        adopted.say(out)?;
-    }
-    if !opts.dry_run {
-        if let Some(run) = rec.run().filter(|_| same) {
-            run.forget_unmade(&dirs.library);
-        }
-        let moving = crate::history::moving(home);
-        crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
-    }
-    let store = Store::scan(dirs)?;
     let temp = crate::atomic::Scratch::new()?;
-    let following = Following {
-        home,
-        lock: &lock,
-        rec: rec.reborrow(),
-        dry_run: opts.dry_run,
-        settling: opts.settling,
-        listing: false,
+    let how = Gathering {
+        following: Following {
+            home,
+            lock: Some(&lock),
+            rec: rec.reborrow(),
+            dry_run: opts.dry_run,
+            settling: opts.settling,
+            listing: false,
+        },
+        fetches: opts.dry_run.then_some(opts.retry),
     };
-    let hear = hearing(runner, temp.path());
-    let unsure = (following
-        .follow(&mut manifest, &mut state, &store, hear, out)?
-        .0)
-        .unsure;
+    let Ground {
+        mut manifest,
+        mut state,
+        store,
+        ahead,
+        moves,
+        unlisted,
+        ..
+    } = gather(dirs, manifest, how, hearing(runner, temp.path()), out)?;
+    let unsure = &moves.unsure;
     let listed = manifest.keys();
     let mut how = Measuring {
         retry: opts.retry,
@@ -344,39 +585,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
         persist(home, &state, opts.dry_run, &lock)?;
     }
 
-    // A dry run fetches nothing: what a sync would fetch counts as there,
-    // and a song waiting on a source never measured is fetched, not failed.
-    let to_fetch: BTreeSet<SourceKey> = if opts.dry_run {
-        let due = crate::due::due(
-            &manifest,
-            &store,
-            &state.failures,
-            opts.retry,
-            crate::state::now_secs(),
-        );
-        (due.now.into_iter())
-            .filter(|(_, f)| *f == crate::due::Fetch::Missing)
-            .map(|(k, _)| k)
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
-    let waiting: BTreeSet<SourceKey> = arriving(&manifest, &state, &store, opts.settling)
-        .into_iter()
-        .chain(to_fetch.iter().cloned())
-        .chain(unsure.iter().flat_map(|(gone, _)| gone).cloned())
-        .collect();
-    let ahead = Ahead {
-        to_fetch,
-        waiting,
-        // A file of a song not followed is held as built: the state, which an
-        // undo leaves, may name it by a file it cannot tell.
-        unsure: unsure
-            .iter()
-            .flat_map(|(_, files)| files)
-            .cloned()
-            .collect(),
-    };
     let asked = (opts.force, opts.accept);
     let on_disk = Grounds {
         manifest: &manifest,
@@ -411,63 +619,42 @@ pub fn reconcile_into<R: Runner, W: Write>(
         Err(_) if opts.dry_run => crate::atomic::Scratch::new()?,
         workshop => workshop?,
     };
-    let (fitted, placed) = if manifest.settings.library.max_size.is_some() {
-        if sizes(runner, &store, &planned, &mut state, temp.path(), out)? {
-            persist(home, &state, opts.dry_run, &lock)?;
-        }
-        let block = manifest.settings.library.block_size.0;
-        let held = left_as_built(
-            &manifest,
-            &state,
-            &planned,
-            &dirs.library,
-            (opts.force, opts.accept),
-        );
-        let at = limit::Workshop {
-            sources: &located,
-            scratch: workshop.path(),
-            library: &dirs.library,
-            kept: limit::kept(&state, &dirs.library, &failed, block),
-            force: opts.force,
-            held: &held,
-        };
-        let mut fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
-        if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {
-            persist(home, &state, opts.dry_run, &lock)?;
-        }
-        if let Some((_, made)) = fitted.as_mut().filter(|(f, _)| f.lowered > 0) {
-            let as_fitted: BTreeMap<usize, crate::resolve::Plan> =
-                planned.iter().map(|(n, r)| (*n, r.plan.clone())).collect();
-            let found = (Some(&on_disk), &ahead.to_fetch);
-            let asked = (opts.force, opts.accept);
-            plan::level_as_fitted(&manifest, &state, &dirs.library, found, asked, &mut planned)?;
-            // A song rendered at the gains it had before is rendered again.
-            for (n, r) in &planned {
-                if as_fitted.get(n) != Some(&r.plan) {
-                    made.remove(n);
-                }
-            }
-        }
-        if let Some((f, _)) = fitted.as_ref().filter(|(f, _)| !f.left_out.is_empty()) {
-            ok = false;
-            left_out(&manifest, &state, f, out)?;
-            let why = format!(
-                "max_size {} cannot hold it, at the lowest bitrates",
-                crate::ui::bytes(f.max)
-            );
-            song_errors.extend(f.left_out.iter().map(|n| (*n, why.clone())));
-        }
-        fitted.map_or((None, HashMap::new()), |(f, made)| (Some(f), made))
-    } else {
-        (None, HashMap::new())
+    let fitting = Fitting {
+        manifest: &manifest,
+        store: &store,
+        library: &dirs.library,
+        found: (&on_disk, &ahead.to_fetch, &failed),
+        asked,
     };
+    let learning = Learning {
+        located: &located,
+        scratch: temp.path(),
+        workshop: Some(workshop.path()),
+    };
+    let fit = fitting.fit(runner, &mut state, &mut planned, &learning, out)?;
+    if fit.as_ref().is_some_and(|f| f.learnt) {
+        persist(home, &state, opts.dry_run, &lock)?;
+    }
+    let (fitted, placed) = fit.map_or((None, HashMap::new()), |f| (Some(f.fitted), f.made));
+    if let Some(f) = fitted.as_ref().filter(|f| !f.left_out.is_empty()) {
+        ok = false;
+        left_out(&manifest, &state, f, out)?;
+        let why = format!(
+            "max_size {} cannot hold it, at the lowest bitrates",
+            crate::ui::bytes(f.max)
+        );
+        song_errors.extend(f.left_out.iter().map(|n| (*n, why.clone())));
+    }
     if let Some(run) = rec.run() {
         // Saved as the run records it, before any file is changed, so a
         // stopped run's moves are followed from the outputs as found.
         persist(home, &state, opts.dry_run, &lock)?;
         run.outputs_before(&state.outputs);
     }
-    let placed_songs: BTreeSet<usize> = placed.keys().copied().collect();
+    // A dry run's renders are thrown away and their sizes kept, so the sync
+    // after renders none of them, and writes each as one it did not render.
+    let placed_songs: BTreeSet<usize> =
+        (placed.keys().copied()).filter(|_| !opts.dry_run).collect();
     let (
         Foreseen {
             files,
@@ -539,19 +726,25 @@ pub fn reconcile_into<R: Runner, W: Write>(
 
     intent.edits = crate::held::records(&manifest, &state.facts, &taken);
     if opts.dry_run {
+        let shown_planned = as_held(&planned, &decided, &state.outputs);
         let shown = Shown {
             manifest: &manifest,
-            planned: &planned,
+            planned: &shown_planned,
             intent: &intent,
             files: &files,
             old: &state.outputs,
             state: &state,
             to_fetch: &ahead.to_fetch,
+            moves: &moves,
+            unlisted: &unlisted,
         };
         // Matched here, once measuring has given each song its tags.
         let matched = match &query {
             Some(q) => {
-                let views = crate::query::views(&manifest, &state, &dirs.library)?;
+                let views: Vec<crate::query::View> =
+                    (crate::query::views_of(&manifest, &state.facts, &shown_planned).into_iter())
+                        .map(|(view, _)| view)
+                        .collect();
                 q.check_fields(&views)?;
                 let n = views.iter().enumerate().filter(|(_, v)| q.matches(v));
                 Some(n.map(|(n, _)| n).collect())
@@ -568,20 +761,12 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }) = report
         {
             out.flush()?;
-            status(
-                &shown,
-                &showing,
-                &store,
-                &listed,
-                dirs,
-                opts.settling,
-                &mut report,
-            )?;
+            status(&shown, &showing, &store, &listed, dirs, &mut report)?;
             if let Some(f) = fit {
                 fit_summary(f, &mut report)?;
             }
         } else {
-            status(&shown, &showing, &store, &listed, dirs, opts.settling, out)?;
+            status(&shown, &showing, &store, &listed, dirs, out)?;
             if let Some(f) = fit {
                 fit_summary(f, out)?;
             }
@@ -737,6 +922,30 @@ pub fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
         Some(part) => Err(format!("{} is left half written", part.display())),
         None => Ok(()),
     }
+}
+
+/// What a command that changes nothing, as `check` and `info`, foretells
+/// the next sync does with each library file, by the grounds it gathers
+/// ([`foreground`]) and what it foresees of them ([`foresight`]), a file
+/// dropped in within `settling` still being copied in: none where the
+/// sync measures or renders first what could make it decide otherwise
+/// ([`Foresight::whole`]).
+#[cfg(any(test, feature = "testing"))]
+pub fn forecast<R: Runner>(
+    runner: &R,
+    dirs: &Dirs,
+    settling: Duration,
+) -> Result<Option<Foretold>> {
+    let scratch = crate::atomic::Scratch::new()?;
+    let ground = foreground(runner, dirs, settling, scratch.path())?;
+    let foresight = foresight(runner, &ground.grounds(&dirs.library, (false, false)))?;
+    if !foresight.whole() {
+        return Ok(None);
+    }
+    let moving = crate::history::moving(&dirs.home);
+    let leftovers = crate::library::Leftovers::of(&ground.state.outputs, &moving);
+    let found = Found::of(&dirs.library, &ground.state);
+    Ok(Some(foresight.intent.foretold(&found, &leftovers)))
 }
 
 /// Each file below a library folder, by its path, with what it holds and

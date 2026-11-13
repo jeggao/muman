@@ -861,7 +861,9 @@ pub fn hearing<'a, R: Runner>(
 #[derive(Debug)]
 pub struct Following<'a> {
     pub home: &'a Path,
-    pub lock: &'a crate::atomic::Lock,
+    /// The home's lock, which a run that saves what it follows holds; a
+    /// dry run, as a command that changes nothing, holds none.
+    pub lock: Option<&'a crate::atomic::Lock>,
     pub rec: crate::history::Recording<'a>,
     pub dry_run: bool,
     pub settling: Duration,
@@ -958,7 +960,10 @@ impl Following<'_> {
             // The list before the state: stopped between, the next run
             // measures the file again, where the other way it would find
             // no record of the file gone to follow it by.
-            manifest.save_locked(self.lock, &mut self.rec)?;
+            let Some(lock) = self.lock else {
+                anyhow::bail!("following moved files: the home is not locked");
+            };
+            manifest.save_locked(lock, &mut self.rec)?;
         }
         state.rekey(&moves.of_state())?;
         if !self.dry_run && !moves.moved.is_empty() {

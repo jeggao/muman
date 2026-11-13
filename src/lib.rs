@@ -435,7 +435,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 Some(report),
             )?
             .ok;
-            let problems = diagnose::diagnose(dirs)?.problems();
+            let problems = diagnose::diagnose(runner, dirs, job.settling)?.problems();
             if problems > 0 {
                 ui::warning(
                     out,
@@ -452,11 +452,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             changes: Some(fields),
             ..
         } => {
-            overview::changes(dirs, fields, data)?;
+            overview::changes(runner, (dirs, job.settling), fields, data)?;
             Ok(true)
         }
         Command::Info { .. } => {
-            overview::info(dirs, job.verbose, data)?;
+            overview::info(runner, (dirs, job.settling), job.verbose, data)?;
             let found: Vec<tools::Status> = tools::TOOLS
                 .iter()
                 .filter_map(|t| runner.tool(t.name))
@@ -528,7 +528,13 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => check::calibrate(dirs, data),
         Command::Check {
             decode, upstream, ..
-        } => check::check(runner, dirs, (*decode, *upstream), out, data),
+        } => check::check(
+            runner,
+            (dirs, job.settling),
+            (*decode, *upstream),
+            out,
+            data,
+        ),
         Command::Export {
             output,
             folder,
@@ -667,7 +673,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             confirm,
         } => {
             let mut later = Later::new(&dirs.home)?;
-            let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
+            let changed = change::remove(
+                runner,
+                (dirs, job.settling),
+                query,
+                *purge,
+                confirm,
+                prompter,
+                &mut later,
+                out,
+            );
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,

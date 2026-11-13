@@ -8,9 +8,14 @@
 //! inputs, the [`Grounds`]: the song list, the state as the library is
 //! found, a move a stopped run left halfway counted where it goes
 //! ([`Found`]), the sources there and what the sync waits on and fetches
-//! first. `sync` carries it out and `status` shows it ([`Grounds::intend`]),
-//! and `check`, `info` and `remove`'s listing read it ([`foresight`]), so
-//! none of them can say otherwise of a file than the sync does with it;
+//! first, gathered once in the one way every command gathers them
+//! ([`super::gather`]). `sync` carries it out and `status` shows it
+//! ([`Grounds::intend`]), and `check`, `info` and `remove`'s listing read
+//! it ([`foresight`]), the songs fitted into `max_size` as the sync fits
+//! them, so none of them can say otherwise of a file than the sync does
+//! with it, and where the sync measures or renders first what could change
+//! it, they say so ([`Foresight::whole`]); a song whose file the sync
+//! leaves as it is is shown as that file holds it ([`as_held`]);
 //! a dry run hands it on file by file ([`Foretold`]), which a test holds
 //! each sync to. What each write does is judged on the library as the
 //! frees and moves before it leave it ([`Found::moving`]), so a write
@@ -1044,26 +1049,39 @@ impl Ahead {
         unresolved
     }
 
-    /// What the sync a command that changes nothing foresees waits on and
-    /// fetches: what is due to be fetched for want of its file, a file
-    /// still being copied in, and the files a move cannot be told of, as
-    /// that sync, which fetches first, finds them.
+    /// What a sync waits on and fetches, from the song list as `moves`
+    /// leaves it once followed: each source due to be fetched for want of
+    /// its file, when the sync `fetches` first and so counts it there, as
+    /// a dry run does (`Some`, with whether `--retry` was given); each
+    /// manual file gone while a file is still being copied in, within
+    /// `settling`; and the files a move cannot be told of. The one way
+    /// `sync`, `status` and every forecast count it ([`super::gather`]).
     #[must_use]
-    pub fn foreseen(manifest: &Manifest, state: &State, store: &Store) -> Self {
-        let due = crate::due::due(
-            manifest,
-            store,
-            &state.failures,
-            false,
-            crate::state::now_secs(),
-        );
-        let to_fetch: BTreeSet<SourceKey> = (due.now.into_iter())
-            .filter(|(_, f)| *f == crate::due::Fetch::Missing)
-            .map(|(k, _)| k)
-            .collect();
-        let mut unlisted = super::Unlisted::of(manifest, state, store, crate::store::SETTLING);
-        let moves = super::moved(manifest, state, store, &mut unlisted, |_| None);
-        let waiting = super::arriving(manifest, state, store, crate::store::SETTLING)
+    pub fn of(
+        manifest: &Manifest,
+        state: &State,
+        store: &Store,
+        moves: &super::Moves,
+        settling: std::time::Duration,
+        fetches: Option<bool>,
+    ) -> Self {
+        let to_fetch: BTreeSet<SourceKey> = match fetches {
+            Some(retry) => {
+                let due = crate::due::due(
+                    manifest,
+                    store,
+                    &state.failures,
+                    retry,
+                    crate::state::now_secs(),
+                );
+                (due.now.into_iter())
+                    .filter(|(_, f)| *f == crate::due::Fetch::Missing)
+                    .map(|(k, _)| k)
+                    .collect()
+            }
+            None => BTreeSet::new(),
+        };
+        let waiting = super::arriving(manifest, state, store, settling)
             .into_iter()
             .chain(to_fetch.iter().cloned())
             .chain(moves.unsure.iter().flat_map(|(gone, _)| gone).cloned())
@@ -1108,6 +1126,14 @@ impl Grounds<'_> {
             .collect()
     }
 
+    /// The listed sources a sync measures before it plans, in any of its
+    /// measuring steps ([`super::measure::pending`]): new or changed since
+    /// measured, or measured otherwise than this muman measures them.
+    #[must_use]
+    pub fn to_measure(&self) -> BTreeSet<SourceKey> {
+        super::measure::pending(self.store, self.manifest, self.state)
+    }
+
     /// What a sync decides of every song of `planned` and does with every
     /// file, the sources of `failed` failing it and fitting having put
     /// the songs of `placed` together whole: the one way `sync`,
@@ -1144,7 +1170,8 @@ impl Grounds<'_> {
 
 /// What a sync from some grounds does, foreseen by a command that changes
 /// nothing: each song planned, those that could not be, and what is done
-/// with each song and each file.
+/// with each song and each file, and what the sync reads or renders first
+/// that could make it decide otherwise.
 #[derive(Debug)]
 pub struct Foresight {
     pub planned: Planned,
@@ -1155,15 +1182,45 @@ pub struct Foresight {
     pub awaiting: Vec<usize>,
     /// The sources of the songs that fail.
     pub failed: BTreeSet<SourceKey>,
+    /// How the songs fit into `[library] max_size`, where it is set: the
+    /// songs left out, and those whose size is an estimate.
+    pub fitted: Option<crate::limit::Fitted>,
+    /// The listed sources new or changed since they were measured, which
+    /// the sync reads before it plans ([`Grounds::to_measure`]): their songs
+    /// are foreseen as they were read, if at all.
+    pub to_measure: BTreeSet<SourceKey>,
     pub foreseen: Foreseen,
     pub intent: Intent,
 }
 
+impl Foresight {
+    /// Whether the sync was foreseen whole: it reads no source again and
+    /// renders no song to measure it before it decides.
+    #[must_use]
+    pub fn whole(&self) -> bool {
+        self.to_measure.is_empty() && self.fitted.as_ref().is_none_or(|f| f.guessed.is_empty())
+    }
+
+    /// Each song planned as the library holds it ([`as_held`]).
+    #[must_use]
+    pub fn shown(&self, old: &BTreeMap<PathBuf, Written>) -> Planned {
+        as_held(&self.planned, &self.foreseen.decided, old)
+    }
+}
+
 /// What a sync from `grounds` does, as a command that changes nothing
-/// says it: each song resolved as the sync resolves it, at the format
-/// its file was fitted to where `[library] max_size` fits songs, without
-/// rendering any, then decided ([`Grounds::intend`]).
-pub fn foresight(grounds: &Grounds<'_>) -> anyhow::Result<Foresight> {
+/// says it: each song resolved as the sync resolves it, fitted into
+/// `[library] max_size` as the sync fits it, then decided
+/// ([`Grounds::intend`]). Nothing is measured or rendered: a source
+/// changed since it was measured is taken as it was read
+/// ([`Foresight::to_measure`]), and fitting takes each size the state
+/// records, and an estimate where it records none, which the sync would
+/// render to learn ([`crate::limit::Fitted::guessed`]); `runner` names the
+/// ffmpeg the recorded sizes were made with.
+pub fn foresight<R: crate::runner::Runner>(
+    runner: &R,
+    grounds: &Grounds<'_>,
+) -> anyhow::Result<Foresight> {
     let on_disk = grounds.on_disk();
     let resolution = super::resolve_songs(
         grounds.manifest,
@@ -1174,7 +1231,6 @@ pub fn foresight(grounds: &Grounds<'_>) -> anyhow::Result<Foresight> {
         grounds.asked,
     )?;
     let mut planned = resolution.planned;
-    crate::limit::as_written(grounds.manifest, grounds.state, &mut planned);
     let failed = grounds.ahead.failing(
         (resolution.unresolved.iter())
             .flat_map(|(n, _)| &grounds.manifest.songs[*n].sources)
@@ -1182,15 +1238,92 @@ pub fn foresight(grounds: &Grounds<'_>) -> anyhow::Result<Foresight> {
             .cloned()
             .collect(),
     );
+    let fitted = if grounds.manifest.settings.library.max_size.is_some() {
+        let mut state = grounds.state.clone();
+        let fitting = super::Fitting {
+            manifest: grounds.manifest,
+            store: grounds.store,
+            library: grounds.library,
+            found: (&on_disk, &grounds.ahead.to_fetch, &failed),
+            asked: grounds.asked,
+        };
+        let learning = super::Learning {
+            located: &BTreeMap::new(),
+            scratch: grounds.library,
+            workshop: None,
+        };
+        let fit = fitting.fit(
+            runner,
+            &mut state,
+            &mut planned,
+            &learning,
+            &mut std::io::sink(),
+        )?;
+        fit.map(|f| f.fitted)
+    } else {
+        None
+    };
     let (foreseen, intent) = grounds.intend(&planned, &failed, &BTreeSet::new(), Vec::new());
     Ok(Foresight {
         planned,
         unresolved: resolution.unresolved,
         awaiting: resolution.awaiting,
         failed,
+        fitted,
+        to_measure: grounds.to_measure(),
         foreseen,
         intent,
     })
+}
+
+/// Each song of `planned` as a library file of it holds it, where
+/// `decided` leaves that file as it is: left as built, or as the user's,
+/// changed since muman wrote it or kept where it is for a file of theirs
+/// ([`Doing::Held`], [`Doing::Guard`], [`Doing::Blocked`]). Such a song
+/// takes the plan the state records that file was made from, and its
+/// name, each value said to be as muman wrote it there, rather than what
+/// its sources give now, which the sync does not write: so `list`, a
+/// query, `status` and `info` show the file the library holds.
+#[must_use]
+pub fn as_held(
+    planned: &[PlannedSong],
+    decided: &[Doing],
+    old: &BTreeMap<PathBuf, Written>,
+) -> Planned {
+    planned
+        .iter()
+        .zip(decided)
+        .map(|((n, r), d)| {
+            let file = match d {
+                Doing::Guard { file }
+                | Doing::Held { file: Some(file) }
+                | Doing::Blocked { file, .. } => Some(file),
+                _ => None,
+            };
+            let built = file.and_then(|f| Some((f, old.get(f)?.plan.clone()?)));
+            let Some((file, plan)) = built else {
+                return (*n, r.clone());
+            };
+            let from = "its file, as muman wrote it";
+            let tags = (plan.tags.iter())
+                .map(|(key, _)| crate::resolve::TagWhy {
+                    key: key.clone(),
+                    from: from.to_string(),
+                    cleaned: Vec::new(),
+                })
+                .collect();
+            let held = Resolved {
+                plan,
+                stem: file.with_extension(""),
+                why: crate::resolve::Why {
+                    audio: from.to_string(),
+                    tags,
+                    ..crate::resolve::Why::default()
+                },
+            };
+            (*n, held)
+        })
+        .collect()
 }
 
 /// The files a forced sync of the songs planned writes, each song's own

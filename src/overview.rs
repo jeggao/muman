@@ -1,11 +1,14 @@
 //! `muman info`: what the library holds, whether it is in step with
 //! the song list, and what in it could be better. Read from the song
-//! list, the state and the folders alone: nothing is measured, fetched
-//! or locked, so it answers at once and changes nothing; the programs
-//! are run for their versions alone ([`programs`]). Whether
-//! the library is in step is what a sync would do with each song, by the
-//! decisions a sync makes (`reconcile::foresight`), on the state as a
-//! sync would take it, so `info`, `status` and `sync` never disagree.
+//! list, the state and the folders: nothing is measured, fetched or
+//! locked, so it answers at once and changes nothing; a tool runs only to
+//! hear a moved source, as the sync hears it, and the programs for their
+//! versions ([`programs`]). Whether the library is in step is what a sync
+//! would do with each song, from the grounds every command gathers alike
+//! (`reconcile::foreground`) and by the decisions a sync makes, fitting
+//! into `max_size` among them (`reconcile::foresight`), so `info`,
+//! `status` and `sync` never disagree; a song of a source changed since
+//! it was measured is counted apart, as the sync reads it first.
 //! Songs are counted on albums as loudness and folder covers group them
 //! (`album::of_each`): a song naming no album is a single, an album of
 //! its own, and only an album artist named is counted.
@@ -22,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::ui::{Painted, Style};
 use anyhow::Result;
@@ -35,6 +38,7 @@ use crate::manifest::{LyricsPin, Manifest};
 use crate::quality::SOFT_COVER;
 use crate::reconcile;
 use crate::resolve::{Plan, Resolved};
+use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state;
 use crate::state::State;
@@ -71,10 +75,18 @@ struct Context<'a> {
     state: State,
     store: Store,
     planned: Vec<(usize, Resolved)>,
+    /// Each song planned as the library holds it ([`reconcile::as_held`]).
+    shown: Vec<(usize, Resolved)>,
     /// What the next sync decides of each song planned.
     foreseen: reconcile::Foreseen,
     /// What it does with each file.
     intent: reconcile::Intent,
+    /// How it fits the songs into `[library] max_size`, where it is set.
+    fitted: Option<crate::limit::Fitted>,
+    /// The sources it reads before it plans, new or changed since read.
+    to_measure: BTreeSet<SourceKey>,
+    /// The files no song names that are none of those it follows.
+    unlisted: reconcile::Unlisted,
     /// Each song that could not be planned, named, and why.
     unresolved: Vec<String>,
     /// The library folder written to before, where it was another.
@@ -91,9 +103,16 @@ impl Context<'_> {
 }
 
 /// Write the library's statistics, its status against the song list,
-/// and its health, every song behind a count when `verbose`.
-pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
-    let c = context(dirs, verbose)?;
+/// and its health, every song behind a count when `verbose`; a moved
+/// source is heard by `runner`, as the sync hears it, a file dropped in
+/// within `settling` still being copied in.
+pub fn info<R: Runner, W: Write>(
+    runner: &R,
+    (dirs, settling): (&Dirs, Duration),
+    verbose: bool,
+    out: &mut W,
+) -> Result<()> {
+    let c = context(runner, (dirs, settling), verbose)?;
     folders(&c, out)?;
     library(&c, out)?;
     sources(&c, out)?;
@@ -101,25 +120,27 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     health(&c, out)
 }
 
-/// The song list, the state as a sync takes it and each song planned as
-/// a sync would plan it, for every section to read.
-fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
-    let manifest = Manifest::load(&dirs.home)?;
-    let mut state = State::load(&dirs.home)?;
-    let moved_from = reconcile::as_found(dirs, &mut state, crate::history::Moves::Foresee)?
-        .map(|adopted| adopted.from);
-    let store = Store::scan(dirs)?;
+/// The song list, the state and the sources as a sync gathers them
+/// ([`reconcile::foreground`]), and what it does with each song and file
+/// ([`reconcile::foresight`]), for every section to read.
+fn context<'a, R: Runner>(
+    runner: &R,
+    (dirs, settling): (&'a Dirs, Duration),
+    verbose: bool,
+) -> Result<Context<'a>> {
+    let scratch = crate::atomic::Scratch::new()?;
+    let ground = reconcile::foreground(runner, dirs, settling, scratch.path())?;
     // A source a sync fetches is there by the time it plans; one it does
     // not, as a file of the user's own or one whose fetch failed lately, is not.
-    let ahead = reconcile::Ahead::foreseen(&manifest, &state, &store);
-    let foresight = reconcile::foresight(&reconcile::Grounds {
-        manifest: &manifest,
-        state: &state,
-        store: &store,
-        library: &dirs.library,
-        ahead: &ahead,
-        asked: (false, false),
-    })?;
+    let foresight = reconcile::foresight(runner, &ground.grounds(&dirs.library, (false, false)))?;
+    let reconcile::Ground {
+        manifest,
+        state,
+        store,
+        unlisted,
+        adopted,
+        ..
+    } = ground;
     let unresolved = (foresight.unresolved.iter())
         .map(|(n, e)| {
             let name = reconcile::name_of(&manifest.songs[*n], None, &state.facts);
@@ -129,14 +150,18 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
     Ok(Context {
         dirs,
         verbose,
+        shown: foresight.shown(&state.outputs),
         planned: foresight.planned,
         foreseen: foresight.foreseen,
         intent: foresight.intent,
+        fitted: foresight.fitted,
+        to_measure: foresight.to_measure,
         manifest,
         state,
         store,
+        unlisted,
         unresolved,
-        moved_from,
+        moved_from: adopted.map(|adopted| adopted.from),
     })
 }
 
@@ -145,14 +170,27 @@ const ASPECTS: [&str; 5] = ["path", "audio", "format", "cover", "lyrics"];
 
 /// Write each value a sync would change in each song: the value its file
 /// holds now, the one it would hold and why, for `fields` alone when any
-/// are named, then how many songs each field changes in.
-pub fn changes<W: Write>(dirs: &Dirs, fields: &[String], out: &mut W) -> Result<()> {
-    let c = context(dirs, false)?;
+/// are named, then how many songs each field changes in. A song whose file
+/// the sync leaves as it is, as built or as the user's, changes in nothing.
+pub fn changes<R: Runner, W: Write>(
+    runner: &R,
+    (dirs, settling): (&Dirs, Duration),
+    fields: &[String],
+    out: &mut W,
+) -> Result<()> {
+    let c = context(runner, (dirs, settling), false)?;
     let wanted = wanted(&c, fields)?;
     let foreseen = &c.foreseen;
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let (mut changed, mut unwritten) = (0, 0);
-    for (n, r) in &c.planned {
+    let (mut changed, mut unwritten, mut left) = (0, 0, 0);
+    for ((n, r), d) in c.planned.iter().zip(&c.intent.decided) {
+        if matches!(
+            reconcile::verdict(d, None, &r.plan).0,
+            reconcile::Fate::Alone
+        ) {
+            left += 1;
+            continue;
+        }
         let file = foreseen.files.get(n);
         let Some((file, was)) =
             file.and_then(|f| Some((f, c.state.outputs.get(f)?.plan.as_ref()?)))
@@ -188,6 +226,12 @@ pub fn changes<W: Write>(dirs: &Dirs, fields: &[String], out: &mut W) -> Result<
     }
     if unwritten > 0 {
         crate::ui::line(out, &format!("{unwritten} song(s) not written yet"))?;
+    }
+    if left > 0 {
+        crate::ui::line(
+            out,
+            &format!("{left} song(s) left as they are by a sync; `muman status` says why"),
+        )?;
     }
     if !c.unresolved.is_empty() {
         crate::ui::line(
@@ -351,11 +395,11 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
             .find(|(k, _)| k == f.vorbis())
             .and_then(|(_, v)| v.first().cloned())
     };
-    let album_of = crate::album::of_each(c.planned.iter().map(|(_, r)| r));
+    let album_of = crate::album::of_each(c.shown.iter().map(|(_, r)| r));
     let albums: BTreeSet<&crate::album::Album> = album_of.iter().flatten().collect();
     let singles = album_of.iter().filter(|a| a.is_none()).count();
     let artists: BTreeSet<String> = c
-        .planned
+        .shown
         .iter()
         .filter_map(|(_, r)| tag(r, Field::AlbumArtist))
         .collect();
@@ -365,13 +409,13 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         &format!(
             "{} ({} on {} album(s), {singles} single(s))",
             c.manifest.songs.len(),
-            c.planned.len() - singles,
+            c.shown.len() - singles,
             albums.len()
         ),
     )?;
     row(out, "Album artists", &artists.len().to_string())?;
     let seconds: f64 = c
-        .planned
+        .shown
         .iter()
         .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.length())
         .sum();
@@ -380,7 +424,7 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .into_iter()
         .filter_map(|codec| {
             let of = |encoded: bool| {
-                c.planned
+                c.shown
                     .iter()
                     .filter(|(_, r)| {
                         r.plan.format.codec() == codec && (!encoded || r.plan.format.is_encoded())
@@ -508,7 +552,17 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     let (mut current, mut due, mut moving, mut alone) =
         (0, Group::default(), Group::default(), Group::default());
-    for ((n, r), d) in c.planned.iter().zip(&c.intent.decided) {
+    let mut reading = Group::default();
+    for ((n, r), d) in c.shown.iter().zip(&c.intent.decided) {
+        // A sync reads such a source before it decides its song.
+        if c.manifest.songs[*n]
+            .sources
+            .iter()
+            .any(|k| c.to_measure.contains(k))
+        {
+            reading.add(&c.name(*n, r));
+            continue;
+        }
         match reconcile::verdict(d, None, &r.plan).0 {
             reconcile::Fate::Kept => current += 1,
             reconcile::Fate::Moved => moving.add(&c.name(*n, r)),
@@ -527,11 +581,33 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     group(out, c.verbose, "To write", &due)?;
     group(out, c.verbose, "To move", &moving)?;
     group(out, c.verbose, "Left alone", &alone)?;
+    group(out, c.verbose, "To read first", &reading)?;
     group(out, c.verbose, "To remove", &gone)?;
     for song in &c.unresolved {
         unplanned.add(song);
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
+    if let Some(fitted) = &c.fitted {
+        let mut left_out = Group::default();
+        for n in &fitted.left_out {
+            left_out.add(&reconcile::name_of(
+                &c.manifest.songs[*n],
+                None,
+                &c.state.facts,
+            ));
+        }
+        group(out, c.verbose, "Left out for max_size", &left_out)?;
+        if !fitted.guessed.is_empty() {
+            row(
+                out,
+                "Sizes estimated",
+                &format!(
+                    "{} song(s), rendered by a sync before it fits",
+                    fitted.guessed.len()
+                ),
+            )?;
+        }
+    }
     let verdicts = lookup::verdicts(
         &c.manifest,
         &c.state,
@@ -570,37 +646,22 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         }
     }
     let (mut missing, mut to_measure) = (Group::default(), Group::default());
-    for key in &listed {
-        match c.store.locate(key) {
-            None => missing.add(&key.to_string()),
-            Some(l) => {
-                let holds = c
-                    .state
-                    .facts
-                    .get(key)
-                    .is_some_and(|f| f.holds_for(&l.rev()) && f.tags_hold(l.kind));
-                if !holds {
-                    to_measure.add(&key.to_string());
-                }
-            }
-        }
+    for key in listed.iter().filter(|k| !c.store.has(k)) {
+        missing.add(&key.to_string());
+    }
+    for key in &c.to_measure {
+        to_measure.add(&key.to_string());
     }
     group(out, c.verbose, "Sources missing", &missing)?;
     group(out, c.verbose, "Sources to measure", &to_measure)?;
     // As the next sync finds them: a removed song's files, and a file moved
     // or a copy of one, are not listed by it.
-    let mut found =
-        reconcile::Unlisted::of(&c.manifest, &c.state, &c.store, crate::store::SETTLING);
-    reconcile::moved(&c.manifest, &c.state, &c.store, &mut found, |_| None);
-    let reconcile::Unlisted {
-        ready, settling, ..
-    } = found;
     let mut new = Group::default();
-    for key in ready {
+    for key in &c.unlisted.ready {
         new.add(&key.to_string());
     }
-    for path in settling {
-        new.add(&SourceKey::Manual(path.into()).to_string());
+    for path in &c.unlisted.settling {
+        new.add(&SourceKey::Manual(path.clone().into()).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let (mut unused, mut strays) = (Group::default(), Group::default());
@@ -650,9 +711,7 @@ fn foreign(c: &Context<'_>) -> Result<Group> {
 
 fn health<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     heading(out, "Health")?;
-    let health = Health::of(&c.manifest, &c.planned, &c.state.facts, &|n, r| {
-        c.name(n, r)
-    });
+    let health = Health::of(&c.manifest, &c.shown, &c.state.facts, &|n, r| c.name(n, r));
     group(out, c.verbose, "Damaged audio", &health.damaged)?;
     group(out, c.verbose, "Audio under 16 kHz", &health.narrow)?;
     group(out, c.verbose, "Mono audio", &health.mono)?;

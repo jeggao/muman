@@ -108,8 +108,10 @@ tags [agree on one](metadata.md#tags); a single, named for its title,
 is an album of its own. A song whose file stays as it was made, as one
 `sync` leaves as built until `--accept` (see
 [the guide](guide.md#a-source-that-changes)), counts in its album's
-loudness as that file's audio measured, so its album's songs keep one
-album gain.
+loudness as that file's audio measured, so its album's other songs are
+not written again for it. That file keeps the album gain it was written
+with until it is written again, so a song that joins its album meanwhile
+may carry another.
 
 `[loudness] mode` says where the gain goes:
 
@@ -208,7 +210,10 @@ library needs and whether `min_bitrate` or the codec stops it, and
 leaves songs out, the last listed first, until the rest fit. muman
 removes their files, and the run exits with code 4.
 `status` shows each lowered song's format and why, and what the library
-would take; `info` shows what it takes against `max_size`.
+would take; `info` shows what it takes against `max_size`. `check`,
+`info` and `remove` fit the songs as the next sync does, from the sizes
+earlier runs measured, and measure nothing: a size not measured yet is
+estimated, and they say so, as the sync renders that song first.
 
 A song you changed since muman wrote it counts as it is and is never
 encoded again, unless `sync --force` writes it again, which fits it as

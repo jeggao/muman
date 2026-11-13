@@ -45,6 +45,166 @@ impl std::fmt::Debug for Measuring<'_> {
     }
 }
 
+/// The sources of `keys` the store holds whose facts do not hold for
+/// their file as it is, or miss a file beside it: what [`measure`] reads,
+/// but those [`moved`] keeps and those [`read_again`] leaves.
+fn outdated(store: &Store, keys: &BTreeSet<SourceKey>, state: &State) -> Vec<Located> {
+    keys.iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| {
+            !(state.facts.get(&l.key))
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
+        })
+        .collect()
+}
+
+/// Whether [`measure`] reads `l` again at time `now`, not asked to retry:
+/// unless it failed to read as it is and is not due to be read again.
+fn read_again(state: &State, l: &Located, now: u64) -> bool {
+    state.failures.get(&l.key).is_none_or(|f| {
+        f.step != Step::Measure || f.due_to_read(&l.rev(), &facts::reading(l.kind), now)
+    })
+}
+
+/// The sources of `keys` the store holds whose facts hold for their file,
+/// and for which `due` holds of them: what a step catching up on what an
+/// earlier version measured reads.
+fn holding(
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &State,
+    due: impl Fn(&Located, &Facts) -> bool,
+) -> Vec<Located> {
+    keys.iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| (state.facts.get(&l.key)).is_some_and(|f| f.holds_for(&l.rev()) && due(l, f)))
+        .collect()
+}
+
+/// Where the lyrics `f` measured are that were never asked whether they
+/// sing anything.
+fn unsung(f: &Facts) -> Vec<crate::facts::LyricsAt> {
+    (f.lyrics.iter())
+        .filter(|x| x.sings.is_none())
+        .map(|x| x.at.clone())
+        .collect()
+}
+
+/// A mix [`analyze_mixes`] analyzes: the source, its audio, its revision
+/// and the layout.
+type Unmixed = (
+    Located,
+    crate::facts::AudioFacts,
+    String,
+    crate::codec::Layout,
+);
+
+/// The analyses [`analyze_mixes`] takes of a mix under `settings`, and
+/// each mix of a source of `keys` it is due for, songs `fitted` or not.
+fn unmixed(
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &State,
+    (settings, fitted): (&crate::settings::Settings, bool),
+) -> (Vec<crate::analysis::Kind>, Vec<Unmixed>) {
+    let mut wanted =
+        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
+    wanted.retain(|k| k.mixed());
+    if wanted.is_empty() {
+        return (wanted, Vec::new());
+    }
+    let due = (holding(store, keys, state, |_, f| f.audio.is_some()).into_iter())
+        .filter_map(|l| {
+            let f = state.facts.get(&l.key)?;
+            Some((l, f.audio.as_ref()?, f.audio_rev()))
+        })
+        .flat_map(|(l, audio, rev)| {
+            let best = crate::resolve::Format::encoded(audio, &settings.audio).mix();
+            let lowered = fitted
+                .then(|| crate::fit::lowered_mix(&audio.shape(), &settings.audio))
+                .flatten();
+            let layouts: BTreeSet<crate::codec::Layout> = best.into_iter().chain(lowered).collect();
+            let unmixed = |layout: &crate::codec::Layout| {
+                state
+                    .mix(&rev, *layout)
+                    .is_none_or(|a| !a.stale(&wanted).is_empty())
+            };
+            (layouts.into_iter().filter(unmixed))
+                .map(|layout| (l.clone(), audio.clone(), rev.clone(), layout))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    (wanted, due)
+}
+
+/// Each comparison of two sources of `songs` resolving may ask for that
+/// is not made already at their revisions: what [`compare`] makes.
+fn uncompared(
+    store: &Store,
+    songs: &[Song],
+    state: &State,
+) -> Vec<(SourceKey, SourceKey, (String, String))> {
+    let rev = |k: &SourceKey| state.facts.get(k).map(Facts::audio_rev);
+    songs
+        .iter()
+        .flat_map(|s| resolve::wanted_alignments(s, &state.facts))
+        .filter(|(a, b)| store.has(a) && store.has(b))
+        .filter_map(|(a, b)| {
+            let revs = (rev(&a)?, rev(&b)?);
+            state.alignment(&revs).is_none().then_some((a, b, revs))
+        })
+        .collect()
+}
+
+/// The listed sources measuring reads before a sync plans, its every
+/// step as the sync takes it, not asked to retry, without reading any:
+/// those [`measure`] reads, new or changed since measured; those whose
+/// tags or lyrics an earlier version read another way, not yet hashed, or
+/// not yet analyzed as `[loudness]` and the pick ask, whole or mixed; and
+/// those of a comparison not yet made. What a command that changes
+/// nothing says of their songs is as they were read.
+pub(super) fn pending(
+    store: &Store,
+    manifest: &crate::manifest::Manifest,
+    state: &State,
+) -> BTreeSet<SourceKey> {
+    let keys = manifest.keys();
+    let settings = &manifest.settings;
+    let now = state::now_secs();
+    let analyses =
+        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
+    let fitted = settings.library.max_size.is_some();
+    let moving = |l: &Located| {
+        (state.facts.get(&l.key))
+            .filter(|f| f.content.is_some())
+            .is_some_and(|f| {
+                f.moved_to(&l.rev(), crate::facts::content_of(l).as_deref())
+                    .is_some()
+            })
+    };
+    let mut pending: BTreeSet<SourceKey> = (outdated(store, &keys, state).into_iter())
+        .filter(|l| !moving(l) && read_again(state, l, now))
+        .map(|l| l.key)
+        .collect();
+    let caught_up = holding(store, &keys, state, |l, f| {
+        !f.tags_hold(l.kind)
+            || !unsung(f).is_empty()
+            || !f.hashed()
+            || !f.unanalyzed(&analyses).is_empty()
+    });
+    pending.extend(caught_up.into_iter().map(|l| l.key));
+    pending.extend(
+        unmixed(store, &keys, state, (settings, fitted))
+            .1
+            .into_iter()
+            .map(|m| m.0.key),
+    );
+    pending.extend(
+        (uncompared(store, &manifest.songs, state).into_iter()).flat_map(|(a, b, _)| [a, b]),
+    );
+    pending
+}
+
 /// Keep the facts of each of `outdated` whose files still hold what they
 /// were measured on, a copy or a touch having changed only their
 /// revision, at their new revision in `state`, as [`Facts::moved_to`]
@@ -93,16 +253,7 @@ pub fn measure<R: Runner, W: Write>(
     how: &mut Measuring<'_>,
     out: &mut W,
 ) -> Result<()> {
-    let outdated: Vec<Located> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter(|l| {
-            !state
-                .facts
-                .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
-        })
-        .collect();
+    let outdated = outdated(store, keys, state);
     let moved = moved(&outdated, state);
     let outdated: Vec<Located> = outdated
         .into_iter()
@@ -110,12 +261,8 @@ pub fn measure<R: Runner, W: Write>(
         .collect();
     clear_read(store, keys, state);
     let now = state::now_secs();
-    let (due, failed): (Vec<Located>, Vec<Located>) = outdated.into_iter().partition(|l| {
-        how.retry
-            || state.failures.get(&l.key).is_none_or(|f| {
-                f.step != Step::Measure || f.due_to_read(&l.rev(), &facts::reading(l.kind), now)
-            })
-    });
+    let (due, failed): (Vec<Located>, Vec<Located>) =
+        (outdated.into_iter()).partition(|l| how.retry || read_again(state, l, now));
     if how.say_unread && !failed.is_empty() {
         crate::ui::warning(
             out,
@@ -274,16 +421,7 @@ pub(super) fn retag<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<bool> {
-    let due: Vec<Located> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter(|l| {
-            state
-                .facts
-                .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()) && !f.tags_hold(l.kind))
-        })
-        .collect();
+    let due = holding(store, keys, state, |l, f| !f.tags_hold(l.kind));
     if due.is_empty() {
         return Ok(false);
     }
@@ -326,20 +464,10 @@ pub(super) fn relyric<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<bool> {
-    let due: Vec<(Located, Vec<crate::facts::LyricsAt>)> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter_map(|l| {
-            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
-            let at: Vec<_> = f
-                .lyrics
-                .iter()
-                .filter(|x| x.sings.is_none())
-                .map(|x| x.at.clone())
-                .collect();
-            (!at.is_empty()).then_some((l, at))
-        })
-        .collect();
+    let due: Vec<(Located, Vec<crate::facts::LyricsAt>)> =
+        (holding(store, keys, state, |_, f| !unsung(f).is_empty()).into_iter())
+            .filter_map(|l| Some((l.clone(), unsung(state.facts.get(&l.key)?))))
+            .collect();
     if due.is_empty() {
         return Ok(false);
     }
@@ -379,16 +507,7 @@ pub(super) fn hash<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<bool> {
-    let due: Vec<Located> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter(|l| {
-            state
-                .facts
-                .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()) && !f.hashed())
-        })
-        .collect();
+    let due = holding(store, keys, state, |_, f| !f.hashed());
     if due.is_empty() {
         return Ok(false);
     }
@@ -482,15 +601,13 @@ pub(super) fn analyze<R: Runner, W: Write>(
     wanted: &[crate::analysis::Kind],
     out: &mut W,
 ) -> Result<bool> {
-    let due: Vec<(Located, Vec<crate::analysis::Kind>)> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter_map(|l| {
-            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
-            let kinds = f.unanalyzed(wanted);
-            (!kinds.is_empty()).then_some((l, kinds))
-        })
-        .collect();
+    let due: Vec<(Located, Vec<crate::analysis::Kind>)> =
+        (holding(store, keys, state, |_, f| !f.unanalyzed(wanted).is_empty()).into_iter())
+            .filter_map(|l| {
+                let kinds = state.facts.get(&l.key)?.unanalyzed(wanted);
+                Some((l, kinds))
+            })
+            .collect();
     if due.is_empty() {
         return Ok(false);
     }
@@ -542,40 +659,7 @@ pub fn analyze_mixes<R: Runner, W: Write>(
     (settings, fitted): (&crate::settings::Settings, bool),
     out: &mut W,
 ) -> Result<bool> {
-    let mut wanted =
-        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
-    wanted.retain(|k| k.mixed());
-    if wanted.is_empty() {
-        return Ok(false);
-    }
-    let due: Vec<(
-        Located,
-        crate::facts::AudioFacts,
-        String,
-        crate::codec::Layout,
-    )> = keys
-        .iter()
-        .filter_map(|k| store.locate(k))
-        .filter_map(|l| {
-            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
-            Some((l, f.audio.as_ref()?, f.audio_rev()))
-        })
-        .flat_map(|(l, audio, rev)| {
-            let best = crate::resolve::Format::encoded(audio, &settings.audio).mix();
-            let lowered = fitted
-                .then(|| crate::fit::lowered_mix(&audio.shape(), &settings.audio))
-                .flatten();
-            let layouts: BTreeSet<crate::codec::Layout> = best.into_iter().chain(lowered).collect();
-            let unmixed = |layout: &crate::codec::Layout| {
-                state
-                    .mix(&rev, *layout)
-                    .is_none_or(|a| !a.stale(&wanted).is_empty())
-            };
-            (layouts.into_iter().filter(unmixed))
-                .map(|layout| (l.clone(), audio.clone(), rev.clone(), layout))
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let (wanted, due) = unmixed(store, keys, state, (settings, fitted));
     if due.is_empty() {
         return Ok(false);
     }
@@ -606,16 +690,7 @@ pub fn compare<R: Runner, W: Write>(
     state: &mut State,
     out: &mut W,
 ) -> Result<bool> {
-    let rev = |k: &SourceKey| state.facts.get(k).map(Facts::audio_rev);
-    let due: Vec<(SourceKey, SourceKey, (String, String))> = songs
-        .iter()
-        .flat_map(|s| resolve::wanted_alignments(s, &state.facts))
-        .filter(|(a, b)| store.has(a) && store.has(b))
-        .filter_map(|(a, b)| {
-            let revs = (rev(&a)?, rev(&b)?);
-            state.alignment(&revs).is_none().then_some((a, b, revs))
-        })
-        .collect();
+    let due = uncompared(store, songs, state);
     if due.is_empty() {
         return Ok(false);
     }
@@ -688,6 +763,26 @@ pub fn compare<R: Runner, W: Write>(
     Ok(true)
 }
 
+/// The songs of `planned` whose size, copied or encoded without loss,
+/// fitting takes from their source's audio bytes, which its facts lack:
+/// what [`sizes`] measures, by their places in the list.
+pub(super) fn unmeasured(planned: &Planned, state: &State) -> BTreeSet<usize> {
+    (planned.iter())
+        .filter(|(_, r)| {
+            matches!(
+                r.plan.format,
+                resolve::Format::Copy { .. } | resolve::Format::Encode { kbps: None, .. }
+            )
+        })
+        .filter(|(_, r)| {
+            (state.facts.get(&r.plan.audio.key))
+                .and_then(|f| f.audio.as_ref())
+                .is_some_and(|a| a.bytes.is_none())
+        })
+        .map(|(n, _)| *n)
+        .collect()
+}
+
 /// The audio stream of a source to measure, and where the source is.
 pub(super) struct Sizing(u32, Located);
 
@@ -702,21 +797,9 @@ pub(super) fn sizes<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<bool> {
-    let due: BTreeMap<SourceKey, Sizing> = planned
-        .iter()
-        .filter(|(_, r)| {
-            matches!(
-                r.plan.format,
-                resolve::Format::Copy { .. } | resolve::Format::Encode { kbps: None, .. }
-            )
-        })
-        .filter(|(_, r)| {
-            state
-                .facts
-                .get(&r.plan.audio.key)
-                .and_then(|f| f.audio.as_ref())
-                .is_some_and(|a| a.bytes.is_none())
-        })
+    let unmeasured = unmeasured(planned, state);
+    let due: BTreeMap<SourceKey, Sizing> = (planned.iter())
+        .filter(|(n, _)| unmeasured.contains(n))
         .filter_map(|(_, r)| {
             let located = store.locate(&r.plan.audio.key)?;
             Some((

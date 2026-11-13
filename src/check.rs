@@ -7,8 +7,10 @@
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
 //!
-//! What it reports without running a tool is [`crate::diagnose`]'s,
-//! which `status` counts too.
+//! What it reports without measuring or decoding is
+//! [`crate::diagnose`]'s, which `status` counts too: its problems, which
+//! make it exit 4, and its warnings, picks in doubt among them, which are
+//! choices to look at and which its last line counts apart.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -42,7 +44,7 @@ pub fn calibrate<D: Write>(dirs: &Dirs, data: &mut D) -> Result<bool> {
 /// Returns whether there was none.
 pub fn check<R: Runner, W: Write, D: Write>(
     runner: &R,
-    dirs: &Dirs,
+    (dirs, settling): (&Dirs, std::time::Duration),
     (decode, upstream): (bool, bool),
     out: &mut W,
     report: &mut D,
@@ -52,8 +54,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
         manifest,
         state,
         store,
-    } = crate::diagnose::diagnose(dirs)?;
+    } = crate::diagnose::diagnose(runner, dirs, settling)?;
     let mut problems = 0_usize;
+    let mut warnings = 0_usize;
     let mut problem = |out: &mut D, text: String| {
         problems += 1;
         crate::ui::warning(out, &text)
@@ -61,7 +64,10 @@ pub fn check<R: Runner, W: Write, D: Write>(
     for line in said {
         match line {
             Said::Info(line) => crate::ui::info(report, &line)?,
-            Said::Warning(line) => crate::ui::warning(report, &line)?,
+            Said::Warning(line) => {
+                warnings += 1;
+                crate::ui::warning(report, &line)?;
+            }
             Said::Problem(line) => problem(report, line)?,
         }
     }
@@ -125,8 +131,11 @@ pub fn check<R: Runner, W: Write, D: Write>(
             }
         }
     }
-    if problems == 0 {
-        crate::ui::success(report, "No problems found")?;
+    // A warning, as a pick in doubt, is a choice to look at, not a fault.
+    match (problems, warnings) {
+        (0, 0) => crate::ui::success(report, "No problems found")?,
+        (0, w) => crate::ui::success(report, &format!("No problems found; {w} warning(s) above"))?,
+        _ => {}
     }
     Ok(problems == 0)
 }
@@ -435,7 +444,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(
@@ -491,7 +507,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(text.contains("No site can be reached"), "{text}");
@@ -534,7 +557,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(!text.contains("No site can be reached"), "{text}");
@@ -581,7 +611,14 @@ mod tests {
                     ..Fake::default()
                 };
                 let (mut out, mut report) = (Vec::new(), Vec::new());
-                check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+                check(
+                    &fake,
+                    (&dirs, std::time::Duration::ZERO),
+                    (false, true),
+                    &mut out,
+                    &mut report,
+                )
+                .unwrap();
                 crate::ui::plain(&String::from_utf8(report).unwrap())
             };
             let same = ask("Lantern Weather");
@@ -686,7 +723,7 @@ mod tests {
         let (mut out, mut report) = (Vec::new(), Vec::new());
         let ok = check(
             &Fake::default(),
-            &dirs,
+            (&dirs, std::time::Duration::ZERO),
             (false, false),
             &mut out,
             &mut report,
@@ -727,7 +764,7 @@ mod tests {
         let mut report = Vec::new();
         check(
             &Fake::default(),
-            &dirs,
+            (&dirs, std::time::Duration::ZERO),
             (false, false),
             &mut Vec::new(),
             &mut report,

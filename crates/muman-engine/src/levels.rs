@@ -18,7 +18,10 @@
 //! loudness of the audio every library file was made from
 //! ([`keep_built`]), and that is read where the source's facts no longer
 //! hold it. So the songs of an album agree on its gain while one of them
-//! waits for `sync --accept`, and none is written again for it.
+//! waits for `sync --accept`, and none is written again for it; a song
+//! joining the album meanwhile is levelled over the album with that
+//! file's audio, and the file, left as it was, keeps the album gain it was
+//! written with until it is written again.
 
 use std::collections::{BTreeMap, BTreeSet};
 

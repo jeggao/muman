@@ -371,12 +371,12 @@ lookup alone.
 - **`info`** counts what the library holds, whether it is in step, the
   lookups due, and what could be better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
-  reads only what earlier runs recorded. `--verbose` names every song.
+  measures nothing: a song of a source changed since is "To read first".
 - **`check`** reports library files missing, empty, changed, left by a
   run that was cut short, or not muman's; sources missing, unreadable,
-  cut off or missing audio; and songs no sync can build or the last
-  could not write. `--decode` decodes every source in full again, to
-  find damage in a file changed since it was measured.
+  cut off or missing audio; songs no sync can build, `max_size` leaves
+  out or the last could not write; and, apart, warnings, as picks in
+  doubt. `--decode` decodes every source in full again.
 - **`check --upstream`** asks each site, downloading nothing, whether
   it still serves each fetched source in the format and at the size its
   song records, with the same tags. It names each source served

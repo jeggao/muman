@@ -38,7 +38,10 @@
 //! where `composer:quill` names a field; `youtube:<id>`, as keys were
 //! once named, names the same. A song that does not resolve
 //! yet, its sources not measured, offers its own `tags` and the tags of
-//! its first measured source, so a query still finds it.
+//! its first measured source, so a query still finds it. A song whose
+//! file a sync leaves as it is, as built or as the user's, is read as
+//! that file was made, at its name ([`reconcile::as_held`]), so its
+//! `path` and tags are those of the file the library holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -159,7 +162,9 @@ pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<V
 }
 
 /// Every song as a query reads it, in song-list order, with its plan
-/// where it resolves.
+/// where it resolves: at the format its file was written in, and a song a
+/// sync leaves as it is as its file holds it, by the decision the sync
+/// makes ([`reconcile::as_held`]).
 pub fn resolved_views(
     manifest: &Manifest,
     state: &State,
@@ -173,16 +178,29 @@ pub fn resolved_views(
         Err(e) => return Err(e),
     };
     crate::limit::as_written(manifest, state, &mut planned);
+    let decided = reconcile::foresee(manifest, state, &planned, library, (false, false)).decided;
+    let shown = reconcile::as_held(&planned, &decided, &state.outputs);
+    Ok(views_of(manifest, &state.facts, &shown))
+}
+
+/// Every song of `manifest` as a query reads it, in song-list order, by
+/// its plan in `planned` where it has one.
+#[must_use]
+pub fn views_of(
+    manifest: &Manifest,
+    facts: &BTreeMap<SourceKey, Facts>,
+    planned: &[(usize, Resolved)],
+) -> Vec<(View, Option<Resolved>)> {
     let mut plans: Vec<Option<Resolved>> = vec![None; manifest.songs.len()];
     for (n, r) in planned {
-        plans[n] = Some(r);
+        plans[*n] = Some(r.clone());
     }
-    Ok(manifest
+    manifest
         .songs
         .iter()
         .zip(plans)
-        .map(|(song, r)| (view_of(song, r.as_ref(), &state.facts), r))
-        .collect())
+        .map(|(song, r)| (view_of(song, r.as_ref(), facts), r))
+        .collect()
 }
 
 /// One song as a query reads it, from its plan where it resolves. A song

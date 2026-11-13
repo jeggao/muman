@@ -5,7 +5,8 @@
 //! A case is 8 to 12 steps over four songs of one's own. A step is a
 //! command: add one, retitle one, remove or restore one, undo the last
 //! run, edit a setting a build reads (the template, the codec lossless
-//! audio is written in, the lyrics' format, the loudness mode), or sync.
+//! audio is written in, the lyrics' format, the loudness mode, the
+//! library's `max_size`), or sync.
 //! Or it is what a user does by hand, then a sync: break a song's file so
 //! it reads as none or mend it, move it to another folder of
 //! `sources/manual` or back, trade two songs' files' names, rename and
@@ -32,7 +33,10 @@
 //! Every sync, the one that recovers from a stopped run among them, does
 //! with each library file what `status` foretold of it just before
 //! ([`crate::reconcile::as_foretold`]): left as it was, moved, written or
-//! gone. A sync that first lists a file no song names, which `status`
+//! gone; and to what `check` and `info` foresaw of it before that, from the
+//! grounds they gather alike ([`crate::reconcile::forecast`]), wherever
+//! they could foresee it whole, the sync measuring and rendering nothing
+//! first. A sync that first lists a file no song names, which `status`
 //! does not plan, and one whose move or removal fails, which departs from
 //! what it meant, are not held to it.
 //! An undo is refused, saying why, or puts the song list back as the run
@@ -72,7 +76,7 @@ const SEED: [u8; 32] = *b"muman converges on one sync seed";
 
 /// A setting a build reads, as the song list writes it and as it is
 /// changed to.
-const EDITS: [(&str, &str); 4] = [
+const EDITS: [(&str, &str); 5] = [
     (
         "template = \"{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}\"",
         "template = \"{{ album }}/{{ title }}\"",
@@ -86,6 +90,8 @@ const EDITS: [(&str, &str); 4] = [
         "format = \"txt\"\nwhen = \"any\"",
     ),
     ("mode = \"tags\"", "mode = \"off\""),
+    // Under what the songs' copies take, so fitting lowers them.
+    ("# max_size = \"32 GiB\"", "max_size = \"3 MiB\""),
 ];
 
 /// The folder's cover written as a file of its own, after the tag every
@@ -566,7 +572,12 @@ impl World {
     /// it said; a sync does to each library file what `status` foretold
     /// just before it ([`crate::reconcile::as_foretold`]).
     fn attempt(&self, args: &[&str]) -> (anyhow::Result<bool>, String) {
-        let dirs = self.s.job(args).dirs;
+        let job = self.s.job(args);
+        let dirs = job.dirs;
+        // As `check` and `info` foresee it, before `status` measures anything.
+        let forecast = (args == ["sync"])
+            .then(|| crate::reconcile::forecast(&self.fake, &dirs, job.settling).unwrap())
+            .flatten();
         let foretold = (args == ["sync"])
             .then(|| self.foretold(&dirs))
             .flatten()
@@ -594,6 +605,11 @@ impl World {
             let after = crate::reconcile::stamped(&dirs.library);
             if let Err(e) = crate::reconcile::as_foretold(&foretold, &before, &after) {
                 panic!("the sync did otherwise than status foretold: {e}\n{said}\n{text}");
+            }
+            if let Some(Err(e)) =
+                forecast.map(|f| crate::reconcile::as_foretold(&f, &before, &after))
+            {
+                panic!("the sync did otherwise than check and info foresaw: {e}\n{said}\n{text}");
             }
         }
         (done, text)
@@ -1048,4 +1064,20 @@ fn random_runs_leave_the_library_one_sync_builds() {
 #[ignore = "slow: more cases of the test above, run on each push to main"]
 fn many_random_runs_leave_the_library_one_sync_builds() {
     run_cases(64);
+}
+
+/// Songs fitted into `max_size` as songs are added, then sources moved and
+/// retagged, each sync as `status`, `check` and `info` foresaw it.
+#[test]
+fn a_library_fitted_into_max_size_and_moved_is_synced_as_foreseen() {
+    converges(&[
+        (Op::Edit(4), None),
+        (Op::Add(2), None),
+        (Op::Add(3), None),
+        (Op::Move(0), None),
+        (Op::Retag(1), None),
+        (Op::Swap(2, 3), None),
+        (Op::Remove(3), None),
+        (Op::Edit(4), None),
+    ]);
 }

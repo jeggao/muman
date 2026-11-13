@@ -516,7 +516,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
         let mut state = State::load(&dirs.home)?;
         let following = crate::reconcile::Following {
             home: &dirs.home,
-            lock: &lock,
+            lock: Some(&lock),
             rec: Recording::Run(run),
             dry_run: false,
             settling: wait,

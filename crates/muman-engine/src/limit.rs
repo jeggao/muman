@@ -34,7 +34,11 @@
 //! rendering. A song rendered to be measured is moved into the library
 //! rather than rendered twice. A song a change only tags again takes the
 //! size of the plan its file was written from until it is written and
-//! measured.
+//! measured. A command that changes nothing foresees the sync's fit
+//! without rendering ([`Workshop::renders`]): it takes each size
+//! `state.db` keeps, as the sync would, and an estimate where it keeps
+//! none, naming the songs whose size it guessed so ([`Fitted::guessed`]),
+//! as the sync may fit otherwise once it has measured them.
 //!
 //! **Levels.** A song is levelled at its best format, and fitting
 //! renders its lower rungs with those gains. A rung that mixes it into
@@ -200,6 +204,11 @@ pub struct Fitted {
     pub tools: String,
     /// The key of every rung of every song: the real sizes worth keeping.
     pub keys: BTreeSet<String>,
+    /// The songs, by their place in the list, a size of which the fit
+    /// took as an estimate where a sync renders or measures it first, as
+    /// fitting that renders nothing takes it ([`Workshop::renders`]): the
+    /// sync may fit otherwise. None where fitting renders.
+    pub guessed: BTreeSet<usize>,
 }
 
 /// Songs rendered to be measured at the format fitting chose, by their
@@ -430,12 +439,16 @@ struct Learnt {
     known: HashMap<String, u64>,
     made: HashMap<(usize, usize), (PathBuf, Rendered)>,
     rendered: usize,
+    /// The songs a rung of which is taken at its estimate, rendering
+    /// nothing, by their place in the list.
+    guessed: BTreeSet<usize>,
 }
 
 impl Learnt {
     /// Learn the real sizes of the `unknown` rungs, by ladder and rung:
-    /// from `state.sizes` where kept, else by rendering them; one that
-    /// does not render stays unknown.
+    /// from `state.sizes` where kept, else by rendering them, or, where
+    /// `at` renders nothing, at their estimate; one that does not render
+    /// stays unknown.
     // Each argument borrows a different part of the run; one struct would borrow it all at once.
     #[expect(clippy::too_many_arguments)]
     fn measure<R: Runner, W: Write>(
@@ -455,6 +468,10 @@ impl Learnt {
             match state.sizes.get(&rung.plan_key) {
                 Some(m) => {
                     self.known.insert(rung.plan_key.clone(), m.blocks(block));
+                }
+                None if !at.renders => {
+                    self.known.insert(rung.plan_key.clone(), rung.estimate);
+                    self.guessed.insert(planned[i].0);
                 }
                 None => due.push((i, c)),
             }
@@ -572,6 +589,10 @@ pub struct Workshop<'a> {
     /// The songs the run leaves as built ([`crate::reconcile::Foreseen::held`]),
     /// by their place in the list, each with its file.
     pub held: &'a BTreeMap<usize, PathBuf>,
+    /// Whether a rung whose real size `state.db` does not keep is rendered
+    /// to measure it, as a sync does; else it is taken at its estimate, as
+    /// a command that changes nothing foresees the sync's fit.
+    pub renders: bool,
 }
 
 /// Fit the planned songs into `[library] max_size`, setting each one's
@@ -680,6 +701,7 @@ pub fn fit_library<R: Runner, W: Write>(
         rendered: learnt.rendered,
         tools,
         keys,
+        guessed: learnt.guessed,
     };
     Ok(Some((fitted, placed)))
 }

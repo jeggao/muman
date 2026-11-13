@@ -2019,6 +2019,28 @@ fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
         "home/sources/manual/Artist/drop.flac",
         "a.flac, tagged anew",
     );
+    // `check`, `info` and `status` hear it as the sync does.
+    let (ok, report) = s.report(&fake, &["check"]);
+    assert!(ok, "{report}");
+    assert!(
+        report.contains(
+            "Moved, followed by the next sync: manual:a.flac is now manual:Artist/drop.flac"
+        ),
+        "{report}"
+    );
+    let info = crate::ui::plain(&s.report(&fake, &["info"]).1);
+    for (label, n) in [
+        ("Cannot be made", "0"),
+        ("Sources missing", "0"),
+        ("To read first", "1"),
+    ] {
+        assert!(
+            (info.lines()).any(|l| l.trim_start().starts_with(label) && l.trim_end().ends_with(n)),
+            "{label} {n}: {info}"
+        );
+    }
+    let (_, said) = s.run(&fake, &["status"]);
+    assert!(!said.contains("problem(s) found"), "{said}");
     let (ok, text) = s.run(&fake, &["sync"]);
     assert!(ok, "{text}");
     assert!(
@@ -10890,3 +10912,22 @@ fn songs_moving_with_their_lyrics_survive_a_kill_anywhere() {
 
 mod attaching;
 mod convergence;
+
+#[test]
+fn check_ends_saying_the_warnings_it_gave_beside_no_problem() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok && report.contains("No problems found"), "{report}");
+    assert!(!report.contains("warning(s)"), "{report}");
+    let list = s.dir.path().join("home/songs.toml");
+    let text = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(&list, format!("{text}\n[librar]\n")).unwrap();
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "a warning is no problem: {report}");
+    assert!(
+        report.contains("No problems found; 1 warning(s) above"),
+        "{report}"
+    );
+}

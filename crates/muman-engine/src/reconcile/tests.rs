@@ -61,6 +61,10 @@ impl Home {
     /// [`Home::run`], once a dry run has foretold what the sync does with
     /// each library file, which it then does ([`as_foretold`]).
     fn foretold(&self, fake: &Fake, opts: Options) -> (bool, String) {
+        // As `check` and `info` foresee it, before `status` measures anything.
+        let forecast = (!opts.force && !opts.accept)
+            .then(|| super::forecast(fake, &self.dirs, opts.settling).unwrap())
+            .flatten();
         let dry = Options {
             dry_run: true,
             ..opts
@@ -69,9 +73,13 @@ impl Home {
         let synced = reconcile(fake, &self.dirs, dry, Recording::DryRun, sink).unwrap();
         let before = stamped(&self.dirs.library);
         let (ok, text) = self.run_plain(fake, opts);
+        let after = stamped(&self.dirs.library);
         let foretold = synced.foretold.expect("a dry run foretells");
-        if let Err(e) = as_foretold(&foretold, &before, &stamped(&self.dirs.library)) {
+        if let Err(e) = as_foretold(&foretold, &before, &after) {
             panic!("the sync did otherwise than status foretold: {e}: {text}");
+        }
+        if let Some(Err(e)) = forecast.map(|f| as_foretold(&f, &before, &after)) {
+            panic!("the sync did otherwise than check and info foresaw: {e}: {text}");
         }
         (ok, text)
     }
@@ -448,7 +456,13 @@ fn a_changed_lrc_of_a_song_taking_no_lyrics_is_said_removed_by_force() {
     let lrc = "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc";
     std::fs::write(h.lib(lrc), "[00:09.00]my own line\n").unwrap();
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nlyrics = false\n");
-    let said = crate::diagnose::diagnose(&h.dirs).unwrap().said;
+    let said = crate::diagnose::diagnose(
+        &crate::testing::Fake::default(),
+        &h.dirs,
+        std::time::Duration::ZERO,
+    )
+    .unwrap()
+    .said;
     let forced = format!("{lrc} (`sync --force` removes it)");
     assert!(
         (said.iter())
@@ -1139,7 +1153,13 @@ fn a_song_written_in_part_stays_muman_s_and_is_written_whole_next() {
         written.plan.is_none() && written.stamp.is_none(),
         "recorded as the run recorded it before writing any: {written:?}"
     );
-    let said = crate::diagnose::diagnose(&h.dirs).unwrap().said;
+    let said = crate::diagnose::diagnose(
+        &crate::testing::Fake::default(),
+        &h.dirs,
+        std::time::Duration::ZERO,
+    )
+    .unwrap()
+    .said;
     assert!(
         !said
             .iter()
@@ -1255,9 +1275,16 @@ fn a_move_in_case_alone_stopped_halfway_is_muman_s_and_finished() {
             .filter(|f| f.to_string_lossy().ends_with(".moving"))
             .map(|f| f.strip_prefix(&h.dirs.library).unwrap().to_path_buf())
             .collect();
-        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
-            .map(|s| format!("{s:?}"))
-            .collect();
+        let said: Vec<String> = (crate::diagnose::diagnose(
+            &crate::testing::Fake::default(),
+            &h.dirs,
+            std::time::Duration::ZERO,
+        )
+        .unwrap()
+        .said
+        .iter())
+        .map(|s| format!("{s:?}"))
+        .collect();
         assert!(
             !said
                 .iter()
@@ -1383,7 +1410,11 @@ fn a_move_stopped_anywhere_is_finished(found: &dyn Fn(&mut Home)) {
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recorded(&h)));
         drop(kill);
         assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
-        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+        let said: Vec<String> =
+            (crate::diagnose::diagnose(&Fake::default(), &h.dirs, Duration::ZERO)
+                .unwrap()
+                .said
+                .iter())
             .map(|s| format!("{s:?}"))
             .collect();
         assert!(
@@ -1409,7 +1440,11 @@ fn a_move_stopped_anywhere_is_finished(found: &dyn Fn(&mut Home)) {
             let back = h.lib(&format!("Chan/Lantern/{file}"));
             assert!(back.exists(), "step {at}: {file}: {lines:?}");
         }
-        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+        let said: Vec<String> =
+            (crate::diagnose::diagnose(&Fake::default(), &h.dirs, Duration::ZERO)
+                .unwrap()
+                .said
+                .iter())
             .map(|s| format!("{s:?}"))
             .collect();
         assert!(
@@ -1433,9 +1468,16 @@ fn a_file_of_yours_named_as_a_song_s_part_is_left_alone() {
     for part in &mine {
         std::fs::write(h.lib(part), "my notes").unwrap();
     }
-    let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
-        .map(|s| format!("{s:?}"))
-        .collect();
+    let said: Vec<String> = (crate::diagnose::diagnose(
+        &crate::testing::Fake::default(),
+        &h.dirs,
+        std::time::Duration::ZERO,
+    )
+    .unwrap()
+    .said
+    .iter())
+    .map(|s| format!("{s:?}"))
+    .collect();
     for part in &mine {
         let line = format!("Not muman's, left alone: {part}");
         assert!(said.iter().any(|s| s.contains(&line)), "{said:?}");
@@ -2538,7 +2580,12 @@ fn a_song_whose_changed_folder_cover_stays_behind_writes_one_where_its_holder_le
         "{done}"
     );
     h.audit(&["Artist/Other/cover.jpg"], &done);
-    let said = crate::diagnose::diagnose(&h.dirs).unwrap();
+    let said = crate::diagnose::diagnose(
+        &crate::testing::Fake::default(),
+        &h.dirs,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
     assert_eq!(said.problems(), 0, "{:?}", said.said);
     let (_, again) = h.run(&fake, Options::default());
     assert!(again.contains("Up to date: 1 song(s)"), "{again}");
@@ -4295,4 +4342,114 @@ fn a_song_left_as_built_spells_its_album_for_no_other_song() {
     let (_, text) = h.run(&cut, Options::default());
     assert!(text.contains("cut off"), "{text}");
     assert_eq!(formats(&h), built, "{text}");
+}
+
+#[test]
+fn a_song_left_as_built_is_shown_and_queried_as_its_file_holds() {
+    let h = home();
+    let source = h.fetched("aaaaaaaaaaa");
+    h.songs(ONE);
+    let titled = |title: &str| Fake {
+        hashes: vec![("aaaaaaaaaaa".into(), 7)],
+        ..Fake::default().info(
+            "aaaaaaaaaaa",
+            &format!(r#"{{"id": "aaaaaaaaaaa", "title": "{title}", "uploader": "Chan"}}"#),
+        )
+    };
+    assert!(h.run(&titled("Lantern Weather"), Options::default()).0);
+    std::fs::write(&source, "fetched again").unwrap();
+    let (ok, text) = h.run(&titled("Paper Comets"), Options::default());
+    assert!(ok, "{text}");
+
+    let file = "Chan/Lantern Weather/Lantern Weather.opus";
+    let shown = h.status(&titled("Paper Comets"), &[], true);
+    assert!(shown.contains(&format!("{file} (left as built")), "{shown}");
+    assert!(
+        (shown.lines()).any(|l| l.trim_start().starts_with("TITLE") && l.contains("Lantern")),
+        "{shown}"
+    );
+    assert!(!shown.contains("Paper Comets"), "{shown}");
+    let matched = h.status(&titled("Paper Comets"), &["lantern"], false);
+    assert!(matched.contains("left as built"), "{matched}");
+    let manifest = crate::manifest::Manifest::load(&h.dirs.home).unwrap();
+    let views = crate::query::views(&manifest, &found(&h.dirs).unwrap(), &h.dirs.library);
+    let views = views.unwrap();
+    assert_eq!(views[0].first("path"), file);
+    assert_eq!(views[0].first("title"), "Lantern Weather");
+}
+
+#[test]
+fn a_song_left_alone_for_a_file_you_changed_is_listed_as_its_file_is() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs(ONE);
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.run(&fake, Options::default());
+    let file = "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus";
+    std::fs::write(h.lib(file), "retagged by hand").unwrap();
+    h.songs(
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Night Ferry\" }\n",
+    );
+    let manifest = crate::manifest::Manifest::load(&h.dirs.home).unwrap();
+    let views = crate::query::views(&manifest, &found(&h.dirs).unwrap(), &h.dirs.library);
+    let views = views.unwrap();
+    assert_eq!(views[0].first("path"), file);
+    assert_eq!(views[0].first("title"), "Title aaaaaaaaaaa");
+    let shown = h.status(&fake, &["path:aaaaaaaaaaa"], false);
+    assert!(shown.contains("left alone"), "{shown}");
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("Left alone"), "{text}");
+}
+
+/// What `check` and `info` foresee of the next sync of `h`.
+fn foreseen(fake: &Fake, h: &Home) -> Foresight {
+    let scratch = crate::atomic::Scratch::new().unwrap();
+    let ground = foreground(fake, &h.dirs, Duration::ZERO, scratch.path()).unwrap();
+    foresight(fake, &ground.grounds(&h.dirs.library, (false, false))).unwrap()
+}
+
+#[test]
+fn check_and_info_fit_the_library_as_the_sync_does() {
+    let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
+    let fake = big_flac();
+    let first = foreseen(&fake, &h);
+    assert!(
+        !first.to_measure.is_empty() && !first.whole(),
+        "nothing is measured yet"
+    );
+    assert!(h.run(&fake, Options::default()).0);
+    let lowered = "Artist/Record/02 Song.opus";
+    assert!(h.lib(lowered).exists());
+
+    h.songs("[library]\nmax_size = \"2 KiB\"\n[[song]]\nsources = [\"manual:Song.flac\"]\n");
+    let ahead = foreseen(&fake, &h);
+    let fitted = ahead.fitted.as_ref().unwrap();
+    assert_eq!(fitted.left_out, [0]);
+    assert!(
+        !fitted.guessed.is_empty(),
+        "its lowest rung is not measured yet"
+    );
+    let gone: Vec<&PathBuf> = (ahead.intent.removals())
+        .flat_map(|(_, fate)| fate.gone())
+        .collect();
+    assert_eq!(gone, [&PathBuf::from(lowered)]);
+    let said = crate::diagnose::diagnose(&fake, &h.dirs, Duration::ZERO).unwrap();
+    assert!(
+        (said.said.iter()).any(|s| matches!(
+            s,
+            crate::diagnose::Said::Problem(l) if l.starts_with("Left out by the next sync")
+        )),
+        "{:?}",
+        said.said
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(!ok, "{text}");
+    assert!(!h.lib(lowered).exists(), "{text}");
+    let after = foreseen(&fake, &h);
+    assert!(
+        after.whole(),
+        "every size it fits by is recorded: {:?}",
+        after.fitted
+    );
+    assert_eq!(after.fitted.as_ref().unwrap().left_out, [0]);
 }

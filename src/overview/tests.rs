@@ -38,7 +38,13 @@ fn fake() -> Fake {
 
 fn info_text(dirs: &Dirs, verbose: bool) -> String {
     let mut out = Vec::new();
-    info(dirs, verbose, &mut out).unwrap();
+    info(
+        &Fake::default(),
+        (dirs, std::time::Duration::ZERO),
+        verbose,
+        &mut out,
+    )
+    .unwrap();
     crate::ui::plain(&String::from_utf8(out).unwrap())
 }
 

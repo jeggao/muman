@@ -54,6 +54,10 @@ provider's `skip`, that is no tag it knows and that no song has, so a
 misspelled field never quietly matches nothing, or every song when
 negated.
 
+A song whose file a sync leaves as it is, as built until `sync
+--accept` or changed by you, is read as that file was written: its
+tags and `path` are its file's, not what the sync would write.
+
 ## Changing songs
 
 - **`list`** writes each song's first key, artist, title and album,

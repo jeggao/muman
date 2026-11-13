@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 
@@ -176,6 +175,10 @@ pub(super) struct Shown<'a> {
     pub(super) state: &'a State,
     /// What a sync would fetch before it plans.
     pub(super) to_fetch: &'a BTreeSet<SourceKey>,
+    /// What following the moved files found, and the files no song names
+    /// that are none of them ([`super::Ground`]).
+    pub(super) moves: &'a super::Moves,
+    pub(super) unlisted: &'a super::Unlisted,
 }
 
 /// Say each move `decided` makes of a song `showing` matches.
@@ -368,7 +371,6 @@ pub(super) fn status<W: Write>(
     store: &Store,
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
-    settling: Duration,
     out: &mut W,
 ) -> Result<()> {
     let Shown {
@@ -379,6 +381,8 @@ pub(super) fn status<W: Write>(
         old,
         state,
         to_fetch,
+        moves,
+        unlisted,
         ..
     } = shown;
     say_moves(planned, &intent.decided, showing, out)?;
@@ -476,9 +480,7 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    let mut found = super::Unlisted::of(manifest, state, store, settling);
-    let followed = super::moved(manifest, state, store, &mut found, |_| None);
-    for key in super::deleted(manifest, store, &followed, &found) {
+    for key in super::deleted(manifest, store, moves, unlisted) {
         crate::ui::info(
             out,
             &format!(
@@ -491,9 +493,9 @@ pub(super) fn status<W: Write>(
         ready: unlisted,
         settling,
         ..
-    } = found;
+    } = unlisted;
     for key in unlisted {
-        let line = if state.listed.contains(&key) {
+        let line = if state.listed.contains(key) {
             format!("Taken out of the song list by hand, kept out by the next sync: {key}")
         } else {
             format!("Not listed yet, added by the next sync: {key}")
@@ -505,7 +507,7 @@ pub(super) fn status<W: Write>(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                SourceKey::Manual(path.into())
+                SourceKey::Manual(path.clone().into())
             ),
         )?;
     }

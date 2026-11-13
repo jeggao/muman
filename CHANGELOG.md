@@ -89,6 +89,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   the same song list, state, sources and stopped run, every file's fate
   in it, and the sync's writes carry it out, where each built its own and
   said otherwise of a folder's cover, a song's files or a stopped move.
+- **`check`, `info` and `remove` fit the library into `max_size` as the
+  sync does**: a song it leaves out is a problem `check` names, `info`
+  counts it and its file to remove, and `remove` lists every file its
+  sync deletes, where they said such a song was up to date; a size not
+  yet measured is estimated, and they say the sync renders it first.
+- **`check`, `info` and `remove` follow a moved source by its audio, as
+  the sync does**: a file of yours moved and retagged is said to be
+  followed, where it was missing and its song could not be made, `status`
+  counting that as a problem; a source changed since it was read is said
+  to be read first, rather than its song given a fate.
+- **A song a sync leaves as built or as yours shows what its file
+  holds**: `list`, a `path:` query, `status` and `info` show the values
+  and the path its file was made with, and `info --changes` names no
+  change the sync does not make, where they showed what the sync would
+  have written.
+- **`status` foretells a song only retagged under `max_size` as the sync
+  does it**: the songs it renders to measure are not counted as written
+  whole, as the sync after, which takes their sizes, writes them as any.
+- **`check` ends with the warnings it gave**: "No problems found; 1
+  warning(s) above" after a pick in doubt, as a song holding another
+  recording, which it tells but does not count as a problem.
 - **A song moving into a folder whose cover holder leaves writes the
   folder's cover there** when you changed the cover of the folder it
   leaves, which stays yours, where the sync deleted the new folder's
