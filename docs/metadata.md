@@ -22,7 +22,9 @@ Each field describes either the recording or the release.
   spells otherwise, as `R&B`.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
-  album ranks best. So one release's IDs never mix with another's. Of
+  album ranks best, each from a field kept for it: a video's upload date
+  dates its release only as [an upload date](#values-that-say-nothing)
+  does any song. So one release's IDs never mix with another's. Of
   albums that rank alike, the source with more of the release's fields
   wins. With no album artist offered, muman fills in the first artist,
   less anyone it features: `Marlo Venn feat. Kiri Hoshino` fills in
@@ -253,7 +255,12 @@ A video's upload date is when it went up, so it dates a song only when
 the channel that uploaded it is the song's artist, as another source or
 a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
-out.
+out. That holds on every site, archive.org's uploads included, and
+whichever source the album comes from. A date the fetched file's own
+tags hold is no upload's, and dates it as any file's does. A file keeps
+no tags of its own where its site gave chapters, which yt-dlp writes in
+their place, or where an older muman had yt-dlp write the site's values
+over them.
 
 ## Titles read off a video
 

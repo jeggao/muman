@@ -1445,6 +1445,38 @@ pub fn from_info(info: &VideoInfo) -> Offers {
     o
 }
 
+/// What a file yt-dlp fetched offers where its tags are its own,
+/// `own`, as [`VideoInfo::muman_own_tags`] says: those
+/// tags first, as any file's, then what its info JSON offers, so a
+/// site's upload date or channel never stands where the file names a
+/// date or an artist.
+#[must_use]
+pub fn of_fetched(own: &BTreeMap<String, Vec<String>>, info: &VideoInfo) -> Offers {
+    let mut o = from_container(own);
+    for (field, offer) in from_info(info) {
+        let Some(first) = o.get_mut(&field) else {
+            o.insert(field, offer);
+            continue;
+        };
+        let Offer {
+            values,
+            structured,
+            also,
+        } = offer;
+        let then = std::iter::once(Offer {
+            values,
+            structured,
+            also: Vec::new(),
+        });
+        for next in then.chain(also) {
+            if first.values != next.values && !first.also.iter().any(|o| o.values == next.values) {
+                first.also.push(next);
+            }
+        }
+    }
+    o
+}
+
 /// Every field a MusicBrainz record can offer, as [`from_record`] does
 /// for one that names all it may.
 pub const RECORD_FIELDS: [Field; 27] = [
@@ -2270,6 +2302,44 @@ mod tests {
         );
         assert!(!o.contains_key(&Field::Album));
         assert!(!o[&Field::Date].structured);
+    }
+
+    #[test]
+    fn a_fetched_file_s_own_tags_stand_before_what_its_site_says() {
+        let site = info(
+            r#"{"title": "track01", "uploader": "uploads@orchard.example",
+                "upload_date": "20031226", "creator": "Marlo Venn", "album": "Harbor Nights",
+                "muman_own_tags": "own"}"#,
+        );
+        let own = BTreeMap::from([
+            ("TITLE".to_string(), vec!["Night Ferry".to_string()]),
+            ("ARTIST".to_string(), vec!["Marlo Venn".to_string()]),
+            ("DATE".to_string(), vec!["1997".to_string()]),
+        ]);
+        let o = of_fetched(&own, &site);
+        let derived = |value: &str| Offer {
+            values: vec![value.into()],
+            structured: false,
+            also: Vec::new(),
+        };
+        assert_eq!(
+            o[&Field::Date],
+            Offer {
+                values: vec!["1997".into()],
+                structured: true,
+                also: vec![derived("2003-12-26")],
+            }
+        );
+        assert_eq!(o[&Field::Title].values, ["Night Ferry"]);
+        assert_eq!(o[&Field::Title].also, [derived("track01")]);
+        assert_eq!(
+            o[&Field::Artist].also,
+            [derived("uploads@orchard.example")],
+            "the creator agrees with the file"
+        );
+        assert_eq!(o[&Field::Album].values, ["Harbor Nights"]);
+        let none = of_fetched(&BTreeMap::new(), &site);
+        assert_eq!(format!("{none:?}"), format!("{:?}", from_info(&site)));
     }
 
     #[test]

@@ -183,11 +183,14 @@ fits by a few bytes.
 That exactness costs time:
 
 - Adding a song can lower others, and removing one or raising the limit
-  raises them again.
+  raises them again, though a higher limit may give one song's room to
+  another that loses more without it.
 - muman renders a song to learn exactly what it takes before it counts
-  toward the limit. It keeps what it learns in its state, so a sync
-  that changes nothing renders nothing, and a song rendered to be
-  measured moves into the library rather than being rendered twice.
+  toward the limit, and a lowered song one step higher too, to learn
+  whether that fits, unless that step copies its source as it is. It
+  keeps what it learns in its state, so a sync that changes nothing
+  renders nothing, and a song rendered to be measured moves into the
+  library rather than being rendered twice.
 - A song lowered into a codec that holds fewer of its channels, as 5.1
   into MP3, is mixed, and levelled on that mix as any mixed song is,
   with its album pooled on it. muman measures that mix for each such

@@ -2809,7 +2809,8 @@ fn status_refuses_a_field_no_song_has() {
 
 /// `state` as a muman that keyed sources by yt-dlp's extractor wrote
 /// it, each of `sites` named `<extractor>:<id>`, its sizes kept by the
-/// plans so named.
+/// plans so named: each song's file's, and those of the bitrates of its
+/// codec fitting measured.
 fn by_extractor(mut state: State, sites: &[(&str, &str)]) -> String {
     let tools = "ffmpeg version fake";
     let old = |k: &SourceKey| {
@@ -2820,8 +2821,24 @@ fn by_extractor(mut state: State, sites: &[(&str, &str)]) -> String {
     let mut kept = BTreeMap::new();
     for w in state.outputs.values() {
         let plan = w.plan.as_ref().unwrap();
-        if let Some(m) = state.sizes.get(&limit::plan_key(tools, plan)) {
-            kept.insert(limit::plan_key(tools, &plan.respelled(&old)), m.clone());
+        let mut formats = vec![plan.format];
+        if let crate::resolve::Format::Encode {
+            codec, adapt, mix, ..
+        } = plan.format
+        {
+            formats.extend(crate::fit::ladder(codec).iter().map(|k| {
+                crate::resolve::Format::Encode {
+                    codec,
+                    kbps: Some(*k),
+                    adapt,
+                    mix,
+                }
+            }));
+        }
+        for plan in formats.into_iter().map(|f| plan.with_format(f)) {
+            if let Some(m) = state.sizes.get(&limit::plan_key(tools, &plan)) {
+                kept.insert(limit::plan_key(tools, &plan.respelled(&old)), m.clone());
+            }
         }
     }
     state.sizes = kept;
@@ -3525,8 +3542,10 @@ fn a_song_mixed_to_fit_max_size_is_levelled_by_its_mix() {
         let mixed = plans(&by_codec)[0].clone();
         assert!(mixed.format.mix().is_some(), "{mixed:?}");
 
+        // The FLAC is rendered to learn whether it fits, and the fake's
+        // rendered files take a few KiB.
         let (h, fake) = surround_home(&format!(
-            "{loudness}[library]\nmax_size = \"10 MB\"\n[audio]\nlossy = \"mp3\"\n"
+            "{loudness}[library]\nmax_size = \"10 KiB\"\n[audio]\nlossy = \"mp3\"\n"
         ));
         let (ok, text) = h.run(&fake, Options::default());
         assert!(ok, "{text}");

@@ -19,9 +19,9 @@ use muman::settings::Ytdlp;
 
 const MEDIA: &[u8] = include_bytes!("../testdata/silence.m4a");
 
-/// Serve `MEDIA` at `/silence.m4a` to every request on a loopback port,
+/// Serve `media` at `/silence.m4a` to every request on a loopback port,
 /// answering whole whatever the range asked, until the process ends.
-fn serve() -> String {
+fn serve(media: Vec<u8>) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -34,10 +34,10 @@ fn serve() -> String {
                 stream,
                 "HTTP/1.0 200 OK\r\nContent-Type: audio/mp4\r\nContent-Length: {}\r\n\
                  Accept-Ranges: none\r\nConnection: close\r\n\r\n",
-                MEDIA.len()
+                media.len()
             );
             if !head {
-                let _ = stream.write_all(MEDIA);
+                let _ = stream.write_all(&media);
             }
         }
     });
@@ -78,7 +78,25 @@ fn yt_dlp_takes_every_option_muman_passes() {
         passed: &passed,
         batch: None,
     };
-    let url = serve();
+    let plain = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("silence.m4a");
+    let tagged = root.join("tagged.m4a");
+    let mut tag: Vec<OsString> = ["ffmpeg", "-v", "error", "-i"].map(Into::into).into();
+    tag.push(plain.into_os_string());
+    for arg in [
+        "-c",
+        "copy",
+        "-metadata",
+        "title=Night Ferry",
+        "-metadata",
+        "date=1997",
+    ] {
+        tag.push(arg.into());
+    }
+    tag.push(tagged.clone().into_os_string());
+    runner.run(&tag).expect("ffmpeg tags the file served");
+    let url = serve(std::fs::read(&tagged).unwrap());
     let cmd = ytdlp_command(&places, None, std::slice::from_ref(&url));
     let (ok, text) = lines(&runner, &cmd);
     assert!(ok, "yt-dlp failed:\n{text}");
@@ -110,6 +128,16 @@ fn yt_dlp_takes_every_option_muman_passes() {
     );
     let info = muman::info::parse(&kept).unwrap();
     assert_eq!(info.id.as_deref(), Some("silence"));
+    assert!(info.muman_own_tags.is_some(), "{text}");
+    let own = muman::probe::parse(&runner.output(&muman::probe::ffprobe_command(file)).unwrap())
+        .unwrap()
+        .tags;
+    assert_eq!(
+        own.get("title").map(String::as_str),
+        Some("Night Ferry"),
+        "{own:?}"
+    );
+    assert_eq!(own.get("date").map(String::as_str), Some("1997"), "{own:?}");
     assert_eq!(info.formats.len(), 1, "{text}");
     assert!(info.audio_format().is_some(), "{text}");
 
@@ -134,7 +162,7 @@ fn the_song_list_s_arguments_reach_yt_dlp_from_its_config_file_as_written() {
     };
     let passed = Passed::write(&options, dir.path()).unwrap();
     let own = ["yt-dlp", "--ignore-config", "--simulate"].map(OsString::from);
-    let cmd = ending(own.into(), &passed, &serve());
+    let cmd = ending(own.into(), &passed, &serve(MEDIA.to_vec()));
     assert!(!cmd.iter().any(|a| a.to_string_lossy().contains("Marlo")));
     let (ok, text) = lines(&runner, &cmd);
     assert!(ok, "yt-dlp failed:\n{text}");

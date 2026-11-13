@@ -70,7 +70,10 @@
 //!   source wrote it, before cleaning, so `status` drops what it names,
 //!   and again as cleaned, where splitting a value made one. An
 //!   upload's date, the day it went up, dates the song only where the
-//!   upload's channel is the song's artist, set by hand or offered.
+//!   upload's channel is the song's artist, set by hand or offered, on
+//!   any site and whichever source the album comes from: the release's
+//!   fields are taken from fields kept for them alone, never one read
+//!   off a title or a channel.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -3203,7 +3206,9 @@ fn resolve_tags(
     let release = release_of(input, candidates);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
-            if let Some(c) = best_offer(candidates, field, &|k| k == album.key) {
+            if let Some(c) =
+                best_offer(candidates, field, &|k| k == album.key).filter(|c| c.offer.structured)
+            {
                 fields.insert(field, Slot::of(c));
             }
         }

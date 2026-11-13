@@ -293,7 +293,8 @@ cannot load them runs once more without them, with a warning.
 
 muman strips each fetched file's metadata down to the fields it reads,
 so no cookie, header or signed address from yt-dlp's requests stays in
-it. A file it cannot clean is not kept.
+it. It reads the file's own tags, as an archive.org file holds its
+album's, before the site's. A file it cannot clean is not kept.
 
 YouTube changes what it serves every few months, and an older yt-dlp
 then fails with a sign-in check, a format that is not available, or an
@@ -325,10 +326,9 @@ Peers see your IP address and get pieces from you: [what aria2c
 shares](configuration.md#what-aria2c-shares) says how much and how to
 limit it.
 
-A fetch with nothing arriving for `[torrent] stall` fails. It keeps
-each file whose pieces all check, and the rest waits in
-`partial/torrent`. aria2c cannot fetch a torrent of v2 alone, so muman
-refuses one.
+A fetch with nothing arriving for `[torrent] stall` fails. It keeps each
+file whose pieces all check, and the rest waits in `partial/torrent`.
+aria2c cannot fetch a torrent of v2 alone, so muman refuses one.
 
 `--from <FOLDER>` takes up a torrent another client downloaded there.
 Its files are copied in and checked piece by piece, and only what is

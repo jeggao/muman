@@ -37,7 +37,9 @@
 //! and a file of its own are hashed whole. The tags a source offers are
 //! known by the fields of its info JSON they are read from, as
 //! [`info::TAG_FIELDS`] lists them, the rest of it changing on every
-//! fetch, or by a file's own tags, before any cleaning. Facts hashed by
+//! fetch, with the file's own tags where yt-dlp left them its own
+//! ([`VideoInfo::muman_own_tags`]), or by a file's own tags alone, before
+//! any cleaning. Facts hashed by
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
 //!
@@ -914,18 +916,35 @@ pub fn relyric<R: Runner>(
 
 /// The digest of the tags a media file offers as written: of the fields
 /// of its info JSON, dumped into `scratch`, that tags are read from, for
-/// what yt-dlp fetched; else of its own tags.
-fn tags_digest(fetched: bool, probed: &Probed, path: &Path, scratch: &Path) -> Option<String> {
-    if fetched {
-        return info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?);
+/// what yt-dlp fetched, with its own tags where they are its own; else of
+/// its own tags.
+fn tags_digest(
+    info: Option<&VideoInfo>,
+    probed: &Probed,
+    path: &Path,
+    scratch: &Path,
+) -> Option<String> {
+    let own = || serde_json::to_vec(&own_tags(probed, path)).ok();
+    let Some(info) = info else {
+        return Some(digest(&own()?));
+    };
+    let fetched = info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?)?;
+    if info.muman_own_tags.is_none() {
+        return Some(fetched);
     }
-    Some(digest(&serde_json::to_vec(&own_tags(probed, path)).ok()?))
+    let mut both = fetched.into_bytes();
+    both.extend(own()?);
+    Some(digest(&both))
 }
 
-/// What a media file's tags offer: its info JSON's, for what yt-dlp
-/// fetched; else its own ([`own_tags`]).
+/// What a media file's tags offer: for what yt-dlp fetched, its info
+/// JSON's, after its own where yt-dlp wrote none over them
+/// ([`VideoInfo::muman_own_tags`]); else its own ([`own_tags`]).
 fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
     match info {
+        Some(info) if info.muman_own_tags.is_some() => {
+            tags::of_fetched(&own_tags(probed, path), info)
+        }
         Some(info) => tags::from_info(info),
         None => tags::from_container(&own_tags(probed, path)),
     }
@@ -1351,7 +1370,7 @@ pub fn hash<R: Runner>(
     if let Some(d) = own_lyrics(located, &probed).and_then(|l| l.digest) {
         digests.lyrics.push((LyricsAt::Tag, d));
     }
-    digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
+    digests.tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
     Ok((digests, info.as_ref().and_then(Served::of)))
 }
 
@@ -1371,7 +1390,7 @@ fn media<R: Runner>(
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
     facts.chapters.clone_from(&probed.chapters);
     let served = info.as_ref().and_then(Served::of);
-    let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
+    let tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
     let lenient: Vec<String> = probed

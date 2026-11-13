@@ -3359,6 +3359,55 @@ fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
     );
 }
 
+#[test]
+fn an_upload_date_dates_no_release_its_upload_names() {
+    let upload = SourceKey::parse("archive.example:item0001/track01.mp3").unwrap();
+    let derived = |value: &str| Offer {
+        values: vec![value.to_string()],
+        structured: false,
+        also: Vec::new(),
+    };
+    let item = |channel: &str, own_date: Option<&str>| {
+        let mut v = audio("mp3", 16.0);
+        v.rev = "v".into();
+        tag(&mut v, Field::Title, &["Night Ferry"], true);
+        tag(&mut v, Field::Artist, &["Marlo Venn"], true);
+        tag(&mut v, Field::Album, &["Harbor Nights"], true);
+        tag(&mut v, Field::Track, &["1"], true);
+        v.tags.get_mut(&Field::Artist).unwrap().also = vec![derived(channel)];
+        let uploaded = derived("2003-12-26");
+        let date = match own_date {
+            Some(date) => Offer {
+                values: vec![date.to_string()],
+                structured: true,
+                also: vec![uploaded],
+            },
+            None => uploaded,
+        };
+        v.tags.insert(Field::Date, date);
+        v
+    };
+    let date = |channel: &str, own_date: Option<&str>| {
+        let facts = BTreeMap::from([(upload.clone(), item(channel, own_date))]);
+        let r = run(&song(std::slice::from_ref(&upload)), &facts, &[]);
+        assert_eq!(
+            written(&r, Field::Album),
+            Some(&["Harbor Nights".to_string()][..])
+        );
+        written(&r, Field::Date).map(<[String]>::to_vec)
+    };
+    assert_eq!(
+        date("uploads@orchard.example", None),
+        None,
+        "the release's source uploaded by another"
+    );
+    assert_eq!(
+        date("uploads@orchard.example", Some("1997")),
+        Some(vec!["1997".to_string()]),
+        "a date of its own"
+    );
+}
+
 fn run_believing(
     song: &Song,
     facts: &BTreeMap<SourceKey, Facts>,

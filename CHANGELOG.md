@@ -546,6 +546,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A change refused because another run changed its song meanwhile
   exits 5**, as every refusal does, where `set`, `remove`, `restore`,
   `duplicates --merge` and stepping through `set` exited 4.
+- **`max_size` and `export --max-size` raise every song the room
+  holds**: whether a lowered song fits a step higher is judged on that
+  rung rendered and measured, and estimates are corrected by what each
+  song measured, where an estimate above the real size kept songs a
+  step low with over a megabyte unused.
+- **An upload's date never dates a song its uploader is not the artist
+  of**, on any site: an archive.org file uploaded by another was dated
+  by its upload, as the release's date, though no release gave one.
+- **A fetched file keeps its own tags**, read as any file's, before what
+  the site says, where yt-dlp wrote the upload date, uploader and page
+  title over them and muman read none: an archive.org file is dated and
+  titled as its tags say.
 
 ## [0.11.0] - 2026-11-10
 

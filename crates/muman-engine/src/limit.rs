@@ -18,10 +18,11 @@
 //! encode as its source, PCM at `PCM_FLAC` of it; a lossy encode as its
 //! bitrate times its length; each with a guess at its cover, tags and
 //! lyrics. [`fit::settle`] turns the fit on estimates into one on sizes
-//! measured, `PASSES` times at most, each rung it asks for rendered into
-//! a scratch folder to measure it. Each file counts whole `[library]
-//! block_size` blocks, and two standard deviations of the estimates
-//! still in the sum are kept free. An export under `--max-size` fits from
+//! measured, the rung above each song lowered among them, `PASSES` times
+//! at most, each rung it asks for rendered into a scratch folder to
+//! measure it. Each file counts whole `[library] block_size` blocks, and
+//! two standard deviations of the estimates still in the sum are kept
+//! free. An export under `--max-size` fits from
 //! the same [`rungs`], [`key`]s and [`policy`], counting what its own
 //! files take, so it lowers what a library under that size would.
 //!

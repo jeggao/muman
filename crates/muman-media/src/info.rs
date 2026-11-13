@@ -97,6 +97,10 @@ pub struct VideoInfo {
     /// That address, copied where the embedded info JSON keeps it.
     #[serde(default, deserialize_with = "lenient")]
     pub muman_original_url: Option<String>,
+    /// Set where yt-dlp wrote none of this into the file's tags, which are
+    /// then the file's own, as it was served.
+    #[serde(default, deserialize_with = "lenient")]
+    pub muman_own_tags: Option<String>,
 }
 
 /// One format a site offered, as yt-dlp lists it.
@@ -473,6 +477,7 @@ mod tests {
         let read = fields::<VideoInfo>();
         for field in [
             "muman_original_url",
+            "muman_own_tags",
             "formats",
             "subtitles",
             "format_id",
