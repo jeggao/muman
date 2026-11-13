@@ -462,6 +462,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         (None, HashMap::new())
     };
     if let Some(run) = rec.run() {
+        // Saved as the run records it, before any file is changed, so a
+        // stopped run's moves are followed from the outputs as found.
+        persist(home, &state, opts.dry_run, &lock)?;
         run.outputs_before(&state.outputs);
     }
     let placed_songs: BTreeSet<usize> = placed.keys().copied().collect();

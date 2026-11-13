@@ -75,9 +75,7 @@ impl<'a> Found<'a> {
             self.at.insert(file.clone(), None);
         }
         for m in moves {
-            for (from, to) in
-                std::iter::once((&m.from, &m.to)).chain(m.beside.iter().map(|(a, b)| (a, b)))
-            {
+            for (from, to) in m.files() {
                 let real = self
                     .at
                     .get(from)
@@ -840,9 +838,7 @@ impl Intent {
             fates.insert(file.clone(), Fated::Gone);
         }
         for m in &self.moves {
-            for (from, to) in
-                std::iter::once((&m.from, &m.to)).chain(m.beside.iter().map(|(a, b)| (a, b)))
-            {
+            for (from, to) in m.files() {
                 let origin = match fates.get(from) {
                     Some(Fated::From(origin)) => origin.clone(),
                     _ => from.clone(),
@@ -911,20 +907,14 @@ pub(super) fn intend(
                 ..
             } => Some((
                 *order,
-                Relocation {
-                    from: from.clone(),
-                    to: path_of(r),
-                    beside: beside.clone(),
-                },
+                Relocation::new(from.clone(), path_of(r), beside.clone()),
             )),
             _ => None,
         })
         .collect();
     moves.sort_by_key(|(order, _)| *order);
     let moves: Vec<Relocation> = moves.into_iter().map(|(_, m)| m).collect();
-    let landing = Landing::of(
-        (moves.iter()).flat_map(|m| std::iter::once(&m.to).chain(m.beside.iter().map(|(_, b)| b))),
-    );
+    let landing = Landing::of((moves.iter()).flat_map(|m| m.files().map(|(_, to)| to)));
     let freed: Vec<PathBuf> = (freeable.iter())
         .filter(|p| old[*p].files(p).any(|f| landing.blocks(f)))
         .cloned()
@@ -955,8 +945,8 @@ pub(super) fn intend(
         }
     }
     for m in &moves {
-        if let Some(written) = relocated.remove(&m.from) {
-            relocated.insert(m.to.clone(), moved_to(written, &m.beside));
+        if let Some(written) = relocated.remove(m.from()) {
+            relocated.insert(m.to().clone(), moved_to(written, m.beside()));
         }
     }
     let arrived: Vec<Doing> = decided

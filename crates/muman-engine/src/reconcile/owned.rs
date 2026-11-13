@@ -11,7 +11,11 @@
 //! judged, by its plan or by its stamp, so a library put back from a
 //! backup without its times is planned, pruned and listed as the sync
 //! after it writes it, and no step decides on stamps another step then
-//! finds stale.
+//! finds stale. A sync saves the state so found before it changes any
+//! file, as its run records the outputs it began with: a run stopped in
+//! its moves is followed only from records the state still holds, so
+//! found anew by the next run, copies re-stamped and a folder named anew
+//! taken again, they would leave each file it moved no longer muman's.
 //!
 //! The records of a library folder muman was pointed away from are kept
 //! while it is not there, as a drive unplugged or a share not mounted, so
@@ -147,7 +151,9 @@ pub(super) fn stays(
 /// them, that moving it to `to` carries, each from and to: all but those
 /// gone, which are written anew where it goes, those that [`stay`](stays)
 /// in a folder of `filled`, and a folder's file `plan` does not make where
-/// it goes ([`crate::folder`]).
+/// it goes ([`crate::folder`]). A folder's file a song moving within its
+/// folder carries is paired with its own path, and stays there
+/// ([`crate::library::Relocation::new`]).
 pub(super) fn carried(
     library: &Path,
     filled: &BTreeSet<String>,

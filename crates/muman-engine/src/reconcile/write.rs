@@ -155,18 +155,18 @@ pub(super) fn relocate<W: Write>(
                 out,
                 &format!(
                     "Could not move {}: {e:#}; it is written again",
-                    crate::relpath::show(&m.from)
+                    crate::relpath::show(m.from())
                 ),
             )?;
             continue;
         }
-        let Some(written) = state.outputs.remove(&m.from) else {
+        let Some(written) = state.outputs.remove(m.from()) else {
             continue;
         };
-        done.insert(m.to.clone());
+        done.insert(m.to().clone());
         state
             .outputs
-            .insert(m.to.clone(), moved_to(written, &m.beside));
+            .insert(m.to().clone(), moved_to(written, m.beside()));
     }
     Ok(done)
 }
@@ -245,13 +245,10 @@ pub(super) fn apply<R: Runner, W: Write>(
             unfreed.insert(path.clone(), written.clone());
         }
     }
-    let lands_stuck = |m: &Relocation| {
-        let mut lands = std::iter::once(&m.to).chain(m.beside.iter().map(|(_, to)| to));
-        lands.any(|to| stuck.contains(to))
-    };
+    let lands_stuck = |m: &Relocation| m.files().any(|(_, to)| stuck.contains(to));
     let staying: BTreeSet<PathBuf> = (intent.moves.iter())
         .filter(|m| lands_stuck(m))
-        .map(|m| m.from.clone())
+        .map(|m| m.from().clone())
         .collect();
     let meant = intent.moves.len();
     let moves: Vec<Relocation> = (intent.moves.into_iter())

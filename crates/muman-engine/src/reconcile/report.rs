@@ -189,11 +189,7 @@ pub(super) fn say_moves<W: Write>(
         if let Doing::Move { from, beside, .. } = d
             && showing.matches(*n)
         {
-            let moving = crate::library::Relocation {
-                from: from.clone(),
-                to: path_of(r),
-                beside: beside.clone(),
-            };
+            let moving = crate::library::Relocation::new(from.clone(), path_of(r), beside.clone());
             for (a, b) in moving.said() {
                 crate::ui::info(
                     out,

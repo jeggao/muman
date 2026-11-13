@@ -271,7 +271,6 @@ pub struct Run {
     home: PathBuf,
     dir: PathBuf,
     record: Record,
-    outputs_known: bool,
     /// The outputs the run changed or is about to.
     changing: BTreeSet<PathBuf>,
     /// The other kept runs, oldest first, with the bytes each keeps.
@@ -602,11 +601,11 @@ impl Run {
         let found = now.clone();
         let mine = resumed.as_ref().map(|(dir, _)| dir.clone());
         let others = others(home, mine.as_ref());
-        let (dir, record, outputs_known) = match resumed {
+        let (dir, record) = match resumed {
             Some((dir, mut record)) => {
                 record.version = VERSION;
                 record.songs_before = songs_before;
-                (dir, record, true)
+                (dir, record)
             }
             None => (
                 history(home).join(id),
@@ -617,7 +616,6 @@ impl Run {
                     was: outputs,
                     ..Record::default()
                 },
-                false,
             ),
         };
         let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
@@ -626,7 +624,6 @@ impl Run {
             home: home.to_path_buf(),
             dir,
             record,
-            outputs_known,
             changing,
             others,
             limits,
@@ -685,12 +682,23 @@ impl Run {
         }
     }
 
-    /// The outputs as they were before the run wrote or removed any.
+    /// The outputs as they were before the run wrote or removed any:
+    /// `outputs`, as the library was found and the state saved just
+    /// before, but each the run, or the stopped run it goes on in, changed
+    /// already, as it was before. A stopped run's moves are followed only
+    /// from a record the state still holds ([`follow_moves`]), so an
+    /// output found otherwise than the state held as the run began,
+    /// re-stamped as a copy or in a library folder named anew, is taken
+    /// as found.
     pub fn outputs_before(&mut self, outputs: &BTreeMap<PathBuf, Written>) {
-        if !self.outputs_known {
-            self.record.was.clone_from(outputs);
-            self.outputs_known = true;
+        let mut was = outputs.clone();
+        for rel in &self.changing {
+            match self.record.was.get(rel) {
+                Some(before) => was.insert(rel.clone(), before.clone()),
+                None => was.remove(rel),
+            };
         }
+        self.record.was = was;
     }
 
     /// Note that the run is about to change the output at `rel`, before
@@ -1159,9 +1167,12 @@ impl Record {
 
     /// The record `text` holds, its outputs as the run began made whole
     /// from `now`, the outputs as they are, where it keeps only those the
-    /// run changed.
+    /// run changed. A move of a file onto its own path, which an earlier
+    /// muman recorded of a folder's file its song moved within the folder,
+    /// is none ([`crate::library::Relocation`]).
     fn read(text: &[u8], now: &BTreeMap<PathBuf, Written>) -> serde_json::Result<Self> {
         let mut record: Self = serde_json::from_slice(text)?;
+        record.moves.retain(|m| m.from != m.to);
         record.was = if record.version < 2 {
             record.outputs.clone()
         } else {
@@ -1227,11 +1238,13 @@ pub enum Moves {
 /// its two renames finished, or taken as made under [`Moves::Foresee`];
 /// one into a path an earlier move left is a chain, as a song moving into
 /// another's old place. They are followed all at once, from the outputs
-/// as the run began, each only while the state still holds at the path
-/// it left the record the run began with there: a record there since is
-/// another file's, as the run saves the state once its moves are made and
-/// may then record a new song about to be written at a path a move left,
-/// which a path alone would take for the file moved.
+/// as the run began, which a sync saved as it found the library before
+/// its first move ([`Run::outputs_before`]), each only while the state
+/// still holds at the path it left the record the run began with there:
+/// a record there since is another file's, as the run saves the state
+/// once its moves are made and may then record a new song about to be
+/// written at a path a move left, which a path alone would take for the
+/// file moved.
 ///
 /// A file beside a song that stayed where it was moves after the song
 /// under [`Moves::Follow`], but a folder's file the record lists no move
@@ -2543,6 +2556,39 @@ mod tests {
         assert_eq!(
             back.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/x.opus")]
+        );
+    }
+
+    #[test]
+    fn a_move_onto_its_own_path_an_earlier_muman_recorded_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/cover.jpg"), "cover").unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.moving(Path::new("A/x.opus"), Path::new("A/y.opus"));
+        run.moving(Path::new("A/cover.jpg"), Path::new("A/cover.jpg"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("A/y.opus")).unwrap();
+        let moved = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        state.outputs.insert("A/y.opus".into(), moved);
+        state.save(&d.home).unwrap();
+        run.finish(&d.home).unwrap();
+
+        let said = plan(&d).unwrap().lines().to_vec();
+        assert!(!said.iter().any(|l| l.contains("cover.jpg")), "{said:?}");
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/cover.jpg")).unwrap(),
+            "cover"
         );
     }
 

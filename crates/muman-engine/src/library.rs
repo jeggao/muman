@@ -360,16 +360,49 @@ pub struct Removal {
     pub held: Vec<(PathBuf, String)>,
 }
 
-/// A song's file moved to a new path, with each file beside it.
+/// A song's file moved to a new path, with each file beside it that
+/// moves. Made only by [`Relocation::new`], so no file is moved, recorded
+/// moving or said moved onto its own path: a folder's file stays where it
+/// is as its song moves within the folder, and a move of it onto itself
+/// would be one `undo` refuses, its two ends one file in the way of the
+/// other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relocation {
-    pub from: PathBuf,
-    pub to: PathBuf,
-    /// Each file beside it, from and to.
-    pub beside: Vec<(PathBuf, PathBuf)>,
+    from: PathBuf,
+    to: PathBuf,
+    beside: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Relocation {
+    /// The song's file at `from` moved to `to`, with each of `beside`,
+    /// from and to, but those whose two ends are one path, which stay.
+    #[must_use]
+    pub fn new(from: PathBuf, to: PathBuf, beside: Vec<(PathBuf, PathBuf)>) -> Self {
+        let beside = beside.into_iter().filter(|(a, b)| a != b).collect();
+        Self { from, to, beside }
+    }
+
+    #[must_use]
+    pub fn from(&self) -> &PathBuf {
+        &self.from
+    }
+
+    #[must_use]
+    pub fn to(&self) -> &PathBuf {
+        &self.to
+    }
+
+    /// Each file beside it that moves, from and to.
+    #[must_use]
+    pub fn beside(&self) -> &[(PathBuf, PathBuf)] {
+        &self.beside
+    }
+
+    /// Each file it moves, from and to: the song's, then those beside it.
+    pub fn files(&self) -> impl Iterator<Item = (&PathBuf, &PathBuf)> {
+        std::iter::once((&self.from, &self.to)).chain(self.beside.iter().map(|(a, b)| (a, b)))
+    }
+
     /// The moves said of it, each from and to: the song's file, and each
     /// of its folder's files it carries, which a name of the song's own
     /// does not tell of.
@@ -735,11 +768,11 @@ mod tests {
         std::fs::write(root.join("A/x.lrc"), "l").unwrap();
         std::fs::write(root.join("B/x.lrc"), "taken").unwrap();
         let mut ledger = Ledger::new(root, root, None);
-        let moves = [Relocation {
-            from: "A/x.opus".into(),
-            to: "B/x.opus".into(),
-            beside: vec![("A/x.lrc".into(), "B/x.lrc".into())],
-        }];
+        let moves = [Relocation::new(
+            "A/x.opus".into(),
+            "B/x.opus".into(),
+            vec![("A/x.lrc".into(), "B/x.lrc".into())],
+        )];
         let done = ledger.relocate(&moves, &mut Vec::new()).unwrap();
         let Err(e) = &done[0] else {
             panic!("moved onto a file taken");

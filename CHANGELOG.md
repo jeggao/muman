@@ -9,6 +9,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A run stopped in its moves after the library's times changed, or
+  after the library folder moved, is followed by the next**: a sync
+  saves the library as it found it, copies with new times vouched for
+  and a folder named anew taken, before it moves any file, where the
+  next sync took the song it moved for a file of yours, left it
+  unwritten for good and deleted its `.lrc`, while `check` found no
+  problems.
+- **`undo` goes through after a song holding its folder's cover moves
+  within the folder**: the cover stays where it is, and no run records,
+  and neither `status` nor `sync` says, a move of `cover.jpg` onto
+  itself, which `undo` refused until you moved muman's own cover aside;
+  such a move a run recorded before is none to `undo`.
 - **A song written at a path another song just moved away from stays
   its own after a stopped run**: the next run follows a move only while
   the state holds the moved song's record where it left, where it gave

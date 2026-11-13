@@ -580,6 +580,54 @@ fn a_folder_s_cover_freed_for_a_move_is_written_over_by_its_new_holder() {
 }
 
 #[test]
+fn a_song_moved_within_its_folder_moves_not_the_folder_s_cover_and_is_undone() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    listing(&h, folder, &["a"]);
+    let fake = Fake::default().probe("a.flac", &tagged_flac("Kite", 1, "Record", false));
+    assert!(h.run(&fake, Options::default()).0);
+    let cover = "Artist/Record/cover.jpg";
+    assert!(h.lib(cover).exists());
+    h.songs(&format!(
+        "{folder}[[song]]\nsources = [\"manual:a.flac\"]\ntags = {{ title = \"Kite Rooms\" }}\n"
+    ));
+    let said = h.status(&fake, &[], false);
+    let mut run = Run::begin(&h.dirs.home).unwrap();
+    let mut out = Vec::new();
+    let synced = reconcile(
+        &fake,
+        &h.dirs,
+        Options::default(),
+        Recording::Run(&mut run),
+        &mut out,
+    );
+    run.finish(&h.dirs.home).unwrap();
+    let done = String::from_utf8(out).unwrap();
+    assert!(synced.unwrap().ok, "{done}");
+    assert!(
+        said.contains("Would move: Artist/Record/01 Kite.flac → "),
+        "{said}"
+    );
+    assert!(
+        done.contains("Moved: Artist/Record/01 Kite.flac → "),
+        "{done}"
+    );
+    for text in [&said, &done] {
+        assert!(!text.contains(&format!("{cover} → ")), "{text}");
+    }
+    assert!(h.lib(cover).exists(), "{done}");
+    h.audit(&[], &done);
+    let plan = crate::history::plan(&h.dirs).unwrap();
+    let lines = plan.lines().to_vec();
+    crate::history::undo(&h.dirs, plan, &mut Vec::new())
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert!(h.lib("Artist/Record/01 Kite.flac").exists(), "{lines:?}");
+    assert!(h.lib(cover).exists(), "{lines:?}");
+}
+
+#[test]
 fn a_forced_sync_writes_again_a_folder_s_cover_changed_by_hand() {
     let h = home();
     let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
@@ -1254,6 +1302,123 @@ fn a_move_in_case_alone_stopped_halfway_is_muman_s_and_finished() {
         h.audit(&[], &text);
     }
     assert!(halfway > 0, "no step of {steps} stopped a move halfway");
+}
+
+#[test]
+fn a_move_stopped_anywhere_after_a_copy_gave_the_library_new_times_is_finished() {
+    a_move_stopped_anywhere_is_finished(&|h: &mut Home| copied_without_times(h));
+}
+
+#[test]
+fn a_move_stopped_anywhere_going_on_in_a_run_stopped_before_it_is_finished() {
+    a_move_stopped_anywhere_is_finished(&|h: &mut Home| {
+        copied_without_times(h);
+        // Stopped before it changed anything, its record the next run's to go on in.
+        drop(Run::begin(&h.dirs.home).unwrap());
+    });
+}
+
+#[test]
+fn a_move_stopped_anywhere_in_a_library_folder_moved_is_finished() {
+    a_move_stopped_anywhere_is_finished(&|h: &mut Home| {
+        let moved = h.dirs.library.with_file_name("moved");
+        std::fs::rename(&h.dirs.library, &moved).unwrap();
+        h.dirs.library = moved;
+    });
+}
+
+/// Give every file in the library a new time, as a copy made without
+/// its times, or a backup put back, does.
+fn copied_without_times(h: &Home) {
+    let then = filetime::FileTime::from_unix_time(1_000_000_000, 0);
+    for file in files(&h.dirs.library) {
+        filetime::set_file_mtime(file, then).unwrap();
+    }
+}
+
+/// A song retitled after `found` changed how its library is found, its
+/// file and lyrics moved by a sync killed at each step: the next sync
+/// follows each move the stopped one made, and finishes the song where
+/// it went, every file muman's.
+fn a_move_stopped_anywhere_is_finished(found: &dyn Fn(&mut Home)) {
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let titled = |title: &str| {
+        format!(
+            "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = {{ title = \"{title}\" }}\n"
+        )
+    };
+    let prepare = || {
+        let mut h = home();
+        h.fetched("aaaaaaaaaaa");
+        h.songs(&titled("Lantern"));
+        assert!(h.run(&fake, Options::default()).0);
+        found(&mut h);
+        h.songs(&titled("Lantern Rooms"));
+        h
+    };
+    let recorded = |h: &Home| {
+        let mut run = Run::begin(&h.dirs.home).unwrap();
+        let mut out = Vec::new();
+        let synced = reconcile(
+            &fake,
+            &h.dirs,
+            Options::default(),
+            Recording::Run(&mut run),
+            &mut out,
+        );
+        run.finish(&h.dirs.home).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        h.holds(&text);
+        (synced.unwrap().ok, text)
+    };
+    let whole = prepare();
+    let counted = crate::kill::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    let (_, text) = recorded(&whole);
+    let steps = counted.seen();
+    drop(counted);
+    assert!(text.contains("Moved: "), "{text}");
+    for at in 1..=steps {
+        let h = prepare();
+        let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recorded(&h)));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+            .map(|s| format!("{s:?}"))
+            .collect();
+        assert!(
+            !said.iter().any(|s| s.contains("Not muman's")),
+            "step {at}: {said:?}"
+        );
+        let (ok, text) = recorded(&h);
+        assert!(ok && !text.contains("not muman's"), "step {at}: {text}");
+        for file in ["Lantern Rooms.opus", "Lantern Rooms.lrc"] {
+            let at_last = h.lib(&format!("Chan/Lantern Rooms/{file}"));
+            assert!(at_last.exists(), "step {at}: {file}: {text}");
+        }
+        h.audit(&[], &text);
+        let (ok, again) = recorded(&h);
+        assert!(ok && again.contains("Up to date: 1"), "step {at}: {again}");
+        let plan = crate::history::plan(&h.dirs).unwrap();
+        let lines = plan.lines().to_vec();
+        crate::history::undo(&h.dirs, plan, &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        for file in ["Lantern.opus", "Lantern.lrc"] {
+            let back = h.lib(&format!("Chan/Lantern/{file}"));
+            assert!(back.exists(), "step {at}: {file}: {lines:?}");
+        }
+        let said: Vec<String> = (crate::diagnose::diagnose(&h.dirs).unwrap().said.iter())
+            .map(|s| format!("{s:?}"))
+            .collect();
+        assert!(
+            !said
+                .iter()
+                .any(|s| s.contains("Not muman's") || s.contains("changed")),
+            "step {at}: {said:?}"
+        );
+    }
 }
 
 #[test]
