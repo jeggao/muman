@@ -105,6 +105,39 @@ fn pcm(levels: &[u32]) -> Vec<u8> {
 }
 
 #[test]
+fn audio_aligning_with_any_of_the_song_s_sources_joins_whichever_its_print_matched() {
+    let h = home(&["same.flac", "kept.flac"]);
+    std::fs::write(
+        h.dirs.manifest(),
+        "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"manual:kept.flac\"]\n",
+    )
+    .unwrap();
+    let song = words(4000, 2);
+    let mut fake = fake()
+        .probe("kept.flac", crate::testing::FLAC)
+        .print("kept.flac", words(1600, 1));
+    fake.pcm = vec![
+        ("aaaaaaaaaaa".into(), pcm(&song)),
+        ("kept.flac".into(), pcm(&words(4000, 3))),
+        ("same.flac".into(), pcm(&song)),
+    ];
+    let mut out = Vec::new();
+    let edits = identify(
+        &fake,
+        &h.dirs,
+        vec![proposal("same.flac")],
+        Mode::Ask,
+        false,
+        None,
+        &mut out,
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(joined(&edits[0]), "{text}");
+    assert!(text.contains("the same recording as"), "{text}");
+}
+
+#[test]
 fn a_print_alike_joins_only_audio_that_aligns_with_the_song_s() {
     let song = words(4000, 2);
     for (theirs, joins) in [(words(4000, 3), false), (song.clone(), true)] {

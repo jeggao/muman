@@ -390,8 +390,12 @@ fn wider_bandwidth_wins_between_clean_recordings_and_a_transcode_cannot_fake_it(
     );
     assert_eq!(r.plan.audio.key, real);
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
-    let r = run(&song(&[fake, opus.clone()]), &facts, &alignments);
-    assert_eq!(r.plan.audio.key, opus, "a 16 kHz FLAC is a lossy transcode");
+    let r = run(&song(&[opus.clone(), fake.clone()]), &facts, &alignments);
+    assert_eq!(
+        r.plan.audio.key, fake,
+        "an Opus copy may have been made from a 16 kHz FLAC: {}",
+        r.why.audio
+    );
 }
 
 #[test]
@@ -429,7 +433,7 @@ fn a_lossy_copy_never_counts_wider_than_a_lossless_copy_of_its_recording() {
     let facts = BTreeMap::from([
         (flac.clone(), audio("flac", 20.3)),
         (opus.clone(), audio("opus", 20.6)),
-        (fake.clone(), audio("flac", 18.6)),
+        (fake.clone(), audio("flac", 14.0)),
     ]);
     let mut alignments = both(&facts, &flac, &opus, 0, 0.99).to_vec();
     alignments.extend(both(&facts, &fake, &opus, 0, 0.99));
@@ -446,11 +450,17 @@ fn a_lossy_copy_never_counts_wider_than_a_lossless_copy_of_its_recording() {
 
 #[test]
 fn a_lossy_copy_of_a_lossy_copy_never_counts_wider_by_its_encoder_s_noise() {
-    let (mp3, ogg, aac) = (manual("tide.mp3"), manual("tide.ogg"), manual("tide.m4a"));
+    let (mp3, ogg, aac, wide) = (
+        manual("tide.mp3"),
+        manual("tide.ogg"),
+        manual("tide.m4a"),
+        manual("tide 320.mp3"),
+    );
     let facts = BTreeMap::from([
         (mp3.clone(), audio("mp3", 18.95)),
         (ogg.clone(), audio("vorbis", 19.12)),
         (aac.clone(), audio("aac", 19.7)),
+        (wide.clone(), audio("mp3", 19.7)),
     ]);
     let alignments = both(&facts, &mp3, &ogg, 0, 0.99).to_vec();
     for order in [[&mp3, &ogg], [&ogg, &mp3]] {
@@ -459,9 +469,56 @@ fn a_lossy_copy_of_a_lossy_copy_never_counts_wider_by_its_encoder_s_noise() {
     }
     let r = run(&song(&[mp3.clone(), ogg.clone()]), &facts, &[]);
     assert_eq!(r.plan.audio.key, ogg, "not known to be one recording");
+    let alignments = both(&facts, &mp3, &wide, 0, 0.99).to_vec();
+    let r = run(&song(&[mp3.clone(), wide.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, wide, "wider than any encoder's noise");
     let alignments = both(&facts, &mp3, &aac, 0, 0.99).to_vec();
-    let r = run(&song(&[mp3, aac.clone()]), &facts, &alignments);
-    assert_eq!(r.plan.audio.key, aac, "wider than any encoder's noise");
+    let r = run(&song(&[aac.clone(), mp3.clone()]), &facts, &alignments);
+    assert_eq!(
+        r.plan.audio.key, mp3,
+        "AAC fills past a lowpass it was given"
+    );
+}
+
+#[test]
+fn a_lossy_copy_never_counts_wider_than_a_copy_it_may_have_been_made_from() {
+    let (mp3, flac) = (manual("comets.mp3"), manual("comets.flac"));
+    let mut opus: Vec<(SourceKey, Facts)> = [64, 96, 128]
+        .into_iter()
+        .map(|kbps| (manual(&format!("comets{kbps}.opus")), audio("opus", 20.625)))
+        .collect();
+    for (n, (_, facts)) in opus.iter_mut().enumerate() {
+        facts.rev = format!("opus-{n}");
+    }
+    for source in [(mp3, audio("mp3", 16.88)), (flac, audio("flac", 17.23))] {
+        let mut facts = BTreeMap::from([source.clone()]);
+        facts.extend(opus.iter().cloned());
+        let mut alignments = Vec::new();
+        for (copy, _) in &opus {
+            alignments.extend(both(&facts, copy, &source.0, 0, 0.99));
+        }
+        let mut keys: Vec<SourceKey> = opus.iter().map(|(k, _)| k.clone()).collect();
+        keys.push(source.0.clone());
+        let r = run(&song(&keys), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, source.0, "{}", r.why.audio);
+        let wide = BTreeMap::from([source.clone(), (opus[0].0.clone(), audio("opus", 20.625))]);
+        let r = run(&song(&[source.0.clone(), opus[0].0.clone()]), &wide, &[]);
+        assert_eq!(r.plan.audio.key, opus[0].0, "not known to be one recording");
+    }
+    let narrow = BTreeMap::from([
+        (manual("thin.mp3"), audio("mp3", 14.8)),
+        (opus[0].0.clone(), audio("opus", 20.625)),
+    ]);
+    let alignments = both(&narrow, &manual("thin.mp3"), &opus[0].0, 0, 0.99);
+    let r = run(
+        &song(&[manual("thin.mp3"), opus[0].0.clone()]),
+        &narrow,
+        &alignments,
+    );
+    assert_eq!(
+        r.plan.audio.key, opus[0].0,
+        "made from audio stopping at 14.8 kHz, Opus fills to 15.6 kHz, not to 20"
+    );
 }
 
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
@@ -1705,9 +1762,9 @@ fn plans_stored_before_other_codecs_read_as_today() {
 #[test]
 fn a_measure_switched_off_or_outweighed_no_longer_decides() {
     let (narrow, wide) = (yt("nnnnnnnnnnn"), yt("wwwwwwwwwww"));
-    let mut n = audio("opus", 16.0);
+    let mut n = audio("vorbis", 16.0);
     n.rev = "n".into();
-    let mut w = audio("opus", 20.0);
+    let mut w = audio("vorbis", 20.0);
     w.rev = "w".into();
     w.audio
         .as_mut()

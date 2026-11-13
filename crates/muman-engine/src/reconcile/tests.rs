@@ -697,6 +697,7 @@ fn the_release_wins_over_its_video_by_measure_and_lends_it_lyrics() {
     song.extend(levels(6000, 7));
     song.extend([0.0; 10]);
     let mut video = levels(1000, 99);
+    video.extend([0.0; 10]);
     video.extend(&song);
     let mut fake = Fake::default()
         .info("rrrrrrrrrrr", r#"{"id": "rrrrrrrrrrr", "track": "Song", "artists": ["A"], "album": "Record"}"#)
@@ -714,7 +715,10 @@ fn the_release_wins_over_its_video_by_measure_and_lends_it_lyrics() {
     assert_eq!(plan.audio.key, SourceKey::youtube("rrrrrrrrrrr"));
     let lyrics = plan.lyrics.as_ref().unwrap();
     assert_eq!(lyrics.key, SourceKey::youtube("vvvvvvvvvvv"));
-    assert_eq!(lyrics.shift_ms, 10_000, "the video's 10 s intro");
+    assert_eq!(
+        lyrics.shift_ms, 10_100,
+        "the video's 10 s intro and its rest"
+    );
     assert_eq!(state.alignments.len(), 2);
 }
 

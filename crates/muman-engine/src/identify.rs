@@ -13,13 +13,16 @@
 //! as a drone or noise under a held tone, leaves few words that sound and
 //! those agreeing by chance: two such recordings scored 62% alike over
 //! 15 s. So a source that is, or may be, a listed song's recording by its
-//! print has its audio compared with the song's source it matched, as the
-//! song's sources are told apart ([`recordings::one`]), and the comparison
-//! is kept for the sync after. Audio that does not align joins nothing
-//! unasked: it is asked about on a terminal, and kept apart without one
-//! or with `-y`, so a song never holds a source it would call another
-//! recording. Audio too short to compare, or that could not be decoded,
-//! is matched by its print alone.
+//! print has its audio compared with each of the song's sources, as the
+//! song's sources are told apart ([`recordings::one`]), and the
+//! comparisons are kept for the sync after. It is the song's recording
+//! where it aligns with any of them, as a chain of aligning sources is one
+//! recording, so the verdict does not hang on which copies the song
+//! gathered first. Audio that aligns with none joins nothing unasked: it
+//! is asked about on a terminal, and kept apart without one or with `-y`,
+//! so a song never holds a source it would call another recording. Audio
+//! too short to compare, or that could not be decoded, is matched by its
+//! print alone.
 //!
 //! The question shows the new source beside the listed song it may be:
 //! the name, album, length and audio of each, and how alike they sound.
@@ -207,8 +210,7 @@ pub fn identify<R: Runner, W: Write>(
         // joins nothing unasked.
         let refuted = match (best, ours, &store) {
             (Some((n, m)), Some(ours), Some(store)) if m.verdict() != Verdict::Different => {
-                let theirs = matched[n].as_ref().unwrap_or(ours);
-                let one = one_recording(runner, store, &mut state, (ours, theirs), out)?;
+                let one = one_recording(runner, store, &mut state, ours, &known[n].keys, out)?;
                 state.keep_since(&dirs.home, &mut base)?;
                 one == Some(false)
             }
@@ -326,18 +328,23 @@ pub fn identify<R: Runner, W: Write>(
 const UNALIGNED: &str = "  Its audio does not align with the song's: the song would hold it as \
                          another recording";
 
-/// Whether `ours` and `theirs` are one recording, as a song holding both
-/// tells its sources apart ([`recordings::one`]): their audio compared as
-/// the sync after compares it, and the comparison kept for it.
+/// Whether `ours` is one recording with any of `theirs`, a song's
+/// sources, as the song holding it would tell its sources apart
+/// ([`recordings::one`]): its audio compared with each as the sync after
+/// compares it, and the comparisons kept for it. Comparing with every
+/// source, not the one its print matched best, makes the verdict the same
+/// whichever copies the song gathered first; it is `None` where none can
+/// be compared.
 fn one_recording<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
     state: &mut State,
-    (ours, theirs): (&SourceKey, &SourceKey),
+    ours: &SourceKey,
+    theirs: &[SourceKey],
     out: &mut W,
 ) -> Result<Option<bool>> {
     let together = crate::manifest::Song {
-        sources: vec![ours.clone(), theirs.clone()],
+        sources: std::iter::once(ours).chain(theirs).cloned().collect(),
         ..crate::manifest::Song::default()
     };
     reconcile::compare(runner, store, std::slice::from_ref(&together), state, out)?;
@@ -358,7 +365,15 @@ fn one_recording<R: Runner, W: Write>(
         );
         state.alignment(&revs)
     };
-    Ok(recordings::one(&audible(ours), &audible(theirs), aligned))
+    let verdicts: Vec<Option<bool>> = theirs
+        .iter()
+        .filter(|key| *key != ours)
+        .map(|key| recordings::one(&audible(ours), &audible(key), aligned))
+        .collect();
+    Ok([Some(true), Some(false)]
+        .into_iter()
+        .find(|verdict| verdicts.contains(verdict))
+        .flatten())
 }
 
 /// The album `song` is on as the card names it, with its place there.

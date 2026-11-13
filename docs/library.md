@@ -16,7 +16,7 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
+| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; a copy over an Opus or AAC one that may be filled from it; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
@@ -56,11 +56,11 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
 - **Real stereo** tells stereo from mono copied into two channels, even
   at different levels or a few samples apart. Of more than two
   channels, it compares the first two.
-- **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
-  made from an MP3 measures as narrow as the MP3, under any fill 20 dB
-  down, while a recording whose treble fades on its own measures full.
-  A lossy copy, or one that clips more, counts no wider than a lossless
-  copy of its recording: what clipping or an encoder fills in is no sound. Nor does a lossy copy count wider than any copy of its recording it tops by three bands (about 500 Hz) or less, as an encoder's noise moves a lowpass: a Vorbis file made from an MP3 counts as wide as the MP3.
+- **Bandwidth** is where a lowpass cuts the sound off. A FLAC made from
+  an MP3 measures as narrow as the MP3, while a recording whose treble
+  fades on its own measures full. A lossy copy, or one that clips more,
+  counts no wider than a lossless copy of its recording: what clipping or an encoder fills in is no sound.
+  Nor does a lossy copy count wider than any copy of its recording it may have been made from, one it tops by no more than its codec fills past a lowpass: Opus its whole top band, from 15.6 kHz; AAC 3.6 kHz; any other codec three bands (about 500 Hz), as an encoder's noise moves a lowpass. Of copies that then count alike, one narrowed to another by more than that noise ranks after it, so an Opus or AAC file made from an MP3 never beats the MP3. HE-AAC counts as wide as its core, a quarter of its sample rate.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples

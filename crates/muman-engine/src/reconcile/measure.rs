@@ -710,7 +710,7 @@ pub fn compare<R: Runner, W: Write>(
         ),
     )?;
     let step = progress::step("Comparing", Some(keys.len() as u64));
-    let envelopes: HashMap<SourceKey, Vec<f64>> = keys
+    let envelopes: HashMap<SourceKey, align::Envelope> = keys
         .iter()
         .zip(parallel::map(&keys, parallel::builds(), |k| {
             let path = store.locate(k)?.path;
@@ -739,7 +739,6 @@ pub fn compare<R: Runner, W: Write>(
             score: 0.0,
             coverage: 0.0,
         });
-        let ms = |e: &[f64]| i64::try_from(e.len()).unwrap_or(i64::MAX) * 10;
         let outside = align::outside(ea, eb, &found);
         Some(Aligned {
             a: a.clone(),
@@ -750,8 +749,8 @@ pub fn compare<R: Runner, W: Write>(
             stretch_ppm: found.stretch_ppm,
             score: found.score,
             coverage: found.coverage,
-            a_ms: ms(ea),
-            b_ms: ms(eb),
+            a_ms: ea.ms(),
+            b_ms: eb.ms(),
             a_extra_ms: outside.extra_ms,
             a_lacks_ms: outside.lacks_ms,
             b_lacks_ms: outside.track_lacks_ms,

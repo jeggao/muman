@@ -2,17 +2,48 @@
 //! upload and its YouTube Music track, compared by their loudness over
 //! time.
 //!
-//! Each side is decoded to 8 kHz mono and reduced to a log-energy
-//! envelope at 100 frames a second, its samples centred on their mean
-//! first: an old rip's converter may hold its silence off centre, which
-//! would measure as steady sound 50 dB down. A cross-correlation over the
-//! whole of both finds the shift: coarse, at a quarter of the rate, over
-//! every shift that places the shorter within the longer and up to a
-//! minute past either end, then refined. An excerpt may start anywhere in
-//! its song, and a video's intro run past a minute; so that hour-long
-//! files cost no more than a fraction of a second, the coarse rate halves
-//! until the search correlates at most 10^8 frames, and the shift found
-//! is refined at twice the rate in turn. Ten-second windows of the
+//! Each side is decoded to 8 kHz mono and cut into frames of 10 ms, each
+//! split by a Haar wavelet into five octave bands, from 2 to 4 kHz down
+//! to under 250 Hz, the lowest less the frame's own mean. Each band's
+//! energy, averaged over the 50 ms about its frame, is taken as a log
+//! level: an envelope of five bands at 100 frames a second. Comparing
+//! correlates every band at once, each about its own mean; the frame's
+//! own level over all five says what sounds outside the stretch two
+//! recordings share (below).
+//!
+//! - **Bands.** One envelope of the whole band says little of audio whose
+//!   loudness barely moves. Noise under a held tone moved it by 0.2 dB,
+//!   as much as a codec's error moves it, and the Opus copy of such a
+//!   track at 96 kbit/s scored 0.76 against it, and at 192 kbit/s 0.92. In
+//!   bands, where the noise moves by decibels of its own, the two scored
+//!   0.999 and 1.0, while two drones of other noise under other tones
+//!   scored 0.14, and 0.05 by the whole band.
+//! - **Each frame's own mean.** An old rip's converter may hold its sound
+//!   off centre, and a codec may take the offset out, as Opus's encoder
+//!   does. An MP3 whose offset wandered between 650 and 3400 second by
+//!   second, then fell to digital silence, measured that silence as steady
+//!   sound 24 dB down once its samples were centred on their whole mean,
+//!   and each of its Opus copies scored 0.61 to 0.64 against it; centred
+//!   frame by frame, 0.999.
+//! - **50 ms.** A band's energy in one frame of noise-like sound is
+//!   chance, and two copies whose frames fall a few ms apart, as an
+//!   excerpt's and its song's do, draw it differently. Of the excerpts
+//!   measured below, 163 of 306 fitted their song frame by frame, 260
+//!   averaged over 30 ms, 282 over 50 ms and 294 over 90 ms, where the
+//!   whole band's one envelope fitted 251; over 90 ms, other tracks scored
+//!   up to 0.87 and 0.80 where 50 ms held them to 0.84 and 0.79. The
+//!   average lends the two frames at a recording's edge some of what plays
+//!   past it, as a video's intro before a release's first silent frame,
+//!   which costs the pair a few hundredths of their score.
+//!
+//! A cross-correlation over the whole of both finds the shift: coarse, at
+//! a quarter of the rate, over every shift that places the shorter within
+//! the longer and up to a minute past either end, then refined. An
+//! excerpt may start anywhere in its song, and a video's intro run past a
+//! minute; so that hour-long files cost no more than a fraction of a
+//! second, the coarse rate halves until the search correlates at most
+//! 10^8 levels, a band's in a frame each, and the shift found is refined
+//! at twice the rate in turn. Ten-second windows of the
 //! upload, each searched again within 1 s of it, find their own, and a
 //! line through them, the median of their pairwise slopes, says how the
 //! shift drifts: a copy played 0.1% fast drifts 240 ms in four minutes.
@@ -22,10 +53,16 @@
 //! inside the track count: one past its edge reaches the track only by
 //! moving off the shift, and of a clip's few windows those were a third.
 //!
-//! Measured on uploads paired with their releases, one recording scored
-//! 0.991 to 0.997 with 97% to 100% of its windows agreeing, a music video
-//! starting 920 ms late and an upload with an outro included; an
-//! unrelated song scored 0.289 with none.
+//! Measured by the whole band's one envelope on uploads paired with their
+//! releases, one recording scored 0.991 to 0.997 with 97% to 100% of its
+//! windows agreeing, a music video starting 920 ms late and an upload
+//! with an outro included; an unrelated song scored 0.289 with none. In
+//! bands, 51 tracks of a public archive, live sets and netlabel releases,
+//! each against its copies as Opus at 64 to 192 kbit/s, AAC at 128 and
+//! 256, Vorbis at quality 5 and MP3 at 128, all 459 scored 0.998 or more
+//! with every window agreeing, where the whole band had left one track's
+//! five Opus copies apart; of the 2,550 ordered pairs of different tracks
+//! none fitted, the highest scoring 0.79, and 0.84 by the whole band.
 //!
 //! **Short recordings.** Where the shorter of the two is under a minute,
 //! the least overlap is three quarters of it, up to the 10 s it is for
@@ -46,7 +83,13 @@
 //! of 19,836 others, the highest scoring 0.88, and the whole pieces none
 //! of the 1,653 pairs of them; 113 to 115 of the 116 excerpts of 6 s and
 //! longer fitted their own piece, and every one its uncut excerpt. At 4 s,
-//! 3 of 19,836 others joined, and at 3 s 17.
+//! 3 of 19,836 others joined, and at 3 s 17. In bands, of the 51 tracks'
+//! excerpts of 6, 12 and 30 s cut so, 282 of 306 fitted their own track,
+//! and 251 by the whole band; none of the 15,300 pairs with another track
+//! fitted, the highest scoring 0.84, where by the whole band one counting
+//! voice's excerpt joined another's; nor any of 30,600 pairs of excerpts
+//! of one length from different tracks, the highest scoring 0.63, and
+//! 0.84 by the whole band.
 //!
 //! A line is the model: a cut that inserts a scene mid-song lowers the
 //! windows' agreement and fails, where a piecewise map could keep it. A
@@ -120,7 +163,7 @@ use std::path::Path;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/10";
+pub const METHOD: &str = "envelope-xcorr/11";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
@@ -132,7 +175,8 @@ const MAX_PAST: usize = 6000;
 /// The coarse search averages this many frames into one, or more where
 /// that would cost over [`COARSE_BUDGET`].
 const COARSE: usize = 4;
-/// The most frames the coarse search correlates, over every shift.
+/// The most levels the coarse search correlates, a frame of each band
+/// each, over every shift.
 const COARSE_BUDGET: usize = 100_000_000;
 /// The least overlap a shift is scored on, in frames, where the shorter
 /// recording holds more than [`Scale::of`] scales it to.
@@ -232,22 +276,89 @@ fn real(count: usize) -> f64 {
     count as f64
 }
 
-/// The log-energy envelope of 16-bit little-endian samples, centred on
-/// their mean first, which takes out a DC offset.
+/// The octave bands a frame is split into, as the module says: 2 to
+/// 4 kHz, 1 to 2, 0.5 to 1, 0.25 to 0.5, and under 0.25 kHz less the
+/// frame's mean.
+const BANDS: usize = 5;
+
+/// One frame's loudness in each of [`BANDS`].
+type Frame = [f64; BANDS];
+
+/// A band's energy is averaged over this many frames either side, as the
+/// module says.
+const SMOOTH: usize = 2;
+
+/// A recording's loudness over time, a frame each 10 ms.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Envelope {
+    /// Each frame's loudness over every band, its mean taken out: what
+    /// [`outside`] weighs.
+    levels: Vec<f64>,
+    /// Each frame's loudness in each band: what comparing correlates.
+    bands: Vec<Frame>,
+}
+
+impl Envelope {
+    /// How many frames it holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.levels.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.levels.is_empty()
+    }
+
+    /// How long it plays, in ms.
+    #[must_use]
+    pub fn ms(&self) -> i64 {
+        i64::try_from(self.len()).unwrap_or(i64::MAX / FRAME_MS) * FRAME_MS
+    }
+}
+
+/// The envelope of 16-bit little-endian samples: each frame split into
+/// [`BANDS`] by a Haar wavelet, the lowest less the frame's mean, which
+/// takes out a DC offset however it wanders, each band's energy as a
+/// log level.
 #[must_use]
-pub fn envelope(pcm: &[u8]) -> Vec<f64> {
+pub fn envelope(pcm: &[u8]) -> Envelope {
     let (samples, _) = pcm.as_chunks::<2>();
-    let value = |s: &[u8; 2]| f64::from(i16::from_le_bytes(*s));
-    let mean = samples.iter().map(value).sum::<f64>() / real(samples.len().max(1));
-    samples
-        .as_chunks::<HOP>()
-        .0
-        .iter()
-        .map(|frame| {
-            let energy = frame.iter().map(|s| (value(s) - mean).powi(2)).sum::<f64>() / real(HOP);
-            energy.sqrt().ln_1p()
+    let level = |energy: f64| (energy / real(HOP)).sqrt().ln_1p();
+    let mut found = Envelope::default();
+    let mut heard: Vec<Frame> = Vec::new();
+    let mut rest = [0.0; HOP];
+    for frame in samples.as_chunks::<HOP>().0 {
+        for (x, s) in rest.iter_mut().zip(frame) {
+            *x = f64::from(i16::from_le_bytes(*s));
+        }
+        let mut energies = [0.0; BANDS];
+        let mut len = HOP;
+        for energy in &mut energies[..BANDS - 1] {
+            len /= 2;
+            for i in 0..len {
+                let (a, b) = (rest[2 * i], rest[2 * i + 1]);
+                *energy += (a - b).powi(2) / 2.0;
+                rest[i] = (a + b) / std::f64::consts::SQRT_2;
+            }
+        }
+        let low = &rest[..len];
+        let mean = low.iter().sum::<f64>() / real(len);
+        energies[BANDS - 1] = low.iter().map(|x| (x - mean).powi(2)).sum();
+        found.levels.push(level(energies.iter().sum()));
+        heard.push(energies);
+    }
+    let mut sums = vec![[0.0; BANDS]; heard.len() + 1];
+    for (i, energies) in heard.iter().enumerate() {
+        sums[i + 1] = std::array::from_fn(|b| sums[i][b] + energies[b]);
+    }
+    found.bands = (0..heard.len())
+        .map(|i| {
+            let (from, to) = (i.saturating_sub(SMOOTH), (i + SMOOTH + 1).min(heard.len()));
+            std::array::from_fn(|b| level((sums[to][b] - sums[from][b]) / real(to - from)))
         })
-        .collect()
+        .collect();
+    found
 }
 
 /// Loudness within this much of a recording's median, in the envelope's
@@ -369,7 +480,8 @@ impl<'a> Levels<'a> {
 /// other's sound past a cut is the song, which the cut one lacks; past any
 /// other edge it is beyond the song.
 #[must_use]
-pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
+pub fn outside(upload: &Envelope, track: &Envelope, at: &Alignment) -> Outside {
+    let (upload, track) = (&upload.levels[..], &track.levels[..]);
     let lag = at.offset_ms / FRAME_MS;
     let stretch = at.stretch();
     let upload_at = |t: i64| lag as f64 + stretch * t as f64;
@@ -418,22 +530,32 @@ pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
     found
 }
 
-/// Pearson correlation of two runs over their common length; 0 when
-/// either is flat.
-fn ncc(left: &[f64], right: &[f64]) -> f64 {
+/// Pearson correlation of two runs over their common length, every band
+/// at once, each about its own mean; 0 when either is flat.
+fn ncc(left: &[Frame], right: &[Frame]) -> f64 {
     let len = left.len().min(right.len());
     if len == 0 {
         return 0.0;
     }
     let (left, right) = (&left[..len], &right[..len]);
-    let mean = |run: &[f64]| run.iter().sum::<f64>() / real(len);
+    let mean = |run: &[Frame]| {
+        let mut sums = [0.0; BANDS];
+        for frame in run {
+            for (sum, level) in sums.iter_mut().zip(frame) {
+                *sum += level;
+            }
+        }
+        sums.map(|sum| sum / real(len))
+    };
     let (mean_l, mean_r) = (mean(left), mean(right));
     let (mut cross, mut sq_l, mut sq_r) = (0.0, 0.0, 0.0);
     for (l, r) in left.iter().zip(right) {
-        let (dl, dr) = (l - mean_l, r - mean_r);
-        cross += dl * dr;
-        sq_l += dl * dl;
-        sq_r += dr * dr;
+        for band in 0..BANDS {
+            let (dl, dr) = (l[band] - mean_l[band], r[band] - mean_r[band]);
+            cross += dl * dr;
+            sq_l += dl * dl;
+            sq_r += dr * dr;
+        }
     }
     if sq_l == 0.0 || sq_r == 0.0 {
         0.0
@@ -444,7 +566,7 @@ fn ncc(left: &[f64], right: &[f64]) -> f64 {
 
 /// The correlation of `upload` against `track` with the upload `lag`
 /// frames later, over their overlap; `None` below the least overlap.
-fn score_at(upload: &[f64], track: &[f64], lag: isize, min_overlap: usize) -> Option<f64> {
+fn score_at(upload: &[Frame], track: &[Frame], lag: isize, min_overlap: usize) -> Option<f64> {
     let start = lag.max(0);
     let end = upload
         .len()
@@ -466,17 +588,25 @@ fn best(scored: impl Iterator<Item = (isize, f64)>) -> Option<(isize, f64)> {
     })
 }
 
-fn decimate(x: &[f64], factor: usize) -> Vec<f64> {
+fn decimate(x: &[Frame], factor: usize) -> Vec<Frame> {
     x.chunks_exact(factor)
-        .map(|c| c.iter().sum::<f64>() / real(factor))
+        .map(|c| {
+            let mut sums = [0.0; BANDS];
+            for frame in c {
+                for (sum, level) in sums.iter_mut().zip(frame) {
+                    *sum += level;
+                }
+            }
+            sums.map(|sum| sum / real(factor))
+        })
         .collect()
 }
 
 /// The shift among `lags`, in frames of `factor` averaged, at which
 /// `upload` correlates best with `track`.
 fn search(
-    upload: &[f64],
-    track: &[f64],
+    upload: &[Frame],
+    track: &[Frame],
     factor: usize,
     lags: std::ops::RangeInclusive<isize>,
     scale: Scale,
@@ -487,9 +617,9 @@ fn search(
 
 /// The shift `upload` plays `track` at: searched coarse over every shift
 /// that places the shorter within the longer and up to [`MAX_PAST`] past
-/// either end, as coarse as keeps that under `budget` frames correlated,
+/// either end, as coarse as keeps that under `budget` levels correlated,
 /// then refined at twice the rate in turn to the full one.
-fn shift(upload: &[f64], track: &[f64], budget: usize, scale: Scale) -> Option<(isize, f64)> {
+fn shift(upload: &[Frame], track: &[Frame], budget: usize, scale: Scale) -> Option<(isize, f64)> {
     let longer = upload.len().cast_signed() - track.len().cast_signed();
     let (lo, hi) = (
         longer.min(0) - MAX_PAST.cast_signed(),
@@ -498,7 +628,7 @@ fn shift(upload: &[f64], track: &[f64], budget: usize, scale: Scale) -> Option<(
     let span = (hi - lo).unsigned_abs();
     let shorter = upload.len().min(track.len());
     let mut factor = COARSE;
-    while (span / factor) * (shorter / factor) > budget {
+    while (span / factor) * (shorter / factor) * BANDS > budget {
         factor *= 2;
     }
     let step = factor.cast_signed();
@@ -537,8 +667,8 @@ struct Window {
 /// shift `guess` gives for its middle; flat windows say nothing, nor do
 /// those that shift leaves outside the track.
 fn windows(
-    upload: &[f64],
-    track: &[f64],
+    upload: &[Frame],
+    track: &[Frame],
     reach: usize,
     scale: Scale,
     guess: impl Fn(f64) -> isize,
@@ -547,7 +677,12 @@ fn windows(
     let length = scale.window;
     for at in (0..upload.len().saturating_sub(length - 1)).step_by(length / 2) {
         let window = &upload[at..at + length];
-        if window.iter().all(|v| (v - window[0]).abs() < 1e-9) {
+        let flat = |band: usize| {
+            window
+                .iter()
+                .all(|v| (v[band] - window[0][band]).abs() < 1e-9)
+        };
+        if (0..BANDS).all(flat) {
             continue;
         }
         let middle = real(at + length / 2);
@@ -610,8 +745,8 @@ fn agreeing(windows: &[Window], shift: impl Fn(f64) -> f64) -> f64 {
 /// The correlation of `upload` against `track` played `stretch` times as
 /// long and starting `start` frames into the upload, over their overlap.
 fn stretched_score(
-    upload: &[f64],
-    track: &[f64],
+    upload: &[Frame],
+    track: &[Frame],
     start: f64,
     stretch: f64,
     scale: Scale,
@@ -624,8 +759,11 @@ fn stretched_score(
         }
         let k = at.floor() as usize;
         let next = track.get(k + 1).copied().unwrap_or(track[k]);
+        let share = at - real(k);
         u.push(*level);
-        t.push(track[k] + (next - track[k]) * (at - real(k)));
+        t.push(std::array::from_fn(|b| {
+            track[k][b] + (next[b] - track[k][b]) * share
+        }));
     }
     (u.len() >= scale.overlap).then(|| ncc(&u, &t))
 }
@@ -654,32 +792,32 @@ impl Scale {
         })
     }
 
-    /// `envelope` as it is compared at this scale.
-    fn compared(self, envelope: &[f64]) -> Cow<'_, [f64]> {
+    /// `envelope`'s bands as they are compared at this scale.
+    fn compared(self, envelope: &Envelope) -> Cow<'_, [Frame]> {
         if self.detrended {
-            Cow::Owned(detrended(envelope))
+            Cow::Owned(detrended(&envelope.bands))
         } else {
-            Cow::Borrowed(envelope)
+            Cow::Borrowed(&envelope.bands)
         }
     }
 }
 
-/// Each frame of `envelope` less the mean of those within [`DETREND`] of
-/// it.
-fn detrended(envelope: &[f64]) -> Vec<f64> {
-    let mut sums = vec![0.0; envelope.len() + 1];
-    for (i, level) in envelope.iter().enumerate() {
-        sums[i + 1] = sums[i] + level;
+/// Each frame of `bands` less the mean of those within [`DETREND`] of
+/// it, band by band.
+fn detrended(bands: &[Frame]) -> Vec<Frame> {
+    let mut sums = vec![[0.0; BANDS]; bands.len() + 1];
+    for (i, frame) in bands.iter().enumerate() {
+        sums[i + 1] = std::array::from_fn(|b| sums[i][b] + frame[b]);
     }
-    envelope
+    bands
         .iter()
         .enumerate()
-        .map(|(i, level)| {
+        .map(|(i, frame)| {
             let (from, to) = (
                 i.saturating_sub(DETREND),
-                (i + DETREND + 1).min(envelope.len()),
+                (i + DETREND + 1).min(bands.len()),
             );
-            level - (sums[to] - sums[from]) / real(to - from)
+            std::array::from_fn(|b| frame[b] - (sums[to][b] - sums[from][b]) / real(to - from))
         })
         .collect()
 }
@@ -696,12 +834,12 @@ pub fn comparable(a_ms: i64, b_ms: i64) -> bool {
 /// Where the upload's envelope sits against the track's, and how it
 /// drifts; `None` where either is too short to compare ([`comparable`]).
 #[must_use]
-pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
+pub fn align(upload: &Envelope, track: &Envelope) -> Option<Alignment> {
     let scale = Scale::of(upload.len().min(track.len()))?;
     align_by(&scale.compared(upload), &scale.compared(track), scale)
 }
 
-fn align_by(upload: &[f64], track: &[f64], scale: Scale) -> Option<Alignment> {
+fn align_by(upload: &[Frame], track: &[Frame], scale: Scale) -> Option<Alignment> {
     let (lag, score) = shift(upload, track, COARSE_BUDGET, scale)?;
     let one_shift = |_: f64| lag as f64;
     let flat = windows(upload, track, WINDOW_SEARCH, scale, |_| lag);
@@ -760,7 +898,7 @@ pub struct Lost {
 /// shift does not fit: down where the upload lacks audio, up where the
 /// track does.
 #[must_use]
-pub fn align_lacking(upload: &[f64], track: &[f64], lost: Lost) -> Option<Alignment> {
+pub fn align_lacking(upload: &Envelope, track: &Envelope, lost: Lost) -> Option<Alignment> {
     let scale = Scale::of(upload.len().min(track.len()))?;
     let (upload, track) = (&scale.compared(upload)[..], &scale.compared(track)[..]);
     let steady = align_by(upload, track, scale)?;
@@ -860,8 +998,8 @@ fn steps(windows: &[Window], down: bool, up: bool, span: isize) -> Vec<(f64, isi
 /// The correlation of `upload` against `track`, each upload frame placed
 /// by the step of the nearest of `placed`.
 fn stepped_score(
-    upload: &[f64],
-    track: &[f64],
+    upload: &[Frame],
+    track: &[Frame],
     placed: &[(f64, isize)],
     scale: Scale,
 ) -> Option<f64> {
@@ -887,6 +1025,26 @@ fn stepped_score(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An envelope whose every band moves as `levels` do.
+    fn flat(levels: &[f64]) -> Envelope {
+        Envelope {
+            levels: levels.to_vec(),
+            bands: levels.iter().map(|level| [*level; BANDS]).collect(),
+        }
+    }
+
+    fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
+        super::align(&flat(upload), &flat(track))
+    }
+
+    fn align_lacking(upload: &[f64], track: &[f64], lost: Lost) -> Option<Alignment> {
+        super::align_lacking(&flat(upload), &flat(track), lost)
+    }
+
+    fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
+        super::outside(&flat(upload), &flat(track), at)
+    }
 
     /// A deterministic envelope, smoothed noise unique to its seed.
     fn song(frames: usize, seed: u64) -> Vec<f64> {
@@ -951,7 +1109,8 @@ mod tests {
         let excerpt = upload[8000..9500].to_vec();
         assert_eq!(align(&upload, &excerpt).unwrap().offset_ms, 80_000);
         let scale = Scale::of(track.len()).unwrap();
-        let (lag, score) = shift(&upload, &track, 100_000, scale).unwrap();
+        let (lag, score) =
+            shift(&flat(&upload).bands, &flat(&track).bands, 500_000, scale).unwrap();
         assert_eq!(lag, 7000);
         assert!(score > 0.99, "{score}");
     }
@@ -1153,7 +1312,106 @@ mod tests {
         padded.extend(&song);
         let track = envelope(&samples(&song, 0));
         let upload = envelope(&samples(&padded, 100));
-        assert_eq!(outside(&upload, &track, &at(3000)), Outside::default());
+        assert_eq!(
+            super::outside(&upload, &track, &at(3000)),
+            Outside::default()
+        );
+    }
+
+    /// 8 kHz samples of `seconds` of noise unique to `seed` at `noise`,
+    /// under a 250 Hz tone at `tone`, each sample off centre by what
+    /// `drift` gives for its second.
+    fn heard(
+        seconds: usize,
+        seed: u64,
+        (tone, noise): (f64, f64),
+        drift: &dyn Fn(usize) -> f64,
+    ) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut last = 0.0;
+        (0..seconds * SAMPLE_RATE)
+            .map(|i| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let white = f64::from(u32::try_from(state >> 33).unwrap()) / f64::from(u32::MAX);
+                let hiss = white - last;
+                last = white;
+                let phase = std::f64::consts::TAU * 250.0 * real(i) / real(SAMPLE_RATE);
+                let sample = tone * phase.sin() + noise * hiss + drift(i / SAMPLE_RATE);
+                sample.round() as i16
+            })
+            .flat_map(i16::to_le_bytes)
+            .collect()
+    }
+
+    /// `pcm` with each sample moved by up to `by` either way, as a codec's
+    /// error moves it.
+    fn coded(pcm: &[u8], by: u16) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let (samples, _) = pcm.as_chunks::<2>();
+        samples
+            .iter()
+            .flat_map(|s| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let error = i32::try_from((state >> 33) % u64::from(2 * by + 1)).unwrap();
+                let moved = i32::from(i16::from_le_bytes(*s)) + error - i32::from(by);
+                i16::try_from(moved).unwrap().to_le_bytes()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn noise_under_a_held_tone_aligns_by_its_bands() {
+        let still = |_: usize| 0.0;
+        let song = heard(70, 1, (8000.0, 2500.0), &still);
+        let track = envelope(&song);
+        let copy = envelope(&coded(&song, 300));
+        let a = super::align(&copy, &track).unwrap();
+        assert!(a.fits(), "{a:?}");
+        let other = envelope(&heard(70, 2, (8000.0, 2500.0), &still));
+        let a = super::align(&other, &track).unwrap();
+        assert!(!a.fits(), "{a:?}");
+    }
+
+    #[test]
+    fn an_excerpt_cut_between_frames_fits_its_song() {
+        // Noise whose loudness moves as a song's does, every 30 ms.
+        let levels = song(2400, 5);
+        let noise = heard(70, 4, (0.0, 20_000.0), &|_| 0.0);
+        let song: Vec<u8> = noise
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| {
+                let gain = 0.1 + levels[i / (3 * HOP)];
+                ((f64::from(i16::from_le_bytes(*s)) * gain).round() as i16).to_le_bytes()
+            })
+            .collect();
+        let from = 2 * (20 * SAMPLE_RATE + HOP / 2);
+        let excerpt = &song[from..from + 2 * 30 * SAMPLE_RATE];
+        let a = super::align(&envelope(excerpt), &envelope(&song)).unwrap();
+        assert!(a.fits(), "{a:?}");
+        assert!((a.offset_ms + 20_000).abs() <= 10, "{a:?}");
+    }
+
+    #[test]
+    fn a_dc_offset_that_wanders_is_no_sound() {
+        // The offset an old converter holds, changing second by second,
+        // then digital silence, which a codec that takes out the offset
+        // leaves as it is.
+        let wandering = |second: usize| [2400.0, 700.0, 3400.0, 1500.0][second % 4];
+        let mut song = heard(30, 3, (6000.0, 1500.0), &wandering);
+        song.extend(vec![0; 2 * 3 * SAMPLE_RATE]);
+        let mut centred = heard(30, 3, (6000.0, 1500.0), &|_| 0.0);
+        centred.extend(vec![0; 2 * 3 * SAMPLE_RATE]);
+        let (track, copy) = (envelope(&song), envelope(&centred));
+        let a = super::align(&copy, &track).unwrap();
+        assert!(a.fits() && a.score > 0.99, "{a:?}");
+        assert!(track.levels[3000..].iter().all(|level| *level == 0.0));
     }
 
     fn song_levels() -> Vec<f64> {
@@ -1202,15 +1460,20 @@ mod tests {
         let pcm = vec![0_u8; SAMPLE_RATE * 2];
         let e = envelope(&pcm);
         assert_eq!(e.len(), 100);
-        assert!(e.iter().all(|v| *v == 0.0));
+        assert!(
+            e.levels
+                .iter()
+                .chain(e.bands.as_flattened())
+                .all(|v| *v == 0.0)
+        );
     }
 
     /// What comparing makes of a copy with an intro, off centre and
     /// played fast, of an excerpt, and of a copy with a hole, against
     /// their track, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "envelope-xcorr/10",
-        "4f0bb20b86e5b6393ec6680c5cf7eefd7cfdd50eab66799d5c3197fb16172dc7",
+        "envelope-xcorr/11",
+        "2d5ce0e954f8c9b43003bf3af5aeb8c98247da24a3d3008d90cf6ab056b7cd94",
     );
 
     #[test]
@@ -1230,12 +1493,12 @@ mod tests {
             samples(&holed(&levels, &[2000], 150), 0),
         ] {
             let upload = envelope(&upload);
-            let found = align_lacking(&upload, &track, lost);
+            let found = super::align_lacking(&upload, &track, lost);
             assert!(found.is_some_and(|a| a.fits()), "{found:?}");
             digest
                 .debug(&upload)
                 .debug(&found)
-                .debug(&found.map(|a| outside(&upload, &track, &a)));
+                .debug(&found.map(|a| super::outside(&upload, &track, &a)));
         }
         crate::testing::check(WRITTEN, METHOD, &digest.hex());
     }

@@ -42,6 +42,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`duplicates` places a group of singles on no album**, and counts it
   among the groups no album holds twice, where it headed it "on one
   album" named for its title and counted it "across albums".
+- **A lossy copy never beats the file it may have been made from**: it
+  counts no wider than a copy of its recording narrower by no more than
+  its codec fills past a lowpass, Opus its whole top band and AAC up to
+  3.6 kHz, and of copies that then count alike, one so narrowed past an
+  encoder's noise ranks after the other, where a 64 kb/s Opus made
+  from a 128 kb/s MP3 or a 17 kHz FLAC replaced it on the noise Opus
+  fills up to 20 kHz. HE-AAC counts as wide as its core alone.
+- **Copies in any codec align with their recording**: loudness is
+  compared in five octave bands, each 10 ms frame about its own mean,
+  so Opus copies of a recording whose DC offset wanders, or of noise
+  under a held tone, are the same recording, where they "did not align"
+  and became songs of their own, and merged, outvoted the original. A
+  new source joins a song when its audio aligns with any of the song's
+  sources, so the verdict no longer depends on which copies came first.
 - **A song written at a path another song just moved away from stays
   its own after a stopped run**: the next run follows a move only while
   the state holds the moved song's record where it left, where it gave

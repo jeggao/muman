@@ -476,7 +476,7 @@ silence and held notes, which any two songs share:
 | 30% or more, over at least 6 s | Less | An excerpt, or a video with a skit: asked |
 | 10% to 30% | 80% or more | Another master or mix: asked |
 | Less | Any | A different song |
-| Any above, its audio not lining up with the song's by loudness over time | Any | Asked, and kept apart under `-y` |
+| Any above, its audio lining up with none of the song's sources by loudness over time | Any | Asked, and kept apart under `-y` |
 
 Asked means shown beside the song on a terminal, for you to join or
 keep apart. Without a terminal the source becomes a song of its own,
