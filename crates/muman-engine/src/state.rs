@@ -349,6 +349,13 @@ pub struct State {
     /// on disk.
     #[serde(skip)]
     pub(crate) cleared: BTreeSet<SourceKey>,
+    /// Each library file a stopped run left between the two renames of a
+    /// move of case alone, by the path it goes to, when the library is
+    /// read as found and nothing in it changed: the next sync finishes the
+    /// move before it judges any file, so every command that says what it
+    /// does counts the file there ([`crate::library::halfway`]).
+    #[serde(skip)]
+    pub halfway: BTreeSet<PathBuf>,
     /// Each source [`State::rebase`] named anew this process, by its
     /// facts before and after.
     #[serde(skip)]
@@ -834,6 +841,18 @@ pub struct Caches {
 }
 
 impl Caches {
+    /// These but what they hold of the sources `gone`.
+    #[must_use]
+    pub fn without(mut self, gone: &BTreeSet<SourceKey>) -> Self {
+        self.facts.retain(|k, _| !gone.contains(k));
+        self.failures.retain(|k, _| !gone.contains(k));
+        self.cleared.retain(|k| !gone.contains(k));
+        self.alignments
+            .retain(|a| !gone.contains(&a.a) && !gone.contains(&a.b));
+        self.mixes.retain(|m| !gone.contains(&m.source));
+        self
+    }
+
     /// These as they are once `delta`, a [`State::since`] of them, is
     /// kept.
     pub fn absorb(&mut self, delta: &Self) {
@@ -1001,6 +1020,7 @@ impl State {
         now.rebased = std::mem::take(&mut self.rebased);
         now.respelled = std::mem::take(&mut self.respelled);
         now.held = std::mem::take(&mut self.held);
+        now.halfway = std::mem::take(&mut self.halfway);
         for (old, new) in renames {
             now.respelled.insert(new.clone(), old.clone());
         }

@@ -3,7 +3,7 @@
 //!
 //! What becomes of each file of an output no song keeps is decided in one
 //! place, [`removal`], over the outputs as the sync's intent leaves them
-//! ([`pruned`](super::decide::pruned)), and every message about it is
+//! ([`Intent::pruned`](super::Intent::pruned)), and every message about it is
 //! made from that decision: `status` says it, `remove` lists it before
 //! asking, `check` reads it, and the sync's freeing and pruning carry it
 //! out and say what they did. A file there that is muman's goes; one

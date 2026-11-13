@@ -51,6 +51,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`add` of an address that names nothing to fetch fails and says so**,
   where it said every video named was a source already and exited 0.
 
+- **`status`, `check`, `info` and `remove` say what the sync does with
+  each file**: all of them, and the sync, decide by one intent made from
+  the same song list, state, sources and stopped run, every file's fate
+  in it, and the sync's writes carry it out, where each built its own and
+  said otherwise of a folder's cover, a song's files or a stopped move.
+- **A song moving into a folder whose cover holder leaves writes the
+  folder's cover there** when you changed the cover of the folder it
+  leaves, which stays yours, where the sync deleted the new folder's
+  `cover.jpg`, wrote none, and the next sync wrote it back.
+- **`remove` lists the folder cover its sync deletes** while another
+  song of the folder fails for a missing source, where it planned that
+  song from what was measured and said the cover stayed.
+- **A song a stopped run left halfway through a rename of case is not
+  missing**: `status` and `check` count it where the next sync finishes
+  the move, where they said it was missing and written again.
+- **Two folders' songs moved into one say the cover one of them leaves**:
+  `status` names the folder cover removed and the song's folder cover
+  change, as the sync makes them.
+- **`status` leaves the next sync as it was**: after two files of yours
+  traded names, what `status` measured of each was kept under the
+  other's name, and the sync wrote both songs again from their sources
+  where it would only have moved their lyrics.
+- **`undo` of a stopped run lists only the moves it made**, where it
+  named every move the run had recorded ahead of making it.
+- **`info` counts each file to remove**, beside a song or a folder's, as
+  the sync removes it, where it counted the songs' own files no song
+  makes, those of a song that fails among them.
 - **A rename of case a stopped run left halfway is finished, whatever
   failed before it**: the next sync follows every move the run made, not
   only those before the first that failed, as over a file held open, and

@@ -29,6 +29,12 @@
 //! neither writes over nor removes such a file, so what the user wrote
 //! stays in the library. Every file recorded has the plan it was made
 //! from, and [`crate::reconcile::invariant`] holds after every run.
+//! Every sync, the one that recovers from a stopped run among them, does
+//! with each library file what `status` foretold of it just before
+//! ([`crate::reconcile::as_foretold`]): left as it was, moved, written or
+//! gone. A sync that first lists a file no song names, which `status`
+//! does not plan, and one whose move or removal fails, which departs from
+//! what it meant, are not held to it.
 //! An undo is refused, saying why, or puts the song list back as the run
 //! it undoes found it, its keys following the files the user moved since,
 //! and every library file but those the user changed with it, wherever
@@ -556,30 +562,70 @@ impl World {
     }
 
     /// Run `args` as [`Setup::run`] does, a command refused, such as a
-    /// restore of a song listed, being one outcome among others.
-    fn attempt(&self, args: &[&str]) -> anyhow::Result<bool> {
-        let _guard = crate::kill::guard_library(&self.s.job(args).dirs.library);
-        let done = run_with(
-            &self.s.job(args),
-            &self.fake,
-            &Server::default(),
-            None,
-            &mut Vec::new(),
-            &mut Vec::new(),
-        );
+    /// restore of a song listed, being one outcome among others, with what
+    /// it said; a sync does to each library file what `status` foretold
+    /// just before it ([`crate::reconcile::as_foretold`]).
+    fn attempt(&self, args: &[&str]) -> (anyhow::Result<bool>, String) {
         let dirs = self.s.job(args).dirs;
+        let foretold = (args == ["sync"])
+            .then(|| self.foretold(&dirs))
+            .flatten()
+            .map(|(f, said)| (f, said, crate::reconcile::stamped(&dirs.library)));
+        let mut out = Vec::new();
+        let done = {
+            let _guard = crate::kill::guard_library(&dirs.library);
+            run_with(
+                &self.s.job(args),
+                &self.fake,
+                &Server::default(),
+                None,
+                &mut out,
+                &mut Vec::new(),
+            )
+        };
+        let text = String::from_utf8_lossy(&out).into_owned();
         if crate::state::exists(&dirs.home)
             && let Err(e) = crate::reconcile::invariant(&dirs)
         {
-            panic!("{args:?}: {e}");
+            panic!("{args:?}: {e}: {text}");
         }
-        done
+        // A move or a removal that fails departs from the intent, as it says.
+        if let Some((foretold, said, before)) = foretold.filter(|_| !text.contains("Could not")) {
+            let after = crate::reconcile::stamped(&dirs.library);
+            if let Err(e) = crate::reconcile::as_foretold(&foretold, &before, &after) {
+                panic!("the sync did otherwise than status foretold: {e}\n{said}\n{text}");
+            }
+        }
+        (done, text)
     }
 
-    /// [`Setup::run`], what a run it begins found noted.
+    /// What a dry run of a sync now foretells it does with each library
+    /// file; none when the sync lists a song first, which a dry run does
+    /// not plan, or there is nothing to sync yet.
+    fn foretold(&self, dirs: &Dirs) -> Option<(crate::reconcile::Foretold, String)> {
+        let mut said = Vec::new();
+        let opts = crate::reconcile::Options {
+            dry_run: true,
+            ..crate::reconcile::Options::default()
+        };
+        let rec = crate::history::Recording::DryRun;
+        let synced = crate::reconcile::reconcile(&self.fake, dirs, opts, rec, &mut said).ok()?;
+        let said = String::from_utf8_lossy(&said).into_owned();
+        let lists = ["added by the next sync", "listed by the next sync"];
+        let listing = lists.iter().any(|l| said.contains(l));
+        Some((synced.foretold.filter(|_| !listing)?, said))
+    }
+
+    /// [`Setup::run`], what a run it begins found noted, a sync held to
+    /// what `status` foretold of it.
     fn run(&mut self, args: &[&str]) -> (bool, String) {
         let (before, found) = (self.runs(), self.snapshot());
-        let done = self.s.run(&self.fake, args);
+        let done = if args == ["sync"] {
+            let (done, text) = self.attempt(args);
+            (done.unwrap(), text)
+        } else {
+            self.s.run(&self.fake, args)
+        };
         self.began(&before, &found);
         done
     }
@@ -595,7 +641,7 @@ impl World {
         let args = self.command(op);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let Some(at) = kill else {
-            let done = self.attempt(&args);
+            let (done, _) = self.attempt(&args);
             self.began(&before, &found);
             if matches!(op, Op::Undo) {
                 match done {
@@ -984,6 +1030,13 @@ fn run_cases(cases: u32) {
     }) {
         panic!("{e}");
     }
+}
+
+/// A dry run before the sync follows the two files in memory alone, and
+/// what it measured of each is never kept under the other's name.
+#[test]
+fn two_files_trading_names_are_synced_as_status_foretold() {
+    converges(&[(Op::Swap(1, 0), None)]);
 }
 
 #[test]

@@ -1608,8 +1608,18 @@ pub fn plan_hearing(
     let moved_back = |m: &Moved| {
         record.undoing && dirs.library.join(&m.from).exists() && !dirs.library.join(&m.to).exists()
     };
+    // A stopped run records each move before it makes it: only those made
+    // are moved back.
+    let made = if stopped {
+        made_moves(&dirs.library, &record.moves, Moves::Foresee)
+    } else {
+        vec![true; record.moves.len()]
+    };
     let mut said = BTreeSet::new();
-    for m in (record.moves.iter()).filter(|m| !moved_back(m) && said.insert((&m.from, &m.to))) {
+    for m in (record.moves.iter().zip(made))
+        .filter_map(|(m, made)| made.then_some(m))
+        .filter(|m| !moved_back(m) && said.insert((&m.from, &m.to)))
+    {
         let then = if record.touched.contains(&m.to) && !record.kept.contains(&m.to) {
             ", then written again from its sources"
         } else {
@@ -2533,6 +2543,47 @@ mod tests {
         assert_eq!(
             back.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/x.opus")]
+        );
+    }
+
+    #[test]
+    fn undoing_a_stopped_run_names_only_the_moves_it_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "other").unwrap();
+        state.outputs.insert("A/y.opus".into(), written());
+        state.save(&d.home).unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        // Each move is recorded before it is made; the run stops after the first.
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("B/y.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        drop(run);
+
+        let said = plan(&d).unwrap().lines().to_vec();
+        assert!(
+            said.contains(&"A/x.opus: moved back from B/x.opus".to_string()),
+            "{said:?}"
+        );
+        assert!(
+            !said.iter().any(|l| l.contains("B/y.opus")),
+            "never made: {said:?}"
+        );
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/y.opus")).unwrap(),
+            "other"
         );
     }
 

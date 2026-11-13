@@ -46,10 +46,10 @@ use crate::store::{Located, Store};
 
 pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
-use self::decide::foresee_failing;
-use self::decide::intend;
+use self::decide::Found;
 pub use self::decide::{
-    Doing, Forced, Foreseen, files_of, foresee, left_as_built, left_in_place, pruned,
+    Ahead, Doing, Fated, Forced, Foreseen, Foresight, Foretold, Grounds, Intent, Rewrite, Rewrites,
+    files_of, foresee, foresight, left_as_built, left_in_place,
 };
 pub(crate) use self::keys::arriving;
 use self::keys::sites_found;
@@ -123,10 +123,14 @@ impl Sub {
 
 /// Keep `state` before the run's end: whole on a sync, and on a dry run
 /// only what it measured, which a dry run may cache but never what the
-/// library holds.
+/// library holds. A dry run follows a moved file in memory alone, so what
+/// it holds of one is under the name the next sync gives it, which the
+/// store may still give another file, as when two files trade names: it
+/// is not kept, or it would stand for that file at the sync.
 fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()> {
     if dry_run {
-        State::keep_caches(home, &state.caches(), lock)
+        let renamed = state.respelled.keys().cloned().collect();
+        State::keep_caches(home, &state.caches().without(&renamed), lock)
     } else {
         state.save(home)
     }
@@ -140,6 +144,8 @@ fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()>
 pub struct Synced {
     pub ok: bool,
     pub due: hooks::Due,
+    /// What a dry run foretells the sync does with each library file.
+    pub foretold: Option<Foretold>,
 }
 
 /// Bring the library in line with the song list, recording what it
@@ -360,24 +366,37 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .chain(to_fetch.iter().cloned())
         .chain(unsure.iter().flat_map(|(gone, _)| gone).cloned())
         .collect();
-    let on_disk: BTreeSet<SourceKey> = listed
-        .iter()
-        .filter(|k| (store.has(k) && !unread(&state, &store, k)) || to_fetch.contains(k))
-        .cloned()
-        .collect();
-    let (mut planned, mut failed) = plan_awaiting(
+    let ahead = Ahead {
+        to_fetch,
+        waiting,
+        // A file of a song not followed is held as built: the state, which an
+        // undo leaves, may name it by a file it cannot tell.
+        unsure: unsure
+            .iter()
+            .flat_map(|(_, files)| files)
+            .cloned()
+            .collect(),
+    };
+    let asked = (opts.force, opts.accept);
+    let on_disk = Grounds {
+        manifest: &manifest,
+        state: &state,
+        store: &store,
+        library: &dirs.library,
+        ahead: &ahead,
+        asked,
+    }
+    .on_disk();
+    let (mut planned, failed) = plan_awaiting(
         &manifest,
         &state,
         &dirs.library,
-        (Some(&on_disk), &waiting),
-        (opts.force, opts.accept),
+        (Some(&on_disk), &ahead.waiting),
+        asked,
         out,
     )?;
     let mut ok = failed.is_empty() && unsure.is_empty();
-    failed.extend(waiting.iter().cloned());
-    // A file of a song not followed is held as built: the state, which an
-    // undo leaves, may name it by a file it cannot tell.
-    failed.extend(unsure.iter().flat_map(|(_, files)| files).cloned());
+    let mut failed = ahead.failing(failed);
     // Every song this sync fails, by its place in the list, with why, so
     // `check` names each until a sync writes it.
     let mut song_errors: Vec<(usize, String)> = Vec::new();
@@ -419,7 +438,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         if let Some((_, made)) = fitted.as_mut().filter(|(f, _)| f.lowered > 0) {
             let as_fitted: BTreeMap<usize, crate::resolve::Plan> =
                 planned.iter().map(|(n, r)| (*n, r.plan.clone())).collect();
-            let found = (Some(&on_disk), &to_fetch);
+            let found = (Some(&on_disk), &ahead.to_fetch);
             let asked = (opts.force, opts.accept);
             plan::level_as_fitted(&manifest, &state, &dirs.library, found, asked, &mut planned)?;
             // A song rendered at the gains it had before is rendered again.
@@ -445,21 +464,25 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if let Some(run) = rec.run() {
         run.outputs_before(&state.outputs);
     }
-    let Foreseen {
-        files,
-        drifts,
-        damaged,
-        decided,
-        freeable,
-        ..
-    } = foresee_failing(
-        &manifest,
-        &state,
-        &planned,
-        &dirs.library,
-        (opts.force, opts.accept),
-        &failed,
-    );
+    let placed_songs: BTreeSet<usize> = placed.keys().copied().collect();
+    let (
+        Foreseen {
+            files,
+            drifts,
+            damaged,
+            decided,
+            ..
+        },
+        mut intent,
+    ) = Grounds {
+        manifest: &manifest,
+        state: &state,
+        store: &store,
+        library: &dirs.library,
+        ahead: &ahead,
+        asked,
+    }
+    .intend(&planned, &failed, &placed_songs, Vec::new());
     let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept, &state);
     say_drifts(
         (&taken, &kept),
@@ -511,16 +534,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
     }
 
-    let edits = crate::held::records(&manifest, &state.facts, &taken);
-    let mut intent = intend(
-        &planned,
-        (decided, &freeable),
-        &manifest,
-        &state.outputs,
-        &dirs.library,
-        (&failed, opts.force),
-        edits,
-    );
+    intent.edits = crate::held::records(&manifest, &state.facts, &taken);
     if opts.dry_run {
         let shown = Shown {
             manifest: &manifest,
@@ -529,7 +543,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             files: &files,
             old: &state.outputs,
             state: &state,
-            to_fetch: &to_fetch,
+            to_fetch: &ahead.to_fetch,
         };
         // Matched here, once measuring has given each song its tags.
         let matched = match &query {
@@ -570,9 +584,12 @@ pub fn reconcile_into<R: Runner, W: Write>(
             }
         }
         drop(lock);
+        let moving = crate::history::moving(home);
+        let leftovers = crate::library::Leftovers::of(&state.outputs, &moving);
         return Ok(Synced {
             ok,
             due: hooks::Due::default(),
+            foretold: Some(intent.foretold(&Found::of(&dirs.library, &state), &leftovers)),
         });
     }
     let edits = std::mem::take(&mut intent.edits);
@@ -672,7 +689,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if due.changed() && manifest.settings.library.touch_root {
         touch(&dirs.library, out)?;
     }
-    Ok(Synced { ok, due })
+    Ok(Synced {
+        ok,
+        due,
+        foretold: None,
+    })
 }
 
 /// What every run leaves, whatever came before it: each file the state
@@ -713,6 +734,65 @@ pub fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
         Some(part) => Err(format!("{} is left half written", part.display())),
         None => Ok(()),
     }
+}
+
+/// Each file below a library folder, by its path, with what it holds and
+/// its stamp, which a move keeps and a write does not.
+#[cfg(any(test, feature = "testing"))]
+pub type Stamped = BTreeMap<std::path::PathBuf, (Vec<u8>, Option<String>)>;
+
+/// Every file below `library`, as [`Stamped`] holds it.
+#[cfg(any(test, feature = "testing"))]
+#[must_use]
+pub fn stamped(library: &Path) -> Stamped {
+    (crate::store::files_below(library, usize::MAX, |_| true).unwrap_or_default())
+        .into_iter()
+        .filter_map(|file| {
+            let bytes = std::fs::read(&file).ok()?;
+            let stamp = crate::store::stamp_text(&file);
+            Some((
+                file.strip_prefix(library).ok()?.to_path_buf(),
+                (bytes, stamp),
+            ))
+        })
+        .collect()
+}
+
+/// Whether a sync, from the library `before` to the one `after`, did with
+/// each file what a dry run before it `foretold`: each left as it was,
+/// moved as it was from where it was, written, or gone.
+#[cfg(any(test, feature = "testing"))]
+pub fn as_foretold(
+    foretold: &Foretold,
+    before: &Stamped,
+    after: &Stamped,
+) -> std::result::Result<(), String> {
+    let paths: BTreeSet<&std::path::PathBuf> = (before.keys())
+        .chain(after.keys())
+        .chain(foretold.0.keys())
+        .collect();
+    for path in paths {
+        let meant = match foretold.0.get(path) {
+            Some(fate) => fate.clone(),
+            None if before.contains_key(path) => Fated::From(path.clone()),
+            None => Fated::Gone,
+        };
+        let done = match after.get(path) {
+            None => Fated::Gone,
+            Some(now) => match &meant {
+                Fated::From(was) if before.get(was) == Some(now) => Fated::From(was.clone()),
+                _ if before.get(path) == Some(now) => Fated::From(path.clone()),
+                _ => Fated::Written,
+            },
+        };
+        if done != meant {
+            return Err(format!(
+                "{}: foretold {meant:?}, done {done:?}",
+                crate::relpath::show(path)
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

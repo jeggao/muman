@@ -824,6 +824,31 @@ fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
 }
 
 #[test]
+fn remove_lists_the_folder_s_cover_its_sync_deletes_beside_a_song_that_fails() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    // The other song's source is gone: it fails, and takes the cover over from no one.
+    let other = if holder == SourceKey::Manual("a.flac".into()) {
+        "b.flac"
+    } else {
+        "a.flac"
+    };
+    std::fs::remove_file(s.dir.path().join("home/sources/manual").join(other)).unwrap();
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", &holder.to_string()]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert!(text.contains("deletes Artist/Record/cover.jpg"), "{text}");
+    assert!(text.contains("2 files deleted"), "{text}");
+    assert!(text.contains("Removed: Artist/Record/cover.jpg"), "{text}");
+}
+
+#[test]
 fn a_song_that_fails_keeps_the_folder_s_cover_it_holds() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

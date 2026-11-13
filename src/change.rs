@@ -16,7 +16,7 @@
 //! not be enough to put it there.
 //!
 //! What `remove` says of the library files it deletes and leaves is what
-//! the sync after it decides ([`crate::reconcile::pruned`]), of the songs
+//! the sync after it decides ([`crate::reconcile::foresight`]), of the songs
 //! planned as the list is without the songs it removes: a file beside a
 //! song that the user changed since muman wrote it is left in place, said
 //! so and not counted, as the sync leaves it, and a folder's file the next
@@ -309,7 +309,7 @@ pub fn remove<W: Write>(
     // `[[removed]]` so `restore` waits for every one of them.
     let mut trashed: Vec<Vec<SourceKey>> = Vec::new();
     let mut deleted = 0;
-    let leaving = Leaving::of(dirs, &mut read, &picked)?;
+    let leaving = Leaving::of(dirs, &store, &mut read, &picked)?;
     for n in &picked {
         let mut own_trashed = Vec::new();
         let view = &read.views[*n];
@@ -382,7 +382,7 @@ pub fn remove<W: Write>(
 }
 
 /// What the sync after `remove` does with each library file of the songs
-/// it removes, as it decides it ([`crate::reconcile::pruned`]).
+/// it removes, as it decides it ([`crate::reconcile::foresight`]).
 struct Leaving(BTreeMap<PathBuf, Pruned>);
 
 impl Leaving {
@@ -390,7 +390,7 @@ impl Leaving {
     /// decides of their files: of the songs planned as the list is
     /// without them, as a folder's file the next song of its folder
     /// takes. A list whose settings the sync refuses removes nothing.
-    fn of(dirs: &Dirs, read: &mut Read, picked: &[usize]) -> Result<Self> {
+    fn of(dirs: &Dirs, store: &Store, read: &mut Read, picked: &[usize]) -> Result<Self> {
         let paths: BTreeSet<PathBuf> = (picked.iter())
             .flat_map(|n| files_of(&read.state, &read.views[*n]))
             .collect();
@@ -399,18 +399,17 @@ impl Leaving {
             .filter(|(n, _)| !picked.contains(n))
             .map(|(_, song)| song.clone())
             .collect();
-        let (library, state) = (&dirs.library, &read.state);
-        let fates = match crate::reconcile::plan(
-            &read.manifest,
-            state,
-            library,
-            None,
-            &mut std::io::sink(),
-        ) {
-            Ok((mut planned, failed)) => {
-                crate::limit::as_written(&read.manifest, state, &mut planned);
-                crate::reconcile::pruned(&read.manifest, state, (&planned, &failed), library)
-            }
+        let ahead = crate::reconcile::Ahead::foreseen(&read.manifest, &read.state, store);
+        let grounds = crate::reconcile::Grounds {
+            manifest: &read.manifest,
+            state: &read.state,
+            store,
+            library: &dirs.library,
+            ahead: &ahead,
+            asked: (false, false),
+        };
+        let fates = match crate::reconcile::foresight(&grounds) {
+            Ok(foresight) => foresight.intent.pruned,
             Err(e) if e.downcast_ref::<crate::errors::Refused>().is_some() => Vec::new(),
             Err(e) => {
                 read.manifest.songs = listed;

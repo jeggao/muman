@@ -207,7 +207,11 @@ fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
     );
     songs(&dirs, &["bbbbbbbbbbb", "ccccccccccc"]);
     let text = info_text(&dirs, true);
-    assert_eq!(value(&text, "To remove"), "1");
+    assert_eq!(
+        value(&text, "To remove"),
+        "2",
+        "the song's file and its lyrics: {text}"
+    );
     assert_eq!(value(&text, "Sources missing"), "1");
     assert!(text.contains("youtube.com:ccccccccccc"), "{text}");
     assert_eq!(value(&text, "Sources to measure"), "1");

@@ -4,7 +4,7 @@
 //! or locked, so it answers at once and changes nothing; the programs
 //! are run for their versions alone ([`programs`]). Whether
 //! the library is in step is what a sync would do with each song, by the
-//! decisions a sync makes (`reconcile::foresee`), on the state as a
+//! decisions a sync makes (`reconcile::foresight`), on the state as a
 //! sync would take it, so `info`, `status` and `sync` never disagree.
 //! Songs are counted on albums as loudness and folder covers group them
 //! (`album::of_each`): a song naming no album is a single, an album of
@@ -71,6 +71,10 @@ struct Context<'a> {
     state: State,
     store: Store,
     planned: Vec<(usize, Resolved)>,
+    /// What the next sync decides of each song planned.
+    foreseen: reconcile::Foreseen,
+    /// What it does with each file.
+    intent: reconcile::Intent,
     /// Each song that could not be planned, named, and why.
     unresolved: Vec<String>,
     /// The library folder written to before, where it was another.
@@ -107,23 +111,16 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
     let store = Store::scan(dirs)?;
     // A source a sync fetches is there by the time it plans; one it does
     // not, as a file of the user's own or one whose fetch failed lately, is not.
-    let due = crate::due::due(&manifest, &store, &state.failures, false, state::now_secs());
-    let on_disk: BTreeSet<SourceKey> = manifest
-        .keys()
-        .into_iter()
-        .filter(|k| store.has(k) || due.now.contains_key(k))
-        .collect();
-    let resolution = reconcile::resolve_songs(
-        &manifest,
-        &manifest.settings,
-        &state,
-        &dirs.library,
-        (Some(&on_disk), &BTreeSet::new()),
-        (false, false),
-    )?;
-    let mut planned = resolution.planned;
-    crate::limit::as_written(&manifest, &state, &mut planned);
-    let unresolved = (resolution.unresolved.iter())
+    let ahead = reconcile::Ahead::foreseen(&manifest, &state, &store);
+    let foresight = reconcile::foresight(&reconcile::Grounds {
+        manifest: &manifest,
+        state: &state,
+        store: &store,
+        library: &dirs.library,
+        ahead: &ahead,
+        asked: (false, false),
+    })?;
+    let unresolved = (foresight.unresolved.iter())
         .map(|(n, e)| {
             let name = reconcile::name_of(&manifest.songs[*n], None, &state.facts);
             format!("{name}: {e:#}")
@@ -132,10 +129,12 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
     Ok(Context {
         dirs,
         verbose,
+        planned: foresight.planned,
+        foreseen: foresight.foreseen,
+        intent: foresight.intent,
         manifest,
         state,
         store,
-        planned,
         unresolved,
         moved_from,
     })
@@ -150,13 +149,7 @@ const ASPECTS: [&str; 5] = ["path", "audio", "format", "cover", "lyrics"];
 pub fn changes<W: Write>(dirs: &Dirs, fields: &[String], out: &mut W) -> Result<()> {
     let c = context(dirs, false)?;
     let wanted = wanted(&c, fields)?;
-    let foreseen = reconcile::foresee(
-        &c.manifest,
-        &c.state,
-        &c.planned,
-        &c.dirs.library,
-        (false, false),
-    );
+    let foreseen = &c.foreseen;
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let (mut changed, mut unwritten) = (0, 0);
     for (n, r) in &c.planned {
@@ -504,7 +497,6 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let listed = c.manifest.keys();
     heading(out, "Status")?;
-    let state = &c.state;
     if let Some(before) = &c.moved_from {
         crate::ui::warning(
             out,
@@ -514,21 +506,9 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
             ),
         )?;
     }
-    let foreseen = reconcile::foresee(
-        &c.manifest,
-        state,
-        &c.planned,
-        &c.dirs.library,
-        (false, false),
-    );
-    let mut made: BTreeSet<PathBuf> = BTreeSet::new();
     let (mut current, mut due, mut moving, mut alone) =
         (0, Group::default(), Group::default(), Group::default());
-    for ((n, r), d) in c.planned.iter().zip(&foreseen.decided) {
-        made.insert(reconcile::path_of(r));
-        if let reconcile::Doing::Move { from, .. } = d {
-            made.insert(from.clone());
-        }
+    for ((n, r), d) in c.planned.iter().zip(&c.intent.decided) {
         match reconcile::verdict(d, None, &r.plan).0 {
             reconcile::Fate::Kept => current += 1,
             reconcile::Fate::Moved => moving.add(&c.name(*n, r)),
@@ -539,8 +519,8 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         }
     }
     let mut gone = Group::default();
-    for path in state.outputs.keys().filter(|p| !made.contains(*p)) {
-        gone.add(&crate::relpath::show(path));
+    for file in c.intent.removals().flat_map(|(_, fate)| fate.gone()) {
+        gone.add(&crate::relpath::show(file));
     }
     let mut unplanned = Group::default();
     row(out, "Up to date", &current.to_string())?;

@@ -40,6 +40,13 @@ impl Home {
     }
 
     fn run(&self, fake: &Fake, opts: Options) -> (bool, String) {
+        if !opts.dry_run && State::load(&self.dirs.home).is_ok() {
+            return self.foretold(fake, opts);
+        }
+        self.run_plain(fake, opts)
+    }
+
+    fn run_plain(&self, fake: &Fake, opts: Options) -> (bool, String) {
         let mut out = Vec::new();
         let ok = reconcile(fake, &self.dirs, opts, Recording::Test, &mut out)
             .unwrap()
@@ -47,6 +54,24 @@ impl Home {
         let text = String::from_utf8(out).unwrap();
         if !opts.dry_run {
             self.holds(&text);
+        }
+        (ok, text)
+    }
+
+    /// [`Home::run`], once a dry run has foretold what the sync does with
+    /// each library file, which it then does ([`as_foretold`]).
+    fn foretold(&self, fake: &Fake, opts: Options) -> (bool, String) {
+        let dry = Options {
+            dry_run: true,
+            ..opts
+        };
+        let sink = &mut std::io::sink();
+        let synced = reconcile(fake, &self.dirs, dry, Recording::DryRun, sink).unwrap();
+        let before = stamped(&self.dirs.library);
+        let (ok, text) = self.run_plain(fake, opts);
+        let foretold = synced.foretold.expect("a dry run foretells");
+        if let Err(e) = as_foretold(&foretold, &before, &stamped(&self.dirs.library)) {
+            panic!("the sync did otherwise than status foretold: {e}: {text}");
         }
         (ok, text)
     }
@@ -230,10 +255,10 @@ fn a_song_that_fails_keeps_its_last_file() {
     h.fetched("aaaaaaaaaaa");
     let gone = h.fetched("bbbbbbbbbbb");
     h.songs(TWO);
-    h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
+    h.run_plain(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
     std::fs::remove_file(gone).unwrap();
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"New\" }\n");
-    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let (ok, text) = h.run_plain(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(!ok);
     assert!(text.contains("Failed:"), "{text}");
     assert!(
@@ -686,7 +711,7 @@ fn tags_read_another_way_are_read_again_without_measuring() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
-    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let (ok, text) = h.run_plain(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(ok, "{text}");
     let key = SourceKey::youtube("aaaaaaaaaaa");
     let mut state = State::load(&h.dirs.home).unwrap();
@@ -696,7 +721,7 @@ fn tags_read_another_way_are_read_again_without_measuring() {
     state.save(&h.dirs.home).unwrap();
 
     let again = infos(&["aaaaaaaaaaa"]);
-    let (ok, text) = h.run(&again, Options::default());
+    let (ok, text) = h.run_plain(&again, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Reading the tags of 1 source(s)"), "{text}");
     assert!(!again.ran("s16le"), "nothing is measured again");
@@ -722,7 +747,7 @@ fn a_record_read_before_its_length_was_kept_is_read_again_alone() {
     h.songs(&format!(
         "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"musicbrainz:{id}\"]\n"
     ));
-    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let (ok, text) = h.run_plain(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(ok, "{text}");
     let key = SourceKey::parse(&format!("musicbrainz:{id}")).unwrap();
     let mut state = State::load(&h.dirs.home).unwrap();
@@ -733,7 +758,7 @@ fn a_record_read_before_its_length_was_kept_is_read_again_alone() {
     state.save(&h.dirs.home).unwrap();
 
     let again = infos(&["aaaaaaaaaaa"]);
-    let (ok, text) = h.run(&again, Options::default());
+    let (ok, text) = h.run_plain(&again, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Reading the tags of 1 source(s)"), "{text}");
     let state = State::load(&h.dirs.home).unwrap();
@@ -877,7 +902,7 @@ fn a_song_whose_write_failed_keeps_its_record_as_it_was() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
-    h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    h.run_plain(&infos(&["aaaaaaaaaaa"]), Options::default());
     let before = State::load(&h.dirs.home).unwrap().outputs;
     let mut failing = infos(&["aaaaaaaaaaa"]);
     failing.failing = vec!["opus".into()];
@@ -885,7 +910,7 @@ fn a_song_whose_write_failed_keeps_its_record_as_it_was() {
         force: true,
         ..Options::default()
     };
-    let (ok, text) = h.run(&failing, forced);
+    let (ok, text) = h.run_plain(&failing, forced);
     assert!(!ok && text.contains("Failed"), "{text}");
     let after = State::load(&h.dirs.home).unwrap().outputs;
     for (path, written) in &after {
@@ -1093,7 +1118,7 @@ fn a_song_moving_where_a_file_cannot_be_freed_stays_where_it_is() {
         "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
          [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n",
     );
-    assert!(h.run(&fake, Options::default()).0);
+    assert!(h.run_plain(&fake, Options::default()).0);
     // A file that will not go, as one Windows holds open: a folder at the
     // name, recorded as the file muman wrote there.
     let plain = Path::new("Chan/Same/Same.opus");
@@ -1110,7 +1135,7 @@ fn a_song_moving_where_a_file_cannot_be_freed_stays_where_it_is() {
     );
     let told_apart = h.lib("Chan/Same/Same [bbbbbbbbbbb].opus");
     let bytes = std::fs::read(&told_apart).unwrap();
-    let (_, text) = h.run(&fake, Options::default());
+    let (_, text) = h.run_plain(&fake, Options::default());
     assert_eq!(
         text.matches("Could not remove").count(),
         1,
@@ -1125,7 +1150,7 @@ fn a_song_moving_where_a_file_cannot_be_freed_stays_where_it_is() {
     assert!(!h.lib("Chan/Same/Same.lrc").exists(), "{text}");
 
     std::fs::remove_dir_all(h.dirs.library.join(plain)).unwrap();
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     assert!(
         text.contains("Moved: Chan/Same/Same [bbbbbbbbbbb].opus → Chan/Same/Same.opus"),
@@ -1202,7 +1227,25 @@ fn a_move_in_case_alone_stopped_halfway_is_muman_s_and_finished() {
                 "step {at}: {said:?}"
             );
         }
+        // The next sync finishes the move first: nothing is missing, and
+        // `status` says what it does with each file.
+        assert!(
+            !said.iter().any(|s| s.contains("Missing")),
+            "step {at}: {said:?}"
+        );
+        let dry = Options {
+            dry_run: true,
+            ..Options::default()
+        };
+        let sink = &mut std::io::sink();
+        let foretold = (reconcile(&fake, &h.dirs, dry, Recording::DryRun, sink).unwrap())
+            .foretold
+            .unwrap();
+        let before = stamped(&h.dirs.library);
         let (ok, text) = recorded(&h);
+        if let Err(e) = as_foretold(&foretold, &before, &stamped(&h.dirs.library)) {
+            panic!("step {at}: {e}: {text}");
+        }
         assert!(ok, "step {at}: {text}");
         assert!(
             !text.contains("Added: "),
@@ -1363,14 +1406,14 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
     let path = h.fetched("aaaaaaaaaaa");
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
-    let (ok, text) = h.run(&broken, Options::default());
+    let (ok, text) = h.run_plain(&broken, Options::default());
     assert!(!ok);
     assert!(
         text.contains("Could not read youtube.com:aaaaaaaaaaa"),
         "{text}"
     );
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
-    let (_, text) = h.run(&broken, Options::default());
+    let (_, text) = h.run_plain(&broken, Options::default());
     assert!(text.contains("Not reading 1 source(s)"), "{text}");
     assert!(broken.calls().is_empty(), "{:?}", broken.calls());
     let retry = Options {
@@ -1378,11 +1421,11 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
         ..Options::default()
     };
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
-    h.run(&broken, retry);
+    h.run_plain(&broken, retry);
     assert_ne!(broken.calls(), Vec::<Vec<String>>::new());
     std::fs::write(&path, "changed").unwrap();
     let fixed = infos(&["aaaaaaaaaaa"]);
-    let (ok, text) = h.run(&fixed, Options::default());
+    let (ok, text) = h.run_plain(&fixed, Options::default());
     assert!(ok, "{text}");
 }
 
@@ -1413,7 +1456,7 @@ fn a_song_whose_chosen_source_is_gone_is_written_from_another() {
     let paths = [h.fetched("aaaaaaaaaaa"), h.fetched("bbbbbbbbbbb")];
     h.songs(both);
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     let chosen = |h: &Home| {
         let state = State::load(&h.dirs.home).unwrap();
@@ -1433,7 +1476,7 @@ fn a_song_whose_chosen_source_is_gone_is_written_from_another() {
     std::fs::remove_file(&paths[gone]).unwrap();
     h.songs(&format!("{both}tags = {{ genre = \"Folk\" }}\n"));
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     assert_ne!(chosen(&h), first, "{text}");
     assert!(
@@ -2147,7 +2190,7 @@ fn a_song_only_retagged_keeps_its_measured_size() {
 fn a_song_rendered_to_be_measured_is_moved_into_place_not_rendered_again() {
     let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
     let fake = big_flac();
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     let encodes = fake
         .calls()
@@ -2295,6 +2338,77 @@ fn a_song_moving_into_a_folder_whose_cover_holder_leaves_carries_its_own_cover()
         "the song moved is read from no source: {done}"
     );
     assert!(!h.lib("Artist/Other").exists(), "{done}");
+    h.audit(&[], &done);
+}
+
+#[test]
+fn a_song_whose_changed_folder_cover_stays_behind_writes_one_where_its_holder_left() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    listing(&h, folder, &["a", "c"]);
+    let fake = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("c.flac", &tagged_flac("Moth", 1, "Other", false));
+    assert!(h.run(&fake, Options::default()).0);
+    std::fs::write(h.lib("Artist/Other/cover.jpg"), "mine").unwrap();
+    // The song holding Record's cover leaves, and Other's song moves in.
+    h.songs(&format!(
+        "{folder}[[song]]\nsources = [\"manual:c.flac\"]\ntags = {{ album = \"Record\" }}\n"
+    ));
+    let said = h.status(&fake, &[], false);
+    assert!(
+        !said.contains("Would remove: Artist/Record/cover.jpg"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Would leave in place, changed since muman wrote it: Artist/Other/cover.jpg"),
+        "{said}"
+    );
+    let (ok, done) = h.run(&fake, Options::default());
+    assert!(ok, "{done}");
+    assert!(h.lib("Artist/Record/cover.jpg").exists(), "{done}");
+    assert_eq!(
+        std::fs::read_to_string(h.lib("Artist/Other/cover.jpg")).unwrap(),
+        "mine",
+        "{done}"
+    );
+    h.audit(&["Artist/Other/cover.jpg"], &done);
+    let said = crate::diagnose::diagnose(&h.dirs).unwrap();
+    assert_eq!(said.problems(), 0, "{:?}", said.said);
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(again.contains("Up to date: 1 song(s)"), "{again}");
+}
+
+#[test]
+fn songs_of_two_folders_moved_into_one_say_the_cover_one_of_them_leaves() {
+    let h = home();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+    let album = |name: &str| {
+        format!("[[song]]\nsources = [\"manual:{name}.flac\"]\ntags = {{ album = \"Harbor\" }}\n")
+    };
+    listing(&h, folder, &["a", "c"]);
+    let fake = Fake::default()
+        .probe("a.flac", &tagged_flac("Kite", 1, "Record", false))
+        .probe("c.flac", &tagged_flac("Moth", 2, "Other", false));
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs(&format!("{folder}{}{}", album("a"), album("c")));
+    let said = h.status(&fake, &[], false);
+    let (ok, done) = h.run(&fake, Options::default());
+    assert!(ok, "{done}");
+    let lines = |text: &str, lead: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| Some(l.split_once(lead)?.1.trim().to_string()))
+            .collect()
+    };
+    let done = crate::ui::plain(&done);
+    assert_eq!(
+        lines(&said, "Would remove: "),
+        lines(&done, "Removed: "),
+        "{said}\n{done}"
+    );
+    assert_eq!(lines(&said, "Would remove: ").len(), 1, "{said}");
+    assert!(said.contains("moved, changes: folder cover"), "{said}");
+    assert!(done.contains("Updated (folder cover"), "{done}");
     h.audit(&[], &done);
 }
 
@@ -2513,13 +2627,13 @@ fn sources_measured_before_hashing_are_hashed_and_write_nothing_again() {
     h.fetched("aaaaaaaaaaa");
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
-    assert!(h.run(&fake, Options::default()).0);
+    assert!(h.run_plain(&fake, Options::default()).0);
     let now = State::load(&h.dirs.home).unwrap();
     let key = SourceKey::youtube("aaaaaaaaaaa");
     let digest = now.facts[&key].audio_rev();
     assert!(!digest.contains(':'), "named by its content: {digest}");
     unhashed(now).save(&h.dirs.home).unwrap();
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Hashing 1 source(s)"), "{text}");
     assert!(!text.contains("Measuring"), "nothing decoded: {text}");
@@ -2544,13 +2658,13 @@ fn sources_measured_before_hashing_are_hashed_and_write_nothing_again() {
 #[test]
 fn a_size_measured_before_hashing_is_not_measured_again() {
     let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
-    assert!(h.run(&big_flac(), Options::default()).0);
+    assert!(h.run_plain(&big_flac(), Options::default()).0);
     let state = State::load(&h.dirs.home).unwrap();
     assert!(!state.sizes.is_empty(), "a real size is kept");
     let state_sizes = state.sizes.clone();
     unhashed(state).save(&h.dirs.home).unwrap();
     let fake = big_flac();
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Hashing 1 source(s)"), "{text}");
     assert_eq!(renders(&fake), 0, "{text}");
@@ -3375,10 +3489,10 @@ fn facts_measured_before_loudness_are_analyzed_alone() {
     h.fetched("aaaaaaaaaaa");
     h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
-    h.run(&fake, Options::default());
+    h.run_plain(&fake, Options::default());
     let before = fake.calls().len();
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
-    let (_, text) = h.run(&fake, Options::default());
+    let (_, text) = h.run_plain(&fake, Options::default());
     assert!(text.contains("Analyzing 1 source(s)"), "{text}");
     let calls = fake.calls();
     let new = &calls[before..];
@@ -3405,7 +3519,7 @@ fn facts_measured_before_integrity_are_caught_up_by_one_decode() {
     h.fetched("aaaaaaaaaaa");
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
-    h.run(&fake, Options::default());
+    h.run_plain(&fake, Options::default());
     let key = SourceKey::youtube("aaaaaaaaaaa");
     let mut state = State::load(&h.dirs.home).unwrap();
     let audio = state.facts.get_mut(&key).unwrap().audio.as_mut().unwrap();
@@ -3416,7 +3530,7 @@ fn facts_measured_before_integrity_are_caught_up_by_one_decode() {
     audio.analysis.integrity = None;
     state.save(&h.dirs.home).unwrap();
     let before = fake.calls().len();
-    let (_, text) = h.run(&fake, Options::default());
+    let (_, text) = h.run_plain(&fake, Options::default());
     assert!(text.contains("Analyzing 1 source(s)"), "{text}");
     let calls = fake.calls();
     let new = &calls[before..];
@@ -3450,7 +3564,7 @@ fn a_subtitle_of_only_notes_is_no_lyrics_and_old_facts_learn_it() {
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let mut fake = infos(&["aaaaaaaaaaa"]);
     fake.lrc = Some("[00:01.28]♪♪♪\n".into());
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     let key = SourceKey::youtube("aaaaaaaaaaa");
     let state = State::load(&h.dirs.home).unwrap();
@@ -3461,14 +3575,14 @@ fn a_subtitle_of_only_notes_is_no_lyrics_and_old_facts_learn_it() {
     let mut state = State::load(&h.dirs.home).unwrap();
     state.facts.get_mut(&key).unwrap().lyrics[0].sings = None;
     state.save(&h.dirs.home).unwrap();
-    let (ok, text) = h.run(&fake, Options::default());
+    let (ok, text) = h.run_plain(&fake, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Reading the lyrics of 1 source(s)"), "{text}");
     assert!(!text.contains("Measuring"), "{text}");
     assert!(!text.contains("has changed"), "{text}");
     let state = State::load(&h.dirs.home).unwrap();
     assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
-    let (_, again) = h.run(&fake, Options::default());
+    let (_, again) = h.run_plain(&fake, Options::default());
     assert!(!again.contains("Reading the lyrics"), "{again}");
 }
 
@@ -3489,7 +3603,7 @@ fn a_damaged_file_of_your_own_is_named_and_never_fetched() {
         ..Fake::default()
     }
     .probe("a.flac", crate::testing::FLAC);
-    let (_, text) = h.run(&fake, Options::default());
+    let (_, text) = h.run_plain(&fake, Options::default());
     assert!(text.contains("manual:a.flac lacks"), "{text}");
     let state = State::load(&h.dirs.home).unwrap();
     assert!(state.failures.is_empty() && state.damaged.is_empty());
@@ -3870,13 +3984,13 @@ fn a_source_holding_audio_compared_before_is_not_compared_again() {
         ..infos(&["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"])
     };
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n");
-    let (ok, text) = h.run(&fake(), Options::default());
+    let (ok, text) = h.run_plain(&fake(), Options::default());
     assert!(ok && text.contains("Comparing"), "{text}");
     let compared = State::load(&h.dirs.home).unwrap().alignments;
     assert!(!compared.is_empty(), "{text}");
 
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:ccccccccccc\"]\n");
-    let (ok, text) = h.run(&fake(), Options::default());
+    let (ok, text) = h.run_plain(&fake(), Options::default());
     assert!(ok, "{text}");
     assert!(!text.contains("Comparing"), "{text}");
     let kept = State::load(&h.dirs.home).unwrap().alignments;
@@ -3887,7 +4001,7 @@ fn a_source_holding_audio_compared_before_is_not_compared_again() {
     );
 
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
-    assert!(h.run(&fake(), Options::default()).0);
+    assert!(h.run_plain(&fake(), Options::default()).0);
     assert!(
         State::load(&h.dirs.home).unwrap().alignments.is_empty(),
         "gone once no source kept holds its audio"

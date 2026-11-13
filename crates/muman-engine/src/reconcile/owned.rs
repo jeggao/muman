@@ -266,6 +266,18 @@ pub fn sidecar_as_written(library: &Path, sidecar: &Sidecar) -> bool {
     sidecar.stamp.is_none() || !matches!(sidecar_written(library, sidecar), AsWritten::Not)
 }
 
+/// [`sidecar_as_written`] of `sidecar` with its file at `file`: where it
+/// has none, only one recorded by its place alone is.
+pub(super) fn sidecar_written_at(file: Option<&Path>, sidecar: &Sidecar) -> bool {
+    sidecar.stamp.is_none()
+        || file.is_some_and(|f| {
+            !matches!(
+                stamped(f, sidecar.stamp.as_ref(), sidecar.digest.as_ref()),
+                AsWritten::Not
+            )
+        })
+}
+
 fn sidecar_written(library: &Path, sidecar: &Sidecar) -> AsWritten {
     stamped(
         &library.join(&sidecar.path),
@@ -494,7 +506,9 @@ fn holds_files(folder: &Path) -> bool {
 /// is judged, in the order the module's docs give: the moves a stopped run
 /// made into it followed ([`crate::history::follow_moves`]), finished in
 /// the library only under [`Moves::Follow`](crate::history::Moves::Follow),
-/// as a sync alone does; the folder taken as the outputs' ([`adopt`]); and
+/// as a sync alone does, and otherwise each file a move of case alone left
+/// at its temporary name counted where it goes ([`State::halfway`]), as
+/// that sync finds it; the folder taken as the outputs' ([`adopt`]); and
 /// copies with new times vouched for ([`vouch_for_copies`]). The folder
 /// the outputs were in, when it was named anew.
 pub fn as_found(
@@ -504,6 +518,9 @@ pub fn as_found(
 ) -> Result<Option<Adopted>> {
     let library = &dirs.library;
     if (state.library.as_deref()).is_some_and(|l| crate::platform::same_path(l, library)) {
+        if moves == crate::history::Moves::Foresee {
+            state.halfway = crate::library::halfway(library, &crate::history::moving(&dirs.home));
+        }
         crate::history::follow_moves(&dirs.home, library, state, moves);
     }
     let adopted = adopt(state, library)?;

@@ -454,6 +454,12 @@ impl Leftovers {
         Self { parts, moving }
     }
 
+    /// The `.part` files of them that are in `library`, which [`Self::clear`]
+    /// removes.
+    pub fn parts<'s>(&'s self, library: &'s Path) -> impl Iterator<Item = &'s PathBuf> + 's {
+        self.parts.iter().filter(move |p| library.join(p).is_file())
+    }
+
     /// Whether `rel`, a path in the library, is one of them.
     #[must_use]
     pub fn contains(&self, rel: &Path) -> bool {
@@ -484,6 +490,30 @@ pub fn half_moved(library: &Path, from: &Path, to: &Path) -> bool {
     library.join(named(to, MOVING)).is_file()
         && std::fs::symlink_metadata(library.join(from)).is_err()
         && std::fs::symlink_metadata(library.join(to)).is_err()
+}
+
+/// Of the paths a stopped run records moving files to, `moving`, each a
+/// move of case alone was stopped short of, its file at its temporary
+/// name and none at it: where the next sync finishes it ([`finish_move`]).
+#[must_use]
+pub fn halfway<'a>(
+    library: &Path,
+    moving: impl IntoIterator<Item = &'a PathBuf>,
+) -> BTreeSet<PathBuf> {
+    moving
+        .into_iter()
+        .filter(|to| {
+            library.join(named(to, MOVING)).is_file()
+                && std::fs::symlink_metadata(library.join(to)).is_err()
+        })
+        .cloned()
+        .collect()
+}
+
+/// The temporary name a move of case alone renames `file` through.
+#[must_use]
+pub fn moving_name(file: &Path) -> PathBuf {
+    named(file, MOVING)
 }
 
 /// Make the second rename of a move [`half_moved`], returning whether it

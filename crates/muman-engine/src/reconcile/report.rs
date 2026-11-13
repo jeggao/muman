@@ -268,7 +268,15 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
     match d {
         Doing::Keep => (Fate::Kept, "up to date".to_string()),
         Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),
-        Doing::Move { retag: true, .. } => (Fate::Moved, "moved, changes: tags".to_string()),
+        Doing::Move { retag: true, .. } => match before.map(|p| changes(p, plan)) {
+            Some(what) if !what.is_empty() => {
+                (Fate::Moved, format!("moved, changes: {}", what.join(", ")))
+            }
+            _ => (
+                Fate::Moved,
+                "moved, a file beside it written anew".to_string(),
+            ),
+        },
         Doing::Guard { .. } => (
             Fate::Alone,
             "left alone, changed since muman wrote it".to_string(),
@@ -439,7 +447,7 @@ pub(super) fn status<W: Write>(
     if showing.matched.is_some() {
         return Ok(());
     }
-    for (path, fate) in &intent.pruned {
+    for (path, fate) in intent.removals() {
         let leaving = |file: &PathBuf| {
             format!(
                 "Would leave in place, changed since muman wrote it: {}",
