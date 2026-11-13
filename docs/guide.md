@@ -373,7 +373,7 @@ A song file brings what sits beside it:
   too, where that holds no song file and is not `sources/manual` itself.
 
 A `.lrc` may be in UTF-8 or UTF-16, or in an older encoding such as
-GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.
+GBK, Shift-JIS or Windows-1252, told by its bytes ([how](metadata.md#cleaning)).
 
 A folder given to `add` is copied but for what is no song, lyrics or
 picture, and for lyrics and pictures no song file in it brings, as

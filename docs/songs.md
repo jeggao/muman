@@ -287,8 +287,8 @@ within `sources/manual` is followed, as a song file is.
 
 `muman duplicates` lists songs listed apart that are one recording, by
 their audio fingerprints. First come files an album holds twice, then
-tracks with copies on other albums, which a library of whole albums
-keeps on purpose. An album is told as its songs' tags [agree on
+tracks with copies on other albums or on none, which a library of whole
+albums keeps on purpose; each group is headed by the albums it is on. An album is told as its songs' tags [agree on
 one](metadata.md#tags), and a single is on none. A query picks the
 groups shown. Listing changes nothing.
 

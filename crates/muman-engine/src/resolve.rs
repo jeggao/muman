@@ -67,8 +67,9 @@
 //!   that says nothing of the song, a placeholder or a watermark, is
 //!   dropped before any offer is ranked ([`crate::detect`]), watermarks
 //!   found across the sources the song list names ([`Known`]): as the
-//!   source wrote it, before cleaning, so `status` drops what it names,
-//!   and again as cleaned, where splitting a value made one. An
+//!   source wrote it, before cleaning, and again as cleaned, where
+//!   splitting or tidying a value made one, as `Other` of `Other/Jazz`
+//!   or `[unknown]` of `[[unknown]]`; `status` names each alike. An
 //!   upload's date, the day it went up, dates the song only where the
 //!   upload's channel is the song's artist, set by hand or offered, on
 //!   any site and whichever source the album comes from: the release's
@@ -1089,19 +1090,31 @@ fn says_nothing(input: &Input<'_>, key: &SourceKey, field: Field, value: &str) -
 
 /// Each value of the song's sources that says nothing of it, as
 /// `<FIELD> “<value>” from <key>: <why>`, but in a field set by hand,
-/// which no source's value fills.
+/// which no source's value fills: as the source wrote it, or as cleaning
+/// left it, as `Other` of the genres `Other/Jazz`, each dropped where
+/// [`candidates`] drops it.
 fn dropped(input: &Input<'_>) -> Vec<String> {
     let by_hand: BTreeSet<Field> = (input.song.tags.iter())
         .chain(input.album.iter().flat_map(|a| &a.tags))
         .filter_map(|(name, _)| Field::named(name))
         .collect();
+    let names = credited(input);
     let mut out = Vec::new();
     for (_, key, facts) in input.present() {
+        let ctx = clean::Context {
+            names: &names,
+            albums: &input.known.albums,
+            offers: &facts.tags,
+            typography: input.typography,
+        };
         for (field, offer) in &facts.tags {
             if (*field == Field::Comment && !input.source_comments) || by_hand.contains(field) {
                 continue;
             }
-            for value in &offer.values {
+            let heard = heard(input, key, *field, offer);
+            let cleaned = clean::clean(*field, &heard, &ctx, input.clean).values;
+            let left = cleaned.iter().filter(|v| !offer.values.contains(v));
+            for value in offer.values.iter().chain(left) {
                 if let Some(why) = says_nothing(input, key, *field, value) {
                     out.push(format!("{} “{value}” from {key}: {why}", field.vorbis()));
                 }
@@ -2425,10 +2438,10 @@ fn groups(offers: &[&Candidate<'_>], field: Field) -> Vec<usize> {
     (0..offers.len()).map(|i| root(&mut parent, i)).collect()
 }
 
-/// Every source's offer for every field, cleaned against the names the
-/// song's sources and its hand-set tags credit.
-fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
-    let credited = |name: &str| {
+/// The names the song's sources and its hand-set tags credit, which
+/// cleaning reads values against.
+fn credited(input: &Input<'_>) -> Vec<clean::Name> {
+    let credit = |name: &str| {
         matches!(
             Field::named(name),
             Some(Field::Artist | Field::Artists | Field::AlbumArtist)
@@ -2439,7 +2452,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         .tags
         .iter()
         .chain(input.album.iter().flat_map(|a| &a.tags))
-        .filter(|(k, _)| credited(k))
+        .filter(|(k, _)| credit(k))
         .flat_map(|(_, v)| v);
     let offered = input
         .present()
@@ -2448,7 +2461,13 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         })
         .flatten()
         .flat_map(|o| &o.values);
-    let names = clean::names(offered.chain(hand_set).map(String::as_str));
+    clean::names(offered.chain(hand_set).map(String::as_str))
+}
+
+/// Every source's offer for every field, cleaned against the names the
+/// song's sources and its hand-set tags credit.
+fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
+    let names = credited(input);
     let mut all: BTreeMap<Field, Vec<Candidate<'a>>> = BTreeMap::new();
     for (n, key, facts) in input.present() {
         let ctx = clean::Context {

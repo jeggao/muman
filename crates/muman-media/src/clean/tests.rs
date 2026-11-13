@@ -490,6 +490,17 @@ fn joined_names_and_genres_split_where_a_list_is_certain() {
     for whole in ["N/A", "n/a", "(N/A)", "[Rock/Pop", "(Rock)/Pop)"] {
         assert_eq!(kept(Field::Genre, whole), [whole], "{whole}");
     }
+    assert_eq!(kept(Field::Genre, "N/A; Jazz"), ["N/A", "Jazz"]);
+    assert_eq!(kept(Field::Genre, "Jazz, n/a"), ["Jazz", "n/a"]);
+    assert_eq!(
+        kept(Field::Genre, "(N/A); Pop/Rock"),
+        ["(N/A)", "Pop", "Rock"]
+    );
+    assert_eq!(kept(Field::Genre, "Other/Jazz"), ["Other", "Jazz"]);
+    assert_eq!(
+        kept(Field::Genre, "[Rock/Pop]; Jazz"),
+        ["[Rock/Pop]", "Jazz"]
+    );
     assert_eq!(
         kept(Field::Artist, "The Glass Orchards;Odell Ferrin"),
         ["The Glass Orchards", "Odell Ferrin"]

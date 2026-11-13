@@ -3113,8 +3113,8 @@ fn every_format() -> Vec<Format> {
 /// Digests of the stored form and the plan key of a plan with every part
 /// in [`every_format`], as the last release kept them.
 const KEPT: (&str, &str) = (
-    "6cc78d74a5cf6e7721b2dbf33b84dac4de68b5b6b825cd7cb45e3c045ff68e43",
-    "a46ea39b7888cd2c124745e8cc91d9dbc1e70b0d8868e5240c8542c63d739700",
+    "97232ce538816ce7c7c2622ebeb42dc636161ea0772c9d48f78a6311321998ea",
+    "04715b91e7fe915080b17b8c40c13e8d84faf5d478177d122234dacc5305e824",
 );
 
 #[test]
@@ -3290,6 +3290,40 @@ fn a_placeholder_typography_would_respell_is_dropped_as_status_says() {
         Some(&["Real Title".to_string()][..]),
         "a single, named for its title"
     );
+}
+
+#[test]
+fn a_placeholder_cleaning_leaves_is_dropped_and_named_as_any_other() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Real Title"], true);
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    tag(&mut f, Field::Album, &["\u{300c}unknown\u{300d}"], true);
+    tag(&mut f, Field::Genre, &["Other/Jazz", "N/A; Folk"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_knowing(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &Known::default(),
+        &Settings::default(),
+    );
+    let jazz = ["Jazz".to_string(), "Folk".to_string()];
+    assert_eq!(written(&r, Field::Genre), Some(&jazz[..]));
+    assert_eq!(
+        written(&r, Field::Album),
+        Some(&["Real Title".to_string()][..])
+    );
+    for said in [
+        "ALBUM “\u{300c}unknown\u{300d}” from manual:a.flac: a placeholder",
+        "GENRE “Other” from manual:a.flac: a placeholder",
+        "GENRE “N/A” from manual:a.flac: a placeholder",
+    ] {
+        assert!(
+            r.why.dropped.iter().any(|d| d == said),
+            "{said}: {:?}",
+            r.why.dropped
+        );
+    }
 }
 
 #[test]

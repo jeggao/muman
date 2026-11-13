@@ -21,6 +21,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   and neither `status` nor `sync` says, a move of `cover.jpg` onto
   itself, which `undo` refused until you moved muman's own cover aside;
   such a move a run recorded before is none to `undo`.
+- **Short lyrics in Shift-JIS and other legacy encodings read as
+  written**: of the encodings that read a `.lrc`'s bytes, muman takes
+  the one that reads them as text rather than letters of mixed scripts,
+  an `[la:]` line naming the language first, where some short
+  Shift-JIS lyrics were written to the library as Windows-1251 mojibake;
+  where two encodings read a file alike, `sync` names the one it took.
+  Every song's lyrics are written again once.
+- **Every bracket and quote around a placeholder is read alike**:
+  `「unknown」`, `"unknown"` and `[[unknown]]` are dropped as an album as
+  `(unknown)` is, and `status` names each value dropped, one cleaning
+  left too, where `「unknown」` was kept and `[[unknown]]` dropped
+  unnamed.
+- **A genre list is parted between its items only**: `N/A; Jazz` is the
+  genre `Jazz`, where it was written as `N`, `A` and `Jazz`.
+- **A tag set under two of its names is refused naming them as such**:
+  `tags.year` and `tags.date` are "two names of one tag", where the
+  message said the names differ only in case and asked for a date of
+  two values.
+- **`duplicates` places a group of singles on no album**, and counts it
+  among the groups no album holds twice, where it headed it "on one
+  album" named for its title and counted it "across albums".
 - **A song written at a path another song just moved away from stays
   its own after a stopped run**: the next run follows a move only while
   the state holds the moved song's record where it left, where it gave

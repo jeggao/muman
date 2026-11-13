@@ -2707,11 +2707,19 @@ fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Resul
         }
         let field = tags::vorbis_key(key);
         if let Some((twin, _)) = tags.iter().find(|(k, _)| tags::vorbis_key(k) == field) {
-            bail!(
-                "{what}: tags.{twin} and tags.{key} both set {}, as a tag's name is read \
-                 whatever its case; keep one, listing both values there to set both",
-                tags::song_list_name(key)
-            );
+            let name = tags::song_list_name(key);
+            let why = if twin.eq_ignore_ascii_case(key) {
+                "as a tag's name is read whatever its case".to_string()
+            } else {
+                format!("{twin} and {key} being two names of one tag")
+            };
+            let text = tags::Field::named(key).is_none_or(|f| f.spec().kind == tags::Kind::Text);
+            let both = if text {
+                ", listing both values there to set both"
+            } else {
+                ""
+            };
+            bail!("{what}: tags.{twin} and tags.{key} both set {name}, {why}; keep one{both}");
         }
         tags.push((key.to_string(), values));
     }

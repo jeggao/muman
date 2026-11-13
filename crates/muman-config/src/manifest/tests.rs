@@ -353,6 +353,25 @@ fn a_tag_set_under_two_spellings_of_its_name_is_refused() {
     }
     write(
         dir.path(),
+        &format!("{song}tags.title = \"A\"\ntags.Title = \"B\"\n"),
+    );
+    let e = format!("{:#}", Manifest::load(dir.path()).unwrap_err());
+    assert!(
+        e.contains("whatever its case") && e.contains("listing both"),
+        "{e}"
+    );
+    write(
+        dir.path(),
+        &format!("{song}tags.year = \"2001\"\ntags.date = \"2001-05-01\"\n"),
+    );
+    let e = format!("{:#}", Manifest::load(dir.path()).unwrap_err());
+    assert!(
+        e.contains("year and date being two names of one tag"),
+        "{e}"
+    );
+    assert!(!e.contains("case") && !e.contains("listing both"), "{e}");
+    write(
+        dir.path(),
         &format!("{song}tags.title = \"\"\ntags.TITLE = \"Upper\"\n"),
     );
     let m = Manifest::load(dir.path()).unwrap();

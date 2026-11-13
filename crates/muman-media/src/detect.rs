@@ -13,12 +13,13 @@
 //!
 //! - A **placeholder** is a value `placeholders.txt` lists for its field,
 //!   compared whole as every value here is ([`plain`]), and in brackets
-//!   around it all or not, so `(Unknown Artist)` is one too: taggers
-//!   write MusicBrainz's `[unknown]` as `{unknown}` or `(unknown)`, and
-//!   an `ID3v2.3` genre such as `(12){unknown}` leaves its braced text
-//!   once its number is read as `Other`. A value listed in brackets is a
-//!   placeholder only in brackets, so `[unknown]` is none for a song
-//!   titled `Unknown`. Or it is a credit that names a soundtrack
+//!   or quotes around it all or not, every kind alike, so `(Unknown
+//!   Artist)` is one too: taggers write MusicBrainz's `[unknown]` as
+//!   `{unknown}`, `(unknown)` or `「unknown」`, and an `ID3v2.3` genre such
+//!   as `(12){unknown}` leaves its braced text once its number is read as
+//!   `Other`. A value listed in brackets is a placeholder only in brackets
+//!   or quotes, so `[unknown]` is none for a song titled `Unknown`. Or it
+//!   is a credit that names a soundtrack
 //!   rather than anyone, ending in `OST` and perhaps its volume: files
 //!   tagged by album, their artist filled with the album's short name.
 //!   A release country that is no two-letter code, as a group's name
@@ -102,9 +103,10 @@ static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<Plain>>> = LazyLo
     table
 });
 
-/// The brackets a value may be written in, around it all, width aside:
-/// `（` is `(`.
-const BRACKETS: [(char, char); 9] = [
+/// The pairs a value may be written in, around it all, one as another:
+/// brackets, width aside, so `（` is `(`, and quotes as ASCII writes them
+/// where it has them, so `“` is `"`.
+const AROUND: [(char, char); 17] = [
     ('(', ')'),
     ('[', ']'),
     ('{', '}'),
@@ -114,11 +116,6 @@ const BRACKETS: [(char, char); 9] = [
     ('〖', '〗'),
     ('〈', '〉'),
     ('《', '》'),
-];
-
-/// The quotes a value may be written in, around it all, as ASCII writes
-/// them where it has them: `“` is `"`.
-const QUOTES: [(char, char); 8] = [
     ('"', '"'),
     ('\'', '\''),
     ('„', '"'),
@@ -132,16 +129,18 @@ const QUOTES: [(char, char); 8] = [
 /// A value as every test here compares it ([`plain`]).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Plain {
-    /// Whether brackets stood around it all, as around `[unknown]`.
-    bracketed: bool,
+    /// Whether brackets or quotes stood around it all, as around
+    /// `[unknown]` or `「unknown」`.
+    enclosed: bool,
     text: String,
 }
 
 /// `value` as every test here compares it: in Unicode's compatibility
 /// form, so width says nothing; its quotes as ASCII writes them and each
-/// hyphen or dash a space; lower-cased; the quotes and brackets around
-/// it all taken off, however many and in whatever order, with the
-/// spaces inside them; its spaces one space each.
+/// hyphen or dash a space; lower-cased; the brackets and quotes around
+/// it all taken off ([`enclosed`]), however many, of whatever kinds and
+/// in whatever order, with the spaces inside them; its spaces one space
+/// each.
 fn plain(value: &str) -> Plain {
     let flat: String = value
         .nfkc()
@@ -150,27 +149,38 @@ fn plain(value: &str) -> Plain {
         .collect::<String>()
         .to_lowercase();
     let mut text = flat.trim();
-    let mut bracketed = false;
-    loop {
-        let mut chars = text.chars();
-        let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
-            break;
-        };
-        let inner = chars.as_str();
-        let around = |pairs: &[(char, char)]| {
-            (pairs.iter()).any(|&(o, c)| o == first && c == last && !inner.contains([o, c]))
-        };
-        if around(&BRACKETS) {
-            bracketed = true;
-        } else if !around(&QUOTES) {
-            break;
-        }
+    let mut was_enclosed = false;
+    while let Some(inner) = enclosed(text) {
+        was_enclosed = true;
         text = inner.trim();
     }
     Plain {
-        bracketed,
+        enclosed: was_enclosed,
         text: text.split_whitespace().collect::<Vec<_>>().join(" "),
     }
+}
+
+/// What a pair of [`AROUND`] holds when it stands around all of `text`:
+/// its opening mark closed by the last, so `[[unknown]]` holds
+/// `[unknown]`, while `(unknown) (live)` is in no pair.
+fn enclosed(text: &str) -> Option<&str> {
+    let mut chars = text.chars();
+    let (first, last) = (chars.next()?, chars.next_back()?);
+    let &(open, close) = AROUND.iter().find(|&&(o, c)| o == first && c == last)?;
+    let inner = chars.as_str();
+    if open == close {
+        let nested = || inner.trim().starts_with(open) && enclosed(inner.trim()).is_some();
+        return (!inner.contains(open) || nested()).then_some(inner);
+    }
+    let mut depth = 0_usize;
+    for c in inner.chars() {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth = depth.checked_sub(1)?;
+        }
+    }
+    (depth == 0).then_some(inner)
 }
 
 /// Whether `c` is a hyphen or a dash, which spellings of one value swap
@@ -184,14 +194,15 @@ fn is_dash(c: char) -> bool {
 }
 
 /// Whether `value` stands for no value in `field`: listed for it, both
-/// read as [`plain`] reads them, and brackets around it that the listed
-/// value lacks aside, so `(Unknown Artist)` is `Unknown Artist`; but a
-/// value listed in brackets, as `[unknown]`, is never one written bare.
+/// read as [`plain`] reads them, and brackets or quotes around it that
+/// the listed value lacks aside, so `(Unknown Artist)` is `Unknown
+/// Artist`; but a value listed in brackets, as `[unknown]`, is never one
+/// written bare.
 #[must_use]
 pub fn placeholder(field: Field, value: &str) -> bool {
     let plain = plain(value);
     let bare = Plain {
-        bracketed: false,
+        enclosed: false,
         text: plain.text.clone(),
     };
     let listed = [None, Some(field)].iter().any(|f| {
@@ -432,11 +443,40 @@ mod tests {
         }
         assert!(placeholder(Field::Label, "\u{2018}[no label]\u{2019}"));
         assert!(placeholder(Field::Artist, "\"Unknown Artist\""));
-        assert!(
-            !placeholder(Field::Title, "\"Unknown\""),
-            "a title of its own, quoted"
-        );
         assert!(!placeholder(Field::Title, "\"[unknown]\" Shore"));
+        assert!(!placeholder(Field::Title, "\"Unknown\" Shore"));
+    }
+
+    #[test]
+    fn every_bracket_and_quote_around_a_value_is_read_alike() {
+        let around = [
+            ("(", ")"),
+            ("[", "]"),
+            ("{", "}"),
+            ("<", ">"),
+            ("\u{ff08}", "\u{ff09}"),
+            ("\u{3010}", "\u{3011}"),
+            ("\u{3014}", "\u{3015}"),
+            ("\u{300a}", "\u{300b}"),
+            ("\"", "\""),
+            ("\u{201c}", "\u{201d}"),
+            ("'", "'"),
+            ("\u{ab}", "\u{bb}"),
+            ("\u{300c}", "\u{300d}"),
+            ("\u{300e}", "\u{300f}"),
+        ];
+        for field in [Field::Album, Field::Genre, Field::Title, Field::Label] {
+            for (open, close) in around {
+                let value = format!("{open}unknown{close}");
+                assert!(placeholder(field, &value), "{field:?} {value}");
+                let value = format!("{open}{open}unknown{close}{close}");
+                assert!(placeholder(field, &value), "{field:?} {value}");
+            }
+        }
+        assert!(placeholder(Field::Album, "[[unknown]]"));
+        assert!(placeholder(Field::Album, "(\u{201c}[unknown]\u{201d})"));
+        assert!(!placeholder(Field::Title, "(unknown) (unknown)"));
+        assert!(!placeholder(Field::Title, "[unknown]] [[unknown]"));
     }
 
     #[test]

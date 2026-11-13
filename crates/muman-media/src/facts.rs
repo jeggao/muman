@@ -229,8 +229,9 @@ pub const RECORD_METHOD: &str = "record/3";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
 /// it sings are Latin alone; since lyrics/2, its lines as
-/// [`crate::lyrics::read`] reads them, a control character dropped.
-pub const LYRICS_METHOD: &str = "lyrics/2";
+/// [`crate::lyrics::read`] reads them, a control character dropped; since
+/// lyrics/3, in the legacy encoding that reads them most plausibly.
+pub const LYRICS_METHOD: &str = "lyrics/3";
 
 /// How the tags of a source of `kind` are read: `tags::METHOD`, and for
 /// a record [`RECORD_METHOD`] too, or for a lyrics file [`LYRICS_METHOD`],

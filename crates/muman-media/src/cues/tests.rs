@@ -91,12 +91,13 @@ fn untimed_lyrics_make_no_cues_and_plain_text_drops_id_tags() {
     );
 }
 
-/// What reading, moving and writing make of lyrics in four encodings and
-/// with control characters,
+/// What reading, moving and writing make of lyrics in four encodings,
+/// short Shift-JIS whose letter pairs alone favour Windows-1251 among
+/// them, and with control characters,
 /// with [`crate::lyrics::WRITING`].
 const WRITTEN: (&str, &str) = (
-    "5",
-    "a3be44f40152fb608400e294577854ed540ec7b13c37f1d509374aa554f00a7a",
+    "6",
+    "cb3db72b7db805ade0ac2fc2dec7e1f527ad1e2b071715f5a2711872cf85c49f",
 );
 
 #[test]
@@ -116,6 +117,10 @@ fn writing_rises_with_what_it_makes() {
             .into_owned(),
         encoding_rs::SHIFT_JIS
             .encode("[00:03.00]\u{591c}\u{306e}\u{706f}\u{53f0}\n")
+            .0
+            .into_owned(),
+        encoding_rs::SHIFT_JIS
+            .encode("[00:01.00]青い灯台の上で\n[00:04.00]ふたりは歌った\n")
             .0
             .into_owned(),
         b"[00:03,50]Comma lights\n[00:99.99]Past the minute\n".to_vec(),

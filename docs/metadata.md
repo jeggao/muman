@@ -237,8 +237,10 @@ against another source:
   as a genre, an artist that is a soundtrack's short name, as `Night
   Ferry OST 2`, and a release country that is no two-letter code. Each
   is told whatever its case, width, spacing, quotes or hyphens, so
-  typography never keeps one, and in any brackets around it all, as
-  `{unknown}` or `(Unknown Artist)`.
+  typography never keeps one, and in any brackets or quotes around it
+  all, every kind alike, as `{unknown}`, `「unknown」`, `[[unknown]]` or
+  `(Unknown Artist)`. One item of a list of genres may be one, as `N/A`
+  in `N/A; Jazz`, which leaves `Jazz`.
 - **Watermarks**, the name of whoever shared the files, written into
   the work, label, copyright, comment or grouping: a value that stands as
   a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
@@ -249,7 +251,8 @@ against another source:
   A label a discography's albums share stays.
 
 `muman status` names each value dropped, as `dropped  WORK “GRP” from
-torrent:…: a watermark of torrent:…`. `[tags.clean.packaging]
+torrent:…: a watermark of torrent:…`, and so each one cleaning leaves,
+as `Other` of the genres `Other/Rock`. `[tags.clean.packaging]
 placeholder` and `watermark` turn each off.
 
 A video's upload date is when it went up, so it dates a song only when
@@ -338,6 +341,13 @@ Lyrics are read alike from a file and a tag, whatever the switches say:
 a control character, as DOS's end-of-file mark or a terminal's colour
 code, is dropped. A lyrics file that reads as other data gives no
 lyrics, and is said when its song is measured.
+
+A lyrics file in no UTF is read in the older encoding that reads its
+bytes as text rather than as letters of mixed scripts or symbols, as
+Shift-JIS read as Windows-1251 does. A few short lines may read as well
+in two, as a few Hangul syllables' bytes read as Chinese too: `sync`
+then names the one it took, and an `[la:]` line naming their language, as
+`[la:ja]` or `[la:ko]`, settles it.
 
 Each rule is a switch under `[tags.clean.<tier>]`, or
 `[lyrics.clean.<tier>]` for lyrics; the song list lists every one.
