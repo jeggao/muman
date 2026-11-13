@@ -520,10 +520,28 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             });
         }
         if add.proposals.is_empty() && ok {
-            crate::ui::info(
-                self.out,
-                "Nothing new: every video named is a source already",
-            )?;
+            let known = |v: &Entry| {
+                (v.key(self.fetcher.sites, None)).is_some_and(|k| self.known.contains(&k))
+            };
+            if !listed.videos.is_empty() && listed.videos.iter().all(known) {
+                crate::ui::info(
+                    self.out,
+                    "Nothing new: every video named is a source already",
+                )?;
+            } else {
+                ok = false;
+                crate::ui::warning(
+                    self.out,
+                    &if listed.videos.is_empty() {
+                        "Nothing added: no address given named a video to fetch".to_string()
+                    } else {
+                        format!(
+                            "Nothing added: yt-dlp fetched none of the {} video(s) named",
+                            listed.videos.len()
+                        )
+                    },
+                )?;
+            }
         }
         Ok((ok, add))
     }

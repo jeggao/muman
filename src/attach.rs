@@ -14,21 +14,27 @@
 //!    `FILE`, the sheet's with the folders it names below it, as a player
 //!    reads it: of the songs with a file so named, only those whose
 //!    file's folders that folder ends with the most of are named, so
-//!    `CD2/disc.cue`'s `01.flac` is `CD2/01.flac`, not `CD1/01.flac`. A
+//!    `CD2/disc.cue`'s `01.flac` is `CD2/01.flac`, not `CD1/01.flac`;
+//!    and of those, where the file states a disc, the songs of that disc
+//!    before those that state none, and those before songs of another,
+//!    so a lone sheet of `REM DISCNUMBER 2` names disc 2's `01.flac`. A
 //!    song's files are its song files, its library file, and where a song
 //!    file given with it came from; `--to` names the songs weighed.
-//! 1. **Its fields**: title, artist, album, track and length, from an
+//! 1. **Its fields**: title, artist (else album artist, as a cue sheet's
+//!    `PERFORMER` is), album, track, disc, track count and length, from an
 //!    `.lrc`'s ID tags, a tag file, or its file name read every way beets'
 //!    `fromfilename` reads one; compared by [`crate::similar`] against
-//!    every name each song is known by, its tags and every source's.
+//!    every name each song is known by, its tags and every source's. A
+//!    cue sheet's track count is its tracks', a sheet being one disc's.
 //! 1. **Its content**: lyrics against the words the song's own lyrics
 //!    sing, from every source that holds them, a song file's lyrics tag
 //!    as a file of lyrics; a picture against the song's covers, by
 //!    [`crate::picture`].
 //!
 //! Fields are weighed as beets weighs them, title and artist 3, album 2,
-//! length 2, track 1, and their distance is `Σ weight × distance / Σ
-//! weight` over the fields both sides have; a length counts no distance
+//! length 2, track, disc and track count 1, and their distance is
+//! `Σ weight × distance / Σ weight` over the fields both sides have; a
+//! length counts no distance
 //! within 10 s and all of it from 30 s. The bands are beets' own:
 //!
 //! | Distance | And | Verdict |
@@ -59,10 +65,15 @@
 //! A cue sheet, or a JSON file of several songs, is matched track by
 //! track, each track's songs costed as above, and assigned so the sum is
 //! least ([`crate::similar::assign`]): two tracks never go to one song,
-//! and a track worse than maybe for every song goes to none.
+//! and a track worse than maybe for every song goes to none. A track
+//! named as several songs are costs less than any track not named, its
+//! fields ordering those songs.
 //!
 //! What is not the song's for sure is asked about on a terminal: the
 //! likeliest songs, a search of the song list, or leaving the file out.
+//! A sheet whose tracks fit songs is asked about whole first; where a
+//! track is as near another song, the answer offered first goes song by
+//! song, and setting all says how many are in doubt.
 //! With `-y` the likeliest is taken when it leads the next by 0.10.
 //! Without a terminal it is left out, and the command refuses at its
 //! end, so a script hears that a file it named was not added. A file
@@ -255,6 +266,9 @@ struct Candidate {
     artists: Vec<Name>,
     albums: Vec<Name>,
     track: Option<u32>,
+    disc: Option<u32>,
+    /// How many tracks its album, or its disc of it, holds.
+    tracks: Option<u32>,
     length_ms: Option<i64>,
     /// Every path whose name a file named after the song may share: its
     /// song files, its library file, and where a song file given with
@@ -304,6 +318,9 @@ struct Fields {
     artist: Option<Name>,
     album: Option<Name>,
     track: Option<u32>,
+    disc: Option<u32>,
+    /// How many tracks its album, or its disc of it, holds.
+    tracks: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -413,9 +430,7 @@ fn candidates(
         let Some(id) = song.id().cloned() else {
             continue;
         };
-        let facts: Vec<&facts::Facts> = song
-            .sources
-            .iter()
+        let facts: Vec<&facts::Facts> = (song.sources.iter())
             .filter_map(|k| state.facts.get(k))
             .collect();
         let offered = |field: Field| {
@@ -494,6 +509,8 @@ fn candidates(
             artists,
             albums,
             track: view.first("tracknumber").parse().ok(),
+            disc: view.first("discnumber").parse().ok(),
+            tracks: view.first("tracktotal").parse().ok(),
             length_ms,
             files,
             ids,
@@ -530,9 +547,11 @@ fn score(c: &Candidate, f: &Fields, clues: &Clues) -> (f64, f64, Vec<&'static st
     field(&f.title, &c.titles, 3.0, &mut conflicts);
     field(&f.artist, &c.artists, 3.0, &mut Vec::new());
     field(&f.album, &c.albums, 2.0, &mut Vec::new());
-    if let (Some(a), Some(b)) = (f.track, c.track) {
-        sum += if a == b { 0.0 } else { 1.0 };
-        weight += 1.0;
+    for (a, b) in [(f.track, c.track), (f.disc, c.disc), (f.tracks, c.tracks)] {
+        if let (Some(a), Some(b)) = (a, b) {
+            sum += if a == b { 0.0 } else { 1.0 };
+            weight += 1.0;
+        }
     }
     if let (Some(a), Some(b)) = (clues.length_ms, c.length_ms) {
         let (grace, span) = clues.grace;
@@ -575,19 +594,32 @@ fn named_depth(c: &Candidate, stem: &str, folder: Option<&Path>) -> Option<usize
         .max()
 }
 
+/// How a song's disc stands against the disc `clues` state: 2 the same,
+/// 1 either unstated, 0 another.
+fn disc_agrees(c: &Candidate, clues: &Clues) -> u8 {
+    let stated = clues.readings.iter().find_map(|r| r.disc);
+    match (stated, c.disc) {
+        (Some(a), Some(b)) if a == b => 2,
+        (Some(_), Some(_)) => 0,
+        _ => 1,
+    }
+}
+
 /// How every song, or every song of `among`, stands against `clues`,
 /// likeliest first.
 fn judge(cands: &[Candidate], clues: &Clues, what: What, among: Option<&[usize]>) -> Vec<Judged> {
     let within = |n: usize| among.is_none_or(|a| a.contains(&n));
     // A name a song file in another folder shares is no name for it, as a
-    // cue sheet's `01.flac` is the one beside it, not another disc's.
-    let depths: Vec<Option<usize>> = cands
+    // cue sheet's `01.flac` is the one beside it, not another disc's; nor
+    // is one of a disc other than the one the file states, where its own is.
+    let depths: Vec<Option<(usize, u8)>> = cands
         .iter()
         .enumerate()
         .map(|(n, c)| {
             (within(n) && !clues.stem.is_empty())
                 .then(|| named_depth(c, &clues.stem, clues.folder.as_deref()))
                 .flatten()
+                .map(|depth| (depth, disc_agrees(c, clues)))
         })
         .collect();
     let deepest = depths.iter().flatten().max().copied();
@@ -852,8 +884,8 @@ fn name_readings(path: &Path, what: What) -> Vec<Fields> {
         let fields = Fields {
             title: Some(Name::new(&g.title)),
             artist: g.artist.as_deref().map(Name::new),
-            album: None,
             track: g.track,
+            ..Fields::default()
         };
         if what == What::Picture {
             out.push(Fields {
@@ -869,13 +901,14 @@ fn name_readings(path: &Path, what: What) -> Vec<Fields> {
 
 fn fields_of(tags: &Tags) -> Fields {
     let first = |name: &str| values(tags, name).next().map(|v| Name::new(v));
+    let number = |name: &str| values(tags, name).next().and_then(|v| v.parse().ok());
     Fields {
         title: first("TITLE"),
-        artist: first("ARTIST"),
+        artist: first("ARTIST").or_else(|| first("ALBUMARTIST")),
         album: first("ALBUM"),
-        track: values(tags, "TRACKNUMBER")
-            .next()
-            .and_then(|v| v.parse().ok()),
+        track: number("TRACKNUMBER"),
+        disc: number("DISCNUMBER"),
+        tracks: number("TRACKTOTAL"),
     }
 }
 
@@ -955,7 +988,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
                     title: h.title.as_deref().map(Name::new),
                     artist: h.artist.as_deref().map(Name::new),
                     album: h.album.as_deref().map(Name::new),
-                    track: None,
+                    ..Fields::default()
                 });
             }
             clues.stated_ms = h.length_ms;
@@ -1798,6 +1831,14 @@ fn decide<W: Write>(
     })
 }
 
+/// What to do with a sheet some of whose tracks fit songs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SheetAnswer {
+    SetAll,
+    SongBySong,
+    LeaveOut,
+}
+
 /// A sheet of several tracks, each matched to a song of its own.
 // The asking reads in one place, prompt by prompt.
 #[expect(clippy::too_many_lines)]
@@ -1832,6 +1873,7 @@ fn decide_sheet<W: Write>(
             item.label
         );
     }
+    let rows = sheet.tracks.len();
     let mut per_track: Vec<Vec<Judged>> = Vec::new();
     for (n, track) in sheet.tracks.iter().enumerate() {
         let tags = sheet.tags_of(n);
@@ -1841,8 +1883,13 @@ fn decide_sheet<W: Write>(
             .filter(|f| named(f) == 1)
             .map(|f| sheet_file(item.clues.folder.as_deref(), f))
             .unwrap_or_default();
+        let mut fields = fields_of(&tags);
+        // A cue sheet is one disc's, so its tracks are how many it holds.
+        if fields.tracks.is_none() && extension(&item.path) == "cue" {
+            fields.tracks = u32::try_from(rows).ok();
+        }
         let clues = Clues {
-            readings: vec![fields_of(&tags)],
+            readings: vec![fields],
             length_ms: track.length_ms,
             grace: (CUE_GRACE_MS, CUE_SPAN_MS),
             ids: ids_of(&tags),
@@ -1860,7 +1907,6 @@ fn decide_sheet<W: Write>(
     let mut columns: Vec<usize> = per_track.iter().flatten().map(|j| j.song).collect();
     columns.sort_unstable();
     columns.dedup();
-    let rows = sheet.tracks.len();
     let cost: Vec<Vec<i64>> = per_track
         .iter()
         .enumerate()
@@ -1873,7 +1919,11 @@ fn decide_sheet<W: Write>(
                         .find(|j| j.song == *song)
                         .map_or(NO_MATCH, |j| match j.verdict {
                             Verdict::Different => NO_MATCH,
-                            _ if j.named || j.distance >= NO_MATCH => 0,
+                            Verdict::Same if j.named => 0,
+                            // Named as several songs are, it is one of them
+                            // whatever its fields, which order them.
+                            _ if j.named => j.distance.min(NO_MATCH) * ASK / NO_MATCH,
+                            _ if j.distance >= NO_MATCH => 0,
                             _ => j.distance,
                         })
                 })
@@ -2002,30 +2052,59 @@ fn decide_sheet<W: Write>(
         .next()
         .cloned()
         .unwrap_or_default();
-    let picked = if fitting.is_empty() {
-        Some(1)
+    // A track as near another song is never set by the answer offered
+    // first: that one goes song by song.
+    let doubt = fitting.len() - led.len();
+    let answers = if doubt == 0 {
+        [
+            SheetAnswer::SetAll,
+            SheetAnswer::SongBySong,
+            SheetAnswer::LeaveOut,
+        ]
     } else {
+        [
+            SheetAnswer::SongBySong,
+            SheetAnswer::SetAll,
+            SheetAnswer::LeaveOut,
+        ]
+    };
+    let picked = if fitting.is_empty() {
+        Some(SheetAnswer::SongBySong)
+    } else {
+        let lines: Vec<String> = answers
+            .iter()
+            .map(|a| match a {
+                SheetAnswer::SetAll if doubt > 0 => {
+                    format!("Set all {}, {doubt} in doubt", fitting.len())
+                }
+                SheetAnswer::SetAll => format!("Set all {}", fitting.len()),
+                SheetAnswer::SongBySong => "Choose song by song".to_string(),
+                SheetAnswer::LeaveOut => "Don't add it".to_string(),
+            })
+            .collect();
         p.select(
             &format!(
-                "{}: {} of {rows} tracks fit songs{}; set their tags?",
+                "{}: {} of {rows} tracks fit songs{}{}; set their tags?",
                 item.label,
                 fitting.len(),
                 if album.is_empty() {
                     String::new()
                 } else {
                     format!(" of {album}")
+                },
+                if doubt > 0 {
+                    format!(", {doubt} as near another song")
+                } else {
+                    String::new()
                 }
             ),
-            &[
-                format!("Set all {}", fitting.len()),
-                "Choose song by song".to_string(),
-                "Don't add it".to_string(),
-            ],
+            &lines,
         )?
+        .and_then(|i| answers.get(i).copied())
     };
     match picked {
-        Some(0) => Ok(tagged(&fitting, false, false)),
-        Some(1) => {
+        Some(SheetAnswer::SetAll) => Ok(tagged(&fitting, false, false)),
+        Some(SheetAnswer::SongBySong) => {
             let mut chosen: Vec<(usize, usize)> = Vec::new();
             for (r, judged) in per_track.iter().enumerate() {
                 let question = format!("track {} “{}”: which song is it?", r + 1, title_of(r));

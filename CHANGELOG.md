@@ -30,6 +30,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`info` counts no removed song's file as dropped in**, nor a file
   moved or copied that the next sync follows or keeps out, where it
   counted each under "Dropped in, not listed".
+- **A cue sheet given alone goes to the disc it states**: its `REM
+  DISCNUMBER`, album, performer and track count weigh in the match, so a
+  disc 2 sheet naming `01.flac` retags disc 2's `01.flac`, where it
+  retitled disc 1's songs as disc 2's tracks; and where a track is as
+  near another song, the answer a terminal offers first is to choose
+  song by song, not "Set all".
+- **`check --upstream` compares what a site lists with what it listed**:
+  a fetched file that keeps its own tags records the site's tag fields
+  apart, where every such source, archive.org's among them, was said to
+  serve other tags right after it was fetched.
+- **`max_size` lowers songs as far as `min_bitrate` lets**, down to the
+  least each encoder writes, as Opus to 6 kbit/s and MP3 to 32, where
+  songs stopped at Opus 32 and MP3 96 kbit/s and were left out; a library
+  the codec cannot fit is told so, not to lower `min_bitrate`.
+- **A source joins a song only when its audio aligns with the song's**:
+  two drone or noise recordings whose prints agree by chance are kept
+  apart, or asked about on a terminal, where the second was joined and
+  then held as another recording, missing from the library.
+- **`add` of an address that names nothing to fetch fails and says so**,
+  where it said every video named was a source already and exited 0.
+
 - **A rename of case a stopped run left halfway is finished, whatever
   failed before it**: the next sync follows every move the run made, not
   only those before the first that failed, as over a file held open, and

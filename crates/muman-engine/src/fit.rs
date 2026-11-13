@@ -10,9 +10,14 @@
 //! **Ladder.** The first rung is the song as it stands. Below it come
 //! `[audio] lossy` at the bitrates of [`ladder`] under the one it would
 //! be encoded at, raised in proportion past two channels as `[audio]`
-//! raises it. A rung must save a tenth of the first: a lossy source is
-//! never encoded at or above its own bitrate, which would cost a
-//! generation and save nothing.
+//! raises it, and down to the least its encoder writes, at or above
+//! `[audio] min_bitrate`. That least, measured on stereo noise at 44.1
+//! and 48 kHz, is 6 kbit/s for libopus; 24 for ffmpeg's AAC, which
+//! writes about 20 whatever lower it is asked; 48 for libvorbis, which
+//! refuses stereo at those rates below it; and 32 for LAME, the least
+//! MPEG-1 holds, which it writes whatever lower it is asked. A rung must
+//! save a tenth of the first: a lossy source is never encoded at or
+//! above its own bitrate, which would cost a generation and save nothing.
 //!
 //! **Loss.** In impairment points per minute of audio, 0 transparent and
 //! 100 unusable, read off `impairment` for the codec at its bitrate,
@@ -119,15 +124,28 @@ pub struct Fit {
     pub total: u64,
 }
 
-/// The bitrates a codec is lowered through, in kbit/s for two channels.
+/// The bitrates a codec is lowered through, in kbit/s for two channels,
+/// down to the least its encoder writes ([`lowest`]).
 #[must_use]
 pub fn ladder(codec: Codec) -> &'static [u32] {
     match codec {
-        Codec::Opus => &[256, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32],
-        Codec::Aac | Codec::Vorbis => &[256, 192, 160, 128, 112, 96, 80, 64],
-        Codec::Mp3 => &[320, 256, 224, 192, 160, 128, 112, 96],
+        Codec::Opus => &[
+            256, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32, 24, 16, 12, 8, 6,
+        ],
+        Codec::Aac => &[256, 192, 160, 128, 112, 96, 80, 64, 48, 40, 32, 24],
+        Codec::Vorbis => &[256, 192, 160, 128, 112, 96, 80, 64, 48],
+        Codec::Mp3 => &[
+            320, 256, 224, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32,
+        ],
         Codec::Flac | Codec::Alac | Codec::WavPack => &[],
     }
+}
+
+/// The least bitrate `codec` is lowered to, in kbit/s for two channels:
+/// the last of its [`ladder`]; none for a lossless codec.
+#[must_use]
+pub fn lowest(codec: Codec) -> Option<u32> {
+    ladder(codec).last().copied()
 }
 
 /// Impairment per minute of stereo, full-band music encoded by muman's
@@ -145,6 +163,11 @@ fn impairment(codec: Codec) -> &'static [(f64, f64)] {
             (48.0, 16.0),
             (40.0, 22.0),
             (32.0, 30.0),
+            (24.0, 40.0),
+            (16.0, 55.0),
+            (12.0, 65.0),
+            (8.0, 80.0),
+            (6.0, 88.0),
         ],
         Codec::Aac => &[
             (320.0, 0.0),
@@ -156,6 +179,10 @@ fn impairment(codec: Codec) -> &'static [(f64, f64)] {
             (96.0, 12.0),
             (80.0, 17.0),
             (64.0, 24.0),
+            (48.0, 33.0),
+            (40.0, 40.0),
+            (32.0, 48.0),
+            (24.0, 58.0),
         ],
         Codec::Vorbis => &[
             (320.0, 0.0),
@@ -167,6 +194,7 @@ fn impairment(codec: Codec) -> &'static [(f64, f64)] {
             (96.0, 7.0),
             (80.0, 11.0),
             (64.0, 17.0),
+            (48.0, 26.0),
         ],
         Codec::Mp3 => &[
             (320.0, 0.5),
@@ -178,6 +206,10 @@ fn impairment(codec: Codec) -> &'static [(f64, f64)] {
             (96.0, 19.0),
             (80.0, 26.0),
             (64.0, 35.0),
+            (56.0, 40.0),
+            (48.0, 46.0),
+            (40.0, 54.0),
+            (32.0, 63.0),
         ],
         Codec::Flac | Codec::Alac | Codec::WavPack => &[(1.0, 0.0)],
     }
@@ -836,7 +868,7 @@ mod tests {
     fn a_budget_below_the_floor_says_the_floor() {
         let items = [song("a", opus(160), 4 * MB, false, 200.0)];
         let floor = items[0].rungs.iter().map(|r| r.bytes).min().unwrap();
-        assert_eq!(allocate(&items, &Policy::exact(MB / 2)), Err(floor));
+        assert_eq!(allocate(&items, &Policy::exact(floor - 1)), Err(floor));
     }
 
     #[test]
@@ -868,6 +900,38 @@ mod tests {
                     Format::Encode { kbps: Some(k), .. } if *k < 96
                 ))
         );
+    }
+
+    #[test]
+    fn min_bitrate_lowers_each_codec_to_the_least_its_encoder_writes() {
+        let least = |codec: Codec, min: Option<u32>| {
+            let audio = Audio {
+                lossy: codec,
+                min_kbps: min,
+                ..Audio::default()
+            };
+            lower(opus(512), &STEREO, &audio)
+                .iter()
+                .filter_map(|f| match f {
+                    Format::Encode { kbps, .. } => *kbps,
+                    Format::Copy { .. } => None,
+                })
+                .min()
+        };
+        for (codec, floor) in [
+            (Codec::Opus, 6),
+            (Codec::Aac, 24),
+            (Codec::Vorbis, 48),
+            (Codec::Mp3, 32),
+        ] {
+            assert_eq!(least(codec, None), Some(floor), "{codec}");
+            assert_eq!(least(codec, Some(6)), Some(floor), "{codec}");
+            assert_eq!(lowest(codec), Some(floor), "{codec}");
+            assert_eq!(least(codec, Some(64)), Some(64), "{codec}");
+        }
+        assert_eq!(least(Codec::Mp3, Some(32)), Some(32));
+        assert_eq!(least(Codec::Opus, Some(8)), Some(8));
+        assert_eq!(lowest(Codec::Flac), None);
     }
 
     #[test]

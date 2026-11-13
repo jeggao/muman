@@ -39,10 +39,21 @@ pub(super) fn left_out<W: Write>(
         .map(|n| name_of(&manifest.songs[*n], None, &state.facts))
         .collect();
     let more = fitted.left_out.len().saturating_sub(NAMED);
+    let audio = &manifest.settings.audio;
+    let remedy = match (audio.min_kbps, crate::fit::lowest(audio.lossy)) {
+        (Some(min), Some(least)) if min > least => {
+            "raise [library] max_size or lower [audio] min_bitrate".to_string()
+        }
+        (_, Some(least)) => format!(
+            "raise [library] max_size; {} goes no lower than {least} kbit/s",
+            audio.lossy.label()
+        ),
+        (_, None) => "raise [library] max_size".to_string(),
+    };
     crate::ui::error(
         out,
         &format!(
-            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} (raise [library] max_size or lower [audio] min_bitrate)",
+            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} ({remedy})",
             crate::ui::bytes(fitted.max),
             crate::ui::bytes(fitted.floor.unwrap_or(0)),
             names.join(", "),

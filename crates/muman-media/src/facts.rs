@@ -39,7 +39,10 @@
 //! [`info::TAG_FIELDS`] lists them, the rest of it changing on every
 //! fetch, with the file's own tags where yt-dlp left them its own
 //! ([`VideoInfo::muman_own_tags`]), or by a file's own tags alone, before
-//! any cleaning. Facts hashed by
+//! any cleaning. What a site served keeps the digest of those fields
+//! apart ([`Served::listed`]): a site's listing holds them and not the
+//! file's own tags, so it is what `check --upstream` can compare with
+//! what the site lists now. Facts hashed by
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
 //!
@@ -210,8 +213,14 @@ pub struct Facts {
 }
 
 /// What a source's digests are of; facts hashed otherwise are hashed
-/// again, decoding nothing, as [`hash`] does.
-pub const HASH_METHOD: &str = "hash/2";
+/// again, decoding nothing, as [`hash`] does. Since hash/3, what a site
+/// served holds the digest of its listing's tag fields apart
+/// ([`Served::listed`]).
+pub const HASH_METHOD: &str = "hash/3";
+
+/// [`HASH_METHOD`] before a site's listing was digested apart: its facts
+/// hold but for a source a site served.
+const BEFORE_LISTED: &str = "hash/2";
 
 /// What a MusicBrainz record's facts keep beside its tags, its length and
 /// the artists it credits, and what its tags hold: since record/3, its
@@ -258,11 +267,18 @@ pub struct Served {
     /// Milliseconds the site said it plays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// The digest of the fields of its info JSON tags are read from
+    /// ([`info::tags_digest`]), as the site lists them, apart from the
+    /// file's own tags that the tags digest holds beside them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<String>,
 }
 
 impl Served {
-    fn of(info: &VideoInfo) -> Option<Self> {
+    /// What `info`, dumped into `scratch`, says the site served.
+    fn of(info: &VideoInfo, scratch: &Path) -> Option<Self> {
         Some(Self {
+            listed: listed_digest(scratch),
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
             url: info.page().map(str::to_string),
@@ -428,6 +444,7 @@ impl Facts {
     #[must_use]
     pub fn hashed(&self) -> bool {
         self.hash_method == HASH_METHOD
+            || (self.hash_method == BEFORE_LISTED && self.served.is_none())
     }
 
     /// What the integrity measure found of its audio, by today's method.
@@ -928,13 +945,19 @@ fn tags_digest(
     let Some(info) = info else {
         return Some(digest(&own()?));
     };
-    let fetched = info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?)?;
+    let fetched = listed_digest(scratch)?;
     if info.muman_own_tags.is_none() {
         return Some(fetched);
     }
     let mut both = fetched.into_bytes();
     both.extend(own()?);
     Some(digest(&both))
+}
+
+/// The digest of the fields tags are read from of the info JSON dumped
+/// into `scratch` ([`info::tags_digest`]).
+fn listed_digest(scratch: &Path) -> Option<String> {
+    info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?)
 }
 
 /// What a media file's tags offer: for what yt-dlp fetched, its info
@@ -1371,7 +1394,7 @@ pub fn hash<R: Runner>(
         digests.lyrics.push((LyricsAt::Tag, d));
     }
     digests.tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
-    Ok((digests, info.as_ref().and_then(Served::of)))
+    Ok((digests, info.as_ref().and_then(|i| Served::of(i, scratch))))
 }
 
 // The steps read in the order they run; split up, the order would be in the call sites.
@@ -1389,7 +1412,7 @@ fn media<R: Runner>(
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
     facts.chapters.clone_from(&probed.chapters);
-    let served = info.as_ref().and_then(Served::of);
+    let served = info.as_ref().and_then(|i| Served::of(i, scratch));
     let tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 

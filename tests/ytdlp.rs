@@ -145,6 +145,37 @@ fn yt_dlp_takes_every_option_muman_passes() {
     let (ok, text) = lines(&runner, &listing);
     assert!(ok, "yt-dlp failed:\n{text}");
     assert!(text.contains("\"id\": \"silence\""), "{text}");
+    listed_as_fetched(&runner, file, &text, &root.join("hashed"));
+}
+
+/// Assert that `listing`, yt-dlp's listing of `file` just fetched, lists
+/// the tag fields it was fetched with, as `check --upstream` compares
+/// them, its own tags apart; hashed in `scratch`.
+fn listed_as_fetched(runner: &System, file: &Path, listing: &str, scratch: &Path) {
+    let listed = listing
+        .lines()
+        .find_map(|l| muman::info::tags_digest(l.as_bytes()))
+        .unwrap_or_else(|| panic!("{listing}"));
+    let located = muman::store::Located {
+        key: muman::source::SourceKey::parse("generic:silence").unwrap(),
+        path: file.to_path_buf(),
+        kind: muman::store::Kind::Media,
+        lyrics: None,
+        covers: Vec::new(),
+    };
+    let (digests, served) = muman::facts::hash(runner, &located, scratch).unwrap();
+    let mut facts = muman::facts::Facts::unreadable("r".into());
+    facts.take(&digests, served);
+    let held = muman::held::Held::now(&located.key, &facts, &muman::sites::Sites::default())
+        .expect("a record");
+    assert!(
+        held.listed.is_some(),
+        "its own tags are held beside the listing's: {held:?}"
+    );
+    assert!(
+        !held.tags_differ(&listed),
+        "listed again, the file just fetched serves the tags it was fetched with: {held:?}"
+    );
 }
 
 #[test]

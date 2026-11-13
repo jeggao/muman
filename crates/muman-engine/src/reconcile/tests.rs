@@ -1914,6 +1914,10 @@ fn a_limit_too_small_for_any_bitrate_leaves_songs_out() {
         text.contains("cannot hold the library") && text.contains("left out: Song"),
         "{text}"
     );
+    assert!(
+        text.contains("Opus goes no lower than 6 kbit/s") && !text.contains("min_bitrate"),
+        "unset, min_bitrate is no remedy: {text}"
+    );
     assert!(!h.lib("Artist/Record/02 Song.opus").exists());
     assert!(!h.lib("Artist/Record/02 Song.flac").exists());
     let failures = State::load(&h.dirs.home).unwrap().song_failures;

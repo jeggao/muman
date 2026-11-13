@@ -19,6 +19,8 @@ fn cand(title: &str, artist: &str, album: &str, seconds: i64) -> Candidate {
         artists: vec![Name::new(artist)],
         albums: vec![Name::new(album)],
         track: None,
+        disc: None,
+        tracks: None,
         length_ms: Some(seconds * 1000),
         files: vec![PathBuf::from(format!("{title}.flac"))],
         ids: BTreeSet::new(),
@@ -170,6 +172,36 @@ fn a_number_or_version_word_holds_back_no_words_sung_alike() {
     ));
     let (_, verdict, reasons) = top(&cands, &clues, What::Lyrics);
     assert_eq!(verdict, Verdict::Same, "{reasons:?}");
+}
+
+#[test]
+fn a_name_two_discs_share_is_the_one_of_the_disc_stated() {
+    let disc = |title: &str, n: u32| {
+        let mut c = cand(title, "Marlo Venn", "The Glass Orchards", 200);
+        c.disc = Some(n);
+        c.files = vec![Path::new("rips").join(format!("CD{n}")).join("01.flac")];
+        c
+    };
+    let cands = [disc("Ember", 1), disc("Tide", 2)];
+    let named = |stated: Option<u32>| {
+        let mut clues = said("Second Light", Some("Marlo Venn"));
+        clues.readings[0].disc = stated;
+        clues.stem = "01".into();
+        clues.folder = Some(PathBuf::from("notes"));
+        judge(&cands, &clues, What::Tags, None)
+    };
+    let judged = named(Some(2));
+    assert_eq!(
+        (judged[0].song, judged[0].verdict),
+        (1, Verdict::Same),
+        "{judged:?}"
+    );
+    assert!(judged[0].distance < judged[1].distance, "{judged:?}");
+    let judged = named(None);
+    assert!(
+        judged.iter().all(|j| j.verdict == Verdict::Unsure),
+        "no disc stated, either may be it: {judged:?}"
+    );
 }
 
 fn asking(cands: &[Candidate]) -> (Vec<u8>, BTreeSet<String>) {

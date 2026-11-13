@@ -631,18 +631,90 @@ fn a_cue_sheet_given_later_names_the_files_of_its_own_folder_or_of_to() {
     let second = s.written("notes/CD2/disc.cue", &disc_cue(2));
     let (ok, text) = s.run(&fake, &["add", &second]);
     assert!(ok, "the folder it is in names its disc: {text}");
-    let first = s.written("notes/first.cue", &disc_cue(1));
+    let undiscd = disc_cue(1).replace("REM DISCNUMBER 1\n", "");
+    let first = s.written("notes/first.cue", &undiscd);
     let said = s.not_added(&fake, &["add", &first]);
     assert!(said.contains("not surely a song's"), "{said}");
     let (ok, text) = s.run(&fake, &["add", &first, "--to", "key:CD1"]);
     assert!(ok, "--to leaves the other disc out: {text}");
     for disc in [1, 2] {
         assert_eq!(
-            title_and_disc(&s, &format!("Orchards/CD{disc}/01")),
-            (format!("Ember {disc}"), disc.to_string()),
+            title_and_disc(&s, &format!("Orchards/CD{disc}/01")).0,
+            format!("Ember {disc}"),
             "{text}"
         );
     }
+}
+
+#[test]
+fn a_cue_sheet_given_alone_names_the_files_of_the_disc_it_states() {
+    let s = Setup::new();
+    let mut fake = library();
+    for disc in [1, 2] {
+        for (track, seconds) in [(1, 200), (2, 210)] {
+            let file = format!("CD{disc}{}0{track}.flac", std::path::MAIN_SEPARATOR);
+            let disc_tag = format!(r#", "disc": "{disc}""#);
+            fake = fake.probe(
+                &file,
+                &flac(
+                    "Track",
+                    "Marlo Venn",
+                    "The Glass Orchards",
+                    track,
+                    seconds,
+                    &disc_tag,
+                ),
+            );
+            s.file(&format!("rips/Orchards/CD{disc}/0{track}.flac"));
+        }
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    for disc in [2, 1] {
+        let cue = s.written(&format!("notes/cd{disc}.cue"), &disc_cue(disc));
+        let (ok, text) = s.run(&fake, &["add", &cue]);
+        assert!(ok, "its disc number names its disc's files: {text}");
+    }
+    for disc in [1, 2] {
+        assert_eq!(
+            title_and_disc(&s, &format!("Orchards/CD{disc}/01")),
+            (format!("Ember {disc}"), disc.to_string()),
+        );
+    }
+}
+
+#[test]
+fn a_sheet_whose_tracks_are_in_doubt_offers_song_by_song_first() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let cue = s.written(
+        "notes/undiscd.cue",
+        &disc_cue(2).replace("REM DISCNUMBER 2\n", ""),
+    );
+    let mut p = MockPrompter::new();
+    p.push_select(None);
+    let (ok, _) = s.asking(&fake, &["add", &cue], &mut p).unwrap();
+    assert!(ok);
+    let mut offered = p.asked[0].lines();
+    assert!(
+        offered.next().unwrap().contains("2 as near another song"),
+        "{:?}",
+        p.asked
+    );
+    assert_eq!(
+        offered.next().map(str::trim),
+        Some("Choose song by song"),
+        "{:?}",
+        p.asked
+    );
 }
 
 #[test]
@@ -1105,7 +1177,7 @@ fn choosing_song_by_song_never_gives_one_song_two_tracks() {
          FILE \"t1.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n",
     );
     let mut p = MockPrompter::new();
-    p.push_select(Some(1))
+    p.push_select(Some(0))
         .push_select(Some(0))
         .push_select(None);
     let (ok, _) = s.asking(&fake, &["add", &cue], &mut p).unwrap();

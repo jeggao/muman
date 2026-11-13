@@ -448,14 +448,13 @@ of damage:
 A cut-off source is encoded rather than copied, so its song ends
 cleanly. A damaged source ranks below any whole copy of the recording,
 however little it lacks. Audio a hole lost plays as if never there, so
-everything after it comes early; muman compares a damaged copy with
-the others allowing for that, and it stays the same recording. A
-damaged download is fetched again, at once and then less
-often, up to five times or until `sync --retry`. A torrent's file is
-not when the torrent itself holds the damage ([torrents](#torrents)).
-The whole copy a fetch brings is taken without `--accept`, since
-nobody chose the damage. A damaged file of your own is named and left
-for you to replace.
+everything after it comes early; muman compares a damaged copy with the
+others allowing for that, and it stays the same recording. A damaged
+download is fetched again, at once and then less often, up to five times
+or until `sync --retry`. A torrent's file is not when the torrent itself
+holds the damage ([torrents](#torrents)). The whole copy a fetch brings
+is taken without `--accept`, since nobody chose the damage. A damaged
+file of your own is named and left for you to replace.
 
 When a source's audio changed and the new audio is damaged, muman does
 not follow it. The song keeps its file, or stays unwritten where none
@@ -477,8 +476,9 @@ silence and held notes, which any two songs share:
 | 30% or more, over at least 6 s | Less | An excerpt, or a video with a skit: asked |
 | 10% to 30% | 80% or more | Another master or mix: asked |
 | Less | Any | A different song |
+| Any above, its audio not lining up with the song's by loudness over time | Any | Asked, and kept apart under `-y` |
 
 Asked means shown beside the song on a terminal, for you to join or
 keep apart. Without a terminal the source becomes a song of its own,
-with a warning. `-y` joins every unsure match, `--new` compares
+with a warning. `-y` joins every other unsure match, `--new` compares
 nothing, and `--verbose` shows how close each song came.

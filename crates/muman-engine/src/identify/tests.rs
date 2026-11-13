@@ -92,6 +92,54 @@ fn the_same_recording_joins_its_song_and_another_stands_alone() {
     );
 }
 
+/// 8 kHz samples, a square wave at each of `levels` for 10 ms.
+fn pcm(levels: &[u32]) -> Vec<u8> {
+    levels
+        .iter()
+        .flat_map(|level| {
+            let level = i16::try_from(level % 10_000 + 2000).unwrap();
+            [level, -level].repeat(40)
+        })
+        .flat_map(i16::to_le_bytes)
+        .collect()
+}
+
+#[test]
+fn a_print_alike_joins_only_audio_that_aligns_with_the_song_s() {
+    let song = words(4000, 2);
+    for (theirs, joins) in [(words(4000, 3), false), (song.clone(), true)] {
+        let h = home(&["same.flac"]);
+        let mut fake = fake();
+        fake.pcm = vec![
+            ("aaaaaaaaaaa".into(), pcm(&song)),
+            ("same.flac".into(), pcm(&theirs)),
+        ];
+        let mut out = Vec::new();
+        let edits = identify(
+            &fake,
+            &h.dirs,
+            vec![proposal("same.flac")],
+            Mode::Yes,
+            false,
+            None,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(joined(&edits[0]), joins, "{text}");
+        assert_eq!(
+            text.contains("does not align with that song's"),
+            !joins,
+            "{text}"
+        );
+        let state = State::load(&h.dirs.home).unwrap();
+        assert!(
+            !state.alignments.is_empty(),
+            "the comparison is kept for the sync"
+        );
+    }
+}
+
 #[test]
 fn an_uncertain_match_is_shown_beside_the_song_and_asked_about() {
     let h = home(&["part.flac"]);

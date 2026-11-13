@@ -218,10 +218,14 @@ muman matches each file by the strongest evidence it shows:
 1. Its name, as the song's file is named. A name names the song file
    in its own folder first, and a cue sheet's `FILE "01.flac"` the
    `01.flac` beside the cue sheet, so the cue sheets of `CD1` and `CD2`
-   each go to their own disc's songs.
+   each go to their own disc's songs. Where two discs' files share the
+   name, a disc number the file states names its disc's song, as a cue
+   sheet's `REM DISCNUMBER 2` names disc 2's `01.flac` wherever the
+   sheet is.
 1. Its fields: an `.lrc`'s `[ti:]`, `[ar:]`, `[al:]` and `[length:]`,
-   a tag file's, or its own name read as `03 - Artist - Title`,
-   `Artist - Title` or `Title`.
+   a tag file's or a cue sheet's, its disc and track count among them,
+   or its own name read as `03 - Artist - Title`, `Artist - Title` or
+   `Title`.
 1. What it holds: lyrics against the words the song's lyrics sing,
    from any source, a song file's own lyrics tag too, and a picture against the song's covers by how they look, whatever its
    size, compression or bars.
@@ -248,7 +252,9 @@ Lantern Weather — Marlo Venn · The Glass Orchards · 3:20   close name, lengt
 `same name`, `close name` or `other name` says how the names compare,
 and the rest what else agrees or not. You may also search the song
 list with a query, or leave the file out. `-y` takes the likeliest song
-when it is clearly the nearest.
+when it is clearly the nearest. A cue sheet is asked about whole first;
+where a track is as near another song, the answer offered first is to
+choose song by song.
 
 Without a terminal, a file not surely a song's is left out, and `add`
 exits with code 5 once the rest is done. A file that cannot be used is

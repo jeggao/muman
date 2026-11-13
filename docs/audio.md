@@ -161,7 +161,8 @@ full. Later syncs measure only new sources.
 `[library] max_size` caps what the files muman writes may take, as
 `"32 GiB"` for a card. Each `sync` fits the library under it: a song
 that does not fit at its best is written at a lower bitrate of `[audio]
-lossy`, never below `[audio] min_bitrate`.
+lossy`, never below `[audio] min_bitrate`, nor below the least its
+encoder writes, which Opus sets far lower than MP3 or Vorbis.
 
 muman lowers first the songs that lose the least audible quality for
 each byte saved. Lossless songs go first, since an encoder at a high
@@ -203,8 +204,9 @@ copied to: `"32 KiB"` on a FAT32 card counts every small `.lrc` as 32
 KiB, as the card does.
 
 When even the lowest bitrates cannot fit, `sync` says how much room the
-library needs and leaves songs out, the last listed first, until the
-rest fit. muman removes their files, and the run exits with code 4.
+library needs and whether `min_bitrate` or the codec stops it, and
+leaves songs out, the last listed first, until the rest fit. muman
+removes their files, and the run exits with code 4.
 `status` shows each lowered song's format and why, and what the library
 would take; `info` shows what it takes against `max_size`.
 

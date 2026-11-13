@@ -560,39 +560,45 @@ mod tests {
             )
         };
         let was = crate::info::tags_digest(listing("Lantern Weather").as_bytes()).unwrap();
-        std::fs::write(
-            dirs.manifest(),
-            format!(
-                "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
-                 held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", tags = \"{}\", \
-                 format = \"251\", size = 100 }}\n",
-                &was[..16]
-            ),
-        )
-        .unwrap();
-        let ask = |title: &str| {
-            let fake = Fake {
-                lines: vec![listing(title).replace("\"epoch\": 1", "\"epoch\": 2")],
-                ..Fake::default()
+        // A file that kept its own tags holds them in `tags` beside the
+        // listing's, which `listed` holds alone.
+        for tags in [
+            format!("tags = \"{}\"", &was[..16]),
+            format!("tags = \"fedcba9876543210\", listed = \"{}\"", &was[..16]),
+        ] {
+            std::fs::write(
+                dirs.manifest(),
+                format!(
+                    "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
+                     held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", {tags}, \
+                     format = \"251\", size = 100 }}\n"
+                ),
+            )
+            .unwrap();
+            let ask = |title: &str| {
+                let fake = Fake {
+                    lines: vec![listing(title).replace("\"epoch\": 1", "\"epoch\": 2")],
+                    ..Fake::default()
+                };
+                let (mut out, mut report) = (Vec::new(), Vec::new());
+                check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+                crate::ui::plain(&String::from_utf8(report).unwrap())
             };
-            let (mut out, mut report) = (Vec::new(), Vec::new());
-            check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
-            crate::ui::plain(&String::from_utf8(report).unwrap())
-        };
-        let same = ask("Lantern Weather");
-        assert!(
-            same.contains("1 of 1 source(s) served as fetched"),
-            "a new epoch is no change: {same}"
-        );
-        let retitled = ask("Paper Comets");
-        assert!(
-            retitled.contains("Serves other tags: youtube.com:aaaaaaaaaaa"),
-            "{retitled}"
-        );
-        assert!(
-            retitled.contains("0 of 1 source(s) served as fetched"),
-            "{retitled}"
-        );
+            let same = ask("Lantern Weather");
+            assert!(
+                same.contains("1 of 1 source(s) served as fetched"),
+                "a new epoch is no change: {tags}: {same}"
+            );
+            let retitled = ask("Paper Comets");
+            assert!(
+                retitled.contains("Serves other tags: youtube.com:aaaaaaaaaaa"),
+                "{tags}: {retitled}"
+            );
+            assert!(
+                retitled.contains("0 of 1 source(s) served as fetched"),
+                "{tags}: {retitled}"
+            );
+        }
     }
 
     #[test]
