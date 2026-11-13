@@ -521,6 +521,227 @@ fn a_lossy_copy_never_counts_wider_than_a_copy_it_may_have_been_made_from() {
     );
 }
 
+/// `codec` audio cut at `khz`, `rev` its revision, streaming at `kbps`
+/// over its 200 s, its treble measured: each band holding `density` of
+/// each Hz it spans ([`crate::treble`]).
+fn treble(rev: &str, codec: &str, khz: f64, kbps: u64, density: impl Fn(f64) -> f64) -> Facts {
+    use crate::treble::EDGES_HZ;
+    let mut f = audio(codec, khz);
+    f.rev = rev.into();
+    let a = f.audio.as_mut().unwrap();
+    a.bytes = Some(kbps * 1000 / 8 * 200);
+    let bands: Vec<f64> = (0..EDGES_HZ.len() - 1)
+        .map(|i| {
+            let (lo, hi) = (f64::from(EDGES_HZ[i]), f64::from(EDGES_HZ[i + 1]));
+            let steps = ((hi - lo) / 10.0) as usize;
+            (0..steps)
+                .map(|k| 10.0 * density(lo + 10.0 * k as f64 + 5.0))
+                .sum::<f64>()
+        })
+        .collect();
+    a.analysis.treble = Some(crate::analysis::Measured {
+        method: crate::treble::METHOD.into(),
+        value: Some(crate::treble::Measure::of_powers(
+            bands.len(),
+            &bands.repeat(100),
+        )),
+    });
+    f
+}
+
+/// A spectrum flat up to `khz` and empty above it.
+fn up_to(khz: f64) -> impl Fn(f64) -> f64 {
+    move |hz| if hz < khz * 1000.0 { 1.0 } else { 0.0 }
+}
+
+/// What an Opus copy of audio flat up to `khz` holds: the energy its
+/// source held in each band spread over the whole band.
+fn opus_of(khz: f64) -> impl Fn(f64) -> f64 {
+    let edges = crate::quality::OPUS_BANDS_HZ;
+    move |hz| {
+        let Some(band) = edges.windows(2).find(|w| w[0] <= hz && hz < w[1]) else {
+            return up_to(khz)(hz);
+        };
+        let held = (khz * 1000.0).clamp(band[0], band[1]) - band[0];
+        held / (band[1] - band[0])
+    }
+}
+
+#[test]
+fn an_opus_copy_holding_treble_a_narrow_copy_lacks_counts_its_own_width() {
+    let (opus, mp3, aac) = (
+        manual("lanterns.opus"),
+        manual("lanterns.mp3"),
+        manual("lanterns.m4a"),
+    );
+    let facts = BTreeMap::from([
+        (
+            opus.clone(),
+            treble("opus", "opus", 20.625, 160, up_to(20.0)),
+        ),
+        (mp3.clone(), treble("mp3", "mp3", 16.0, 128, up_to(16.0))),
+        (aac.clone(), treble("aac", "aac", 16.0, 128, up_to(16.0))),
+    ]);
+    for narrow in [&mp3, &aac] {
+        let alignments = both(&facts, &opus, narrow, 0, 0.99);
+        for order in [[&opus, narrow], [narrow, &opus]] {
+            let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+            assert_eq!(r.plan.audio.key, opus, "{}", r.why.audio);
+            assert!(
+                r.why.audio.ends_with(&format!(
+                    "holds 9.5 dB more above 15.5 kHz than {narrow}, more than Opus's energy \
+                     rounding allows, so it was not made from it"
+                )),
+                "{}",
+                r.why.audio
+            );
+        }
+    }
+}
+
+#[test]
+fn an_opus_copy_holding_no_more_treble_than_a_narrow_copy_counts_no_wider_however_far() {
+    let (opus, mp3) = (manual("ferry.opus"), manual("ferry.mp3"));
+    for khz in [16.0, 11.0] {
+        let facts = BTreeMap::from([
+            (
+                opus.clone(),
+                treble("opus", "opus", 20.625, 64, opus_of(khz)),
+            ),
+            (mp3.clone(), treble("mp3", "mp3", khz, 128, up_to(khz))),
+        ]);
+        let alignments = both(&facts, &opus, &mp3, 0, 0.99);
+        for order in [[&opus, &mp3], [&mp3, &opus]] {
+            let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+            assert_eq!(r.plan.audio.key, mp3, "{khz} kHz: {}", r.why.audio);
+        }
+    }
+    let facts = BTreeMap::from([
+        (
+            opus.clone(),
+            treble("opus", "opus", 20.625, 64, opus_of(16.0)),
+        ),
+        (mp3.clone(), treble("mp3", "mp3", 16.0, 128, up_to(16.0))),
+    ]);
+    let alignments = both(&facts, &opus, &mp3, 0, 0.99);
+    let compared: Vec<&Aligned> = alignments.iter().filter(|a| a.a == opus).collect();
+    let audible = [(0, &opus, &facts[&opus]), (1, &mp3, &facts[&mp3])];
+    let (q, filled, held) = bounded(&facts[&opus], &compared, &audible).unwrap();
+    assert_eq!((q.bandwidth_hz, filled), (16_000.0, true));
+    assert_eq!(
+        held.unwrap().said(),
+        format!(
+            "from 15.5 kHz up it holds no more than {mp3} (+0.0 dB), as a copy made from it would"
+        )
+    );
+}
+
+#[test]
+fn an_aac_copy_made_from_an_opus_copy_never_replaces_it() {
+    let (opus, aac) = (manual("glass.opus"), manual("glass.m4a"));
+    let facts = BTreeMap::from([
+        (
+            opus.clone(),
+            treble("opus", "opus", 20.625, 160, up_to(18.0)),
+        ),
+        (aac.clone(), treble("aac", "aac", 17.4, 128, up_to(17.4))),
+    ]);
+    let alignments = both(&facts, &opus, &aac, 0, 0.99);
+    for order in [[&opus, &aac], [&aac, &opus]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, opus, "{}", r.why.audio);
+    }
+    let mut thin = facts.clone();
+    thin.insert(
+        opus.clone(),
+        treble("opus", "opus", 20.625, 96, up_to(18.0)),
+    );
+    let r = run(&song(&[opus.clone(), aac.clone()]), &thin, &alignments);
+    assert_eq!(
+        r.plan.audio.key, aac,
+        "under 144 kbit/s, Opus may hold 2.5 dB more than its source: {}",
+        r.why.audio
+    );
+}
+
+#[test]
+fn a_copy_in_another_codec_wider_than_its_fill_keeps_its_width_holding_little_more() {
+    let (v0, mp3) = (manual("orchard v0.mp3"), manual("orchard.mp3"));
+    let faint = |hz: f64| match hz {
+        hz if hz < 19_100.0 => 1.0,
+        hz if hz < 22_000.0 => 0.01,
+        _ => 0.0,
+    };
+    let facts = BTreeMap::from([
+        (v0.clone(), treble("v0", "mp3", 22.05, 250, faint)),
+        (mp3.clone(), treble("mp3", "mp3", 19.1, 320, up_to(19.1))),
+    ]);
+    let alignments = both(&facts, &v0, &mp3, 0, 0.99);
+    for order in [[&v0, &mp3], [&mp3, &v0]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(
+            r.plan.audio.key, v0,
+            "a source holding little above its transcode's lowpass: {}",
+            r.why.audio
+        );
+        assert!(
+            r.why.audio.ends_with(&format!(
+                "from 18.0 kHz up it holds +0.1 dB beside {mp3}, but measures wider than its \
+                 codec fills past a lowpass"
+            )),
+            "{}",
+            r.why.audio
+        );
+    }
+}
+
+#[test]
+fn without_a_treble_measure_or_an_alignment_the_fill_alone_decides() {
+    let (opus, mp3) = (manual("comets.opus"), manual("comets.mp3"));
+    let mut facts = BTreeMap::from([
+        (
+            opus.clone(),
+            treble("opus", "opus", 20.625, 160, up_to(20.0)),
+        ),
+        (mp3.clone(), treble("mp3", "mp3", 16.0, 128, up_to(16.0))),
+    ]);
+    facts
+        .get_mut(&mp3)
+        .unwrap()
+        .audio
+        .as_mut()
+        .unwrap()
+        .analysis = crate::analysis::Analysis::default();
+    let alignments = both(&facts, &opus, &mp3, 0, 0.99);
+    let r = run(&song(&[opus.clone(), mp3.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, mp3, "{}", r.why.audio);
+    let r = run(&song(&[mp3.clone(), opus.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, opus, "not known to be one recording");
+    let apart = [
+        Aligned {
+            offset_ms: 199_000,
+            ..alignments[0].clone()
+        },
+        Aligned {
+            offset_ms: -199_000,
+            ..alignments[1].clone()
+        },
+    ];
+    let facts = BTreeMap::from([
+        (
+            opus.clone(),
+            treble("opus", "opus", 20.625, 160, up_to(20.0)),
+        ),
+        (mp3.clone(), treble("mp3", "mp3", 16.0, 128, up_to(16.0))),
+    ]);
+    let r = run(&song(&[opus.clone(), mp3.clone()]), &facts, &apart);
+    assert_eq!(
+        r.plan.audio.key, mp3,
+        "no whole block shared: {}",
+        r.why.audio
+    );
+}
+
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
 /// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
 fn cut(

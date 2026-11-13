@@ -22,7 +22,7 @@ use muman_core::{
 use muman_media::{
     align, analysis, chapters, clean, codec, cues, detect, dynamics, facts, ffmpeg, flac,
     integrity, loudness, lyrics, naming, ogg, parts, picture, quality, readings, record, similar,
-    style, tags,
+    style, tags, treble,
 };
 use muman_net::{acoustid, coverart, download, lrclib, music, musicbrainz, ytdlp_log};
 

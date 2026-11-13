@@ -491,6 +491,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         analyses: crate::analysis::wanted(
             &manifest.settings.loudness,
             manifest.settings.audio.pick.dynamics.enabled,
+            manifest.settings.audio.pick.bandwidth.weight() != 0,
         ),
     };
     measure(
@@ -510,6 +511,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let analyses = crate::analysis::wanted(
         &manifest.settings.loudness,
         manifest.settings.audio.pick.dynamics.enabled,
+        manifest.settings.audio.pick.bandwidth.weight() != 0,
     );
     let analyzed = analyze(
         runner,

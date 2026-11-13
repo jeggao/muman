@@ -47,3 +47,4 @@ pub mod similar;
 pub mod style;
 pub mod tagfile;
 pub mod tags;
+pub mod treble;
