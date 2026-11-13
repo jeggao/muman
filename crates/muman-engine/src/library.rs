@@ -499,6 +499,13 @@ impl Leftovers {
         self.parts.contains(rel) || self.moving.contains(rel)
     }
 
+    /// Whether the file listed at `rel` in `library` is one of them, under
+    /// its own name or one a filesystem blind to case spells otherwise.
+    #[must_use]
+    pub fn holds(&self, library: &Path, rel: &Path) -> bool {
+        Recorded::of(self.parts.iter().chain(&self.moving).cloned()).holds(library, rel)
+    }
+
     /// Remove each `.part` of them that is a file in `library`. A
     /// `.moving` is never removed: a rename moves a file whole, so it is
     /// the only copy of the file its move was taking, which the next sync
@@ -628,6 +635,40 @@ pub fn spell_as_recorded(
         }
     }
     renamed
+}
+
+/// Paths muman records, found by a listing of the library: a file listed
+/// is one of them under its own name, or under one that differs only in
+/// case where a filesystem blind to case opens the same file there, as
+/// one a move of case alone or a folder of another spelling leaves.
+#[derive(Debug, Default)]
+pub struct Recorded {
+    exact: BTreeSet<PathBuf>,
+    folded: BTreeMap<String, Vec<PathBuf>>,
+}
+
+impl Recorded {
+    /// Of `paths`, below the library.
+    pub fn of(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut recorded = Self::default();
+        for path in paths {
+            let fold = crate::relpath::folded(&path);
+            recorded.folded.entry(fold).or_default().push(path.clone());
+            recorded.exact.insert(path);
+        }
+        recorded
+    }
+
+    /// Whether the file listed at `rel` in `library` is one of them.
+    #[must_use]
+    pub fn holds(&self, library: &Path, rel: &Path) -> bool {
+        self.exact.contains(rel)
+            || (self.folded.get(&crate::relpath::folded(rel))).is_some_and(|paths| {
+                paths.iter().any(|p| {
+                    same_file::is_same_file(library.join(p), library.join(rel)).unwrap_or(false)
+                })
+            })
+    }
 }
 
 /// Where the file or folder `rel`, as muman's records spell it, is below

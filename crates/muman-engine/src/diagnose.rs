@@ -258,11 +258,12 @@ pub fn diagnose<R: Runner>(runner: &R, dirs: &Dirs, settling: Duration) -> Resul
     }
     let moving = crate::history::moving(&dirs.home);
     let leftovers = crate::library::Leftovers::of(&state.outputs, &moving);
+    let owned = crate::library::Recorded::of(owned);
     for file in store::files_below(library, usize::MAX, |_| true)? {
         let Ok(rel) = file.strip_prefix(library) else {
             continue;
         };
-        if leftovers.contains(rel) {
+        if leftovers.holds(library, rel) {
             if !busy {
                 said.problem(format!(
                     "Left by an interrupted run: {}",
@@ -274,7 +275,7 @@ pub fn diagnose<R: Runner>(runner: &R, dirs: &Dirs, settling: Duration) -> Resul
         let hidden = rel
             .components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-        if !hidden && !owned.contains(rel) && !busy {
+        if !hidden && !owned.holds(library, rel) && !busy {
             said.info(format!(
                 "Not muman's, left alone: {}",
                 crate::relpath::show(rel)
