@@ -889,7 +889,27 @@ impl Intent {
                 .or_insert(Fated::From(origin));
             fates.insert(on_disk, Fated::Gone);
         }
-        Foretold(fates)
+        // What goes, and what a file moves from, is a file there now: named
+        // as the disk spells it, which a filesystem blind to case may not
+        // spell as the records do. Where a file ends keeps the records'.
+        let mut on_disk = |p: &Path| {
+            crate::library::spelled_on_disk(found.root, p, &mut listed)
+                .unwrap_or_else(|| p.to_path_buf())
+        };
+        let (gone, ending): (Vec<_>, Vec<_>) =
+            (fates.into_iter()).partition(|(_, fate)| *fate == Fated::Gone);
+        let mut spelled = BTreeMap::new();
+        for (path, _) in gone {
+            spelled.insert(on_disk(&path), Fated::Gone);
+        }
+        for (path, fate) in ending {
+            let fate = match fate {
+                Fated::From(origin) => Fated::From(on_disk(&origin)),
+                fate => fate,
+            };
+            spelled.insert(path, fate);
+        }
+        Foretold(spelled)
     }
 }
 
