@@ -8,6 +8,7 @@ use clap::Parser;
 use super::*;
 use crate::lrclib::testing::Server;
 use crate::source::SourceKey;
+use crate::state::State;
 use crate::testing::{FLAC, Fake, words};
 
 fn cli(args: &[&str]) -> Cli {
@@ -9397,14 +9398,7 @@ fn a_library_put_back_from_a_copy_with_new_times_is_still_muman_s() {
     s.file("home/sources/manual/a.flac");
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
-    let lib = s.dir.path().join("lib");
-    for file in crate::store::files_below(&lib, usize::MAX, |_| true).unwrap() {
-        let bytes = std::fs::read(&file).unwrap();
-        std::fs::remove_file(&file).unwrap();
-        std::fs::write(&file, bytes).unwrap();
-        let later = SystemTime::now() + std::time::Duration::from_secs(5);
-        filetime::set_file_mtime(&file, filetime::FileTime::from_system_time(later)).unwrap();
-    }
+    put_back_with_new_times(&s.dir.path().join("lib"));
     let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
     assert!(ok, "{text}");
     assert!(!text.contains("changed since muman wrote it"), "{text}");
@@ -9510,6 +9504,137 @@ fn a_library_folder_pointed_back_at_is_muman_s_again_while_unchanged() {
         assert!(text.contains(done), "{text}");
         assert!(!text.contains("not muman's"), "{text}");
     }
+}
+
+/// Each file in `library` written again with its bytes and a new time, as
+/// a backup put back without its times leaves it.
+fn put_back_with_new_times(library: &Path) {
+    for file in crate::store::files_below(library, usize::MAX, |_| true).unwrap() {
+        let bytes = std::fs::read(&file).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::write(&file, bytes).unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        filetime::set_file_mtime(&file, filetime::FileTime::from_system_time(later)).unwrap();
+    }
+}
+
+#[test]
+fn remove_says_what_the_sync_does_with_a_library_put_back_without_its_times() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Words\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    put_back_with_new_times(&s.dir.path().join("lib"));
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("leaves in place"), "{text}");
+    assert!(text.contains("2 files deleted"), "{text}");
+    assert!(
+        text.contains("Removed: Artist/Record/02 Song.lrc"),
+        "{text}"
+    );
+    assert_eq!(library_of(&s), BTreeMap::new(), "{text}");
+}
+
+#[test]
+fn a_folder_s_cover_holder_dropped_from_a_library_put_back_hands_it_on_in_one_sync() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let other = FLAC
+        .replace("\"Song\"", "\"Copper Moth\"")
+        .replace("\"track\": \"2\"", "\"track\": \"3\"");
+    let fake = || Fake::default().probe("b.flac", &other).probe(".flac", FLAC);
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    put_back_with_new_times(&s.dir.path().join("lib"));
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let kept: Vec<&str> = listed
+        .split("[[song]]")
+        .filter(|table| !table.contains(&format!("\"{holder}\"")))
+        .collect();
+    std::fs::write(&list, kept.join("[[song]]")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Removed: Artist/Record/cover.jpg"), "{text}");
+    assert!(s.dir.path().join("lib/Artist/Record/cover.jpg").exists());
+    let (_, text) = s.run(&fake(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
+fn a_library_folder_not_there_at_a_switch_is_muman_s_again_when_pointed_back_at() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Words\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let run_in = |library: &Path, args: &[&str]| {
+        let mut job = s.job(args);
+        job.dirs.library = library.to_path_buf();
+        let mut out = Vec::new();
+        let ok = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let lib = s.dir.path().join("lib");
+    let unplugged = s.dir.path().join("unplugged");
+    let (ok, text) = run_in(&s.dir.path().join("second"), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::rename(&lib, &unplugged).unwrap();
+    let (ok, text) = run_in(
+        &s.dir.path().join("second"),
+        &["set", "-y", "manual:a.flac", "genre=Folk"],
+    );
+    assert!(ok, "{text}");
+    let (ok, text) = run_in(&s.dir.path().join("third"), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::rename(&unplugged, &lib).unwrap();
+    let (ok, text) = run_in(&lib, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("2 file(s) here as muman wrote them stay its, 0 others"),
+        "{text}"
+    );
+    assert!(text.contains("Updated"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+}
+
+#[test]
+fn a_part_of_the_user_s_beside_a_song_holds_back_no_change_that_does_not_stage_it() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Words\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let mine = s.written("lib/Artist/Record/02 Song.lrc.part", "mine");
+    // Not `s.run`, whose check takes any `.part` for one muman left.
+    let mut out = Vec::new();
+    let job = s.job(&["set", "-y", "manual:a.flac", "genre=Folk"]);
+    let ok = run_with(
+        &job,
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(ok.unwrap(), "{text}");
+    assert!(text.contains("Updated"), "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "mine");
 }
 
 #[test]

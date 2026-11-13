@@ -82,7 +82,7 @@ struct Found {
 /// saying what is left unknown to `out`.
 fn find<W: Write>(dirs: &Dirs, terms: &[String], out: &mut W) -> Result<Found> {
     let manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
+    let state = crate::reconcile::found(dirs)?;
     let (views, resolved): (Vec<_>, Vec<_>) =
         query::resolved_views(&manifest, &state, &dirs.library)?
             .into_iter()

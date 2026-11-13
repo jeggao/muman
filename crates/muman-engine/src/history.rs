@@ -858,10 +858,11 @@ impl Run {
         if self.fresh {
             return;
         }
-        let made = (self.record.moves.iter())
-            .take_while(|m| library.join(&m.to).exists())
-            .count();
-        self.record.moves.truncate(made);
+        let made = made_moves(library, &self.record.moves, Moves::Foresee);
+        let moves = std::mem::take(&mut self.record.moves);
+        self.record.moves = (moves.into_iter().zip(made))
+            .filter_map(|(m, made)| made.then_some(m))
+            .collect();
     }
 
     /// Record that the run is moving a library file, before it does.
@@ -1220,10 +1221,9 @@ pub enum Moves {
 /// its lyrics if they went too, so the next run knows it as muman's.
 /// Returns how many followed.
 ///
-/// The run made its moves in the order the record lists them, so those
-/// made are the ones before the first whose file is not where it went,
-/// a move of case alone stopped between its two renames finished, or
-/// taken as made under [`Moves::Foresee`];
+/// The moves made are found among all the record lists, whatever failed
+/// between them ([`made_moves`]), a move of case alone stopped between
+/// its two renames finished, or taken as made under [`Moves::Foresee`];
 /// one into a path an earlier move left is a chain, as a song moving into
 /// another's old place. They are followed all at once, from the outputs
 /// as the run began, and only when the state still says so: the paths
@@ -1250,10 +1250,9 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
     if record.complete || record.undoing {
         return 0;
     }
-    let made: Vec<&Moved> = record
-        .moves
-        .iter()
-        .take_while(|m| made(library, m, moves))
+    let made: Vec<&Moved> = (record.moves.iter())
+        .zip(made_moves(library, &record.moves, moves))
+        .filter_map(|(m, made)| made.then_some(m))
         .collect();
     // A song's move, as the outputs stood when the run began; the rest
     // are its lyrics'.
@@ -1305,16 +1304,35 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
     n
 }
 
-/// Whether the move `m` a stopped run records was made in `library`: its
-/// file where it went, or, stopped between the two renames of a move of
-/// case alone, at the name between them, which the move is finished from
-/// under [`Moves::Follow`].
-fn made(library: &Path, m: &Moved, moves: Moves) -> bool {
-    let half = match moves {
-        Moves::Follow => crate::library::finish_move(library, &m.from, &m.to),
-        Moves::Foresee => crate::library::half_moved(library, &m.from, &m.to),
-    };
-    half || library.join(&m.to).exists()
+/// Which of `moves`, a stopped run's in the order it made them, were made
+/// in `library`, each in its place. A move that fails is skipped and the
+/// run goes on, so those made are no prefix of the record. They are read
+/// from the last back, each against the library as the moves after it
+/// found it: a move was made when its file is where it went and none is
+/// where it came from, or the one there is the same file, as a filesystem
+/// blind to case finds a move of case alone at both names. One stopped
+/// between the two renames of a move of case alone, at the name between
+/// them, is made too, finished from there under [`Moves::Follow`].
+fn made_moves(library: &Path, moves: &[Moved], how: Moves) -> Vec<bool> {
+    let mut was: BTreeMap<&Path, bool> = BTreeMap::new();
+    let mut made = vec![false; moves.len()];
+    for (n, m) in moves.iter().enumerate().rev() {
+        let half = match how {
+            Moves::Follow => crate::library::finish_move(library, &m.from, &m.to),
+            Moves::Foresee => crate::library::half_moved(library, &m.from, &m.to),
+        };
+        let there = |rel: &Path, was: &BTreeMap<&Path, bool>| {
+            (was.get(rel).copied()).unwrap_or_else(|| library.join(rel).exists())
+        };
+        let left = !there(&m.from, &was)
+            || same_file::is_same_file(library.join(&m.from), library.join(&m.to)).unwrap_or(false);
+        made[n] = half || (there(&m.to, &was) && left);
+        if made[n] {
+            was.insert(&m.to, false);
+            was.insert(&m.from, true);
+        }
+    }
+    made
 }
 
 /// The paths the latest run, when it was stopped partway, records moving
@@ -2802,6 +2820,56 @@ mod tests {
         assert_eq!(
             state.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/y.opus"), Path::new("B/x.opus")]
+        );
+    }
+
+    #[test]
+    fn a_move_after_one_that_failed_is_followed_and_a_half_move_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "edited by the user").unwrap();
+        state.outputs.insert("A/y.opus".into(), written());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        // x's move fails, as over a file held open; y's, of case alone,
+        // is stopped between its two renames.
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("A/Y.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(
+            d.library.join("A/y.opus"),
+            d.library.join("A/Y.opus.moving"),
+        )
+        .unwrap();
+        drop(run);
+        let mut foreseen = state.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut foreseen, Moves::Foresee),
+            1
+        );
+        assert!(d.library.join("A/Y.opus.moving").exists(), "nothing moved");
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            1
+        );
+        assert_eq!(foreseen.outputs, state.outputs);
+        assert_eq!(
+            state.outputs.keys().collect::<Vec<_>>(),
+            [Path::new("A/Y.opus"), Path::new("A/x.opus")]
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/Y.opus")).unwrap(),
+            "edited by the user"
+        );
+
+        let mut resumed = Run::begin(&d.home).unwrap();
+        resumed.forget_unmade(&d.library);
+        assert_eq!(
+            resumed.record.moves,
+            [Moved {
+                from: "A/y.opus".into(),
+                to: "A/Y.opus".into(),
+            }]
         );
     }
 

@@ -735,14 +735,6 @@ fn render_due<R: Runner, W: Write>(
             .get(&path)
             .map_or_else(Vec::new, |w| w.sidecar_paths().cloned().collect());
         let parts = crate::artifact::parts(&r.plan);
-        // The sync cleared what runs left first: anything at a name the
-        // song is staged at is the user's, which staging would remove.
-        if let Some(by) = staged_of(r).found(&dirs.library) {
-            anyhow::bail!(
-                "{} is not muman's, and is in the way of writing it; move it aside",
-                crate::relpath::show(by)
-            );
-        }
         let stale = stale(old, r, shared);
         if let Some((folder, made)) = placed.get(n) {
             let shared = parts.folder_files(&path);
@@ -766,11 +758,7 @@ fn render_due<R: Runner, W: Write>(
     let render_one = |song: &(&PlannedSong, bool)| {
         let (_, r) = song.0;
         let _working = writing.working(&progress::label(&r.stem));
-        crate::errors::caught(|| build_one(song)).inspect_err(|e| {
-            if e.is::<crate::errors::Panicked>() {
-                staged_of(r).clear(&dirs.library);
-            }
-        })
+        crate::errors::caught(|| build_one(song))
     };
     parallel::chunked(due, parallel::builds(), render_one, |chunk, rendered| {
         for (((n, r), retag), result) in chunk.iter().zip(rendered) {
@@ -812,18 +800,6 @@ fn render_due<R: Runner, W: Write>(
         Ok::<(), anyhow::Error>(())
     })?;
     Ok(wrote)
-}
-
-/// The `.part` files writing `r`'s song stages its own files at: all but
-/// its folder's, which another song of the folder may be staging.
-fn staged_of(r: &Resolved) -> crate::library::Leftovers {
-    let path = path_of(r);
-    let parts = crate::artifact::parts(&r.plan);
-    let shared = parts.folder_files(&path);
-    let own: Vec<PathBuf> = (parts.files(&path).into_iter())
-        .filter(|f| !shared.contains(f))
-        .collect();
-    crate::library::Leftovers::staged(std::iter::once(path).chain(own))
 }
 
 /// Say which files writing a song wrote, `verb` saying what became of

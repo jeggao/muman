@@ -129,7 +129,6 @@ use crate::platform::Defaults;
 use crate::query::QueryMatch;
 use crate::reconcile::Options;
 use crate::runner::{Runner, System, Traced};
-use crate::state::State;
 use crate::ui::{InquirePrompter, Prompter};
 
 /// One run, with every path resolved.
@@ -990,7 +989,7 @@ fn list_songs<D: Write>(
 ) -> Result<()> {
     let manifest = Manifest::load(&dirs.home)?;
     let parsed = query::Query::parse(terms, &query::extractors(&manifest))?;
-    let state = State::load(&dirs.home)?;
+    let state = crate::reconcile::found(dirs)?;
     let views = if removed {
         manifest
             .removed

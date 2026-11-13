@@ -34,7 +34,10 @@
 //! before it changed anything ([`Leftovers`]): a `.part` beside a file of
 //! an output the state records as about to be written, and a `.moving`
 //! beside a path the stopped run's record lists a move to. Any other file
-//! so named is the user's, left alone, whatever its name says.
+//! so named is the user's, left alone, whatever its name says. A `.part`
+//! of a stopped run is removed; a `.moving` never is, as it holds the
+//! only copy of its file, the user's edits to it among them: its move is
+//! finished, and one that cannot be is left for the user.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -404,7 +407,10 @@ fn named(rel: &Path, suffix: &str) -> PathBuf {
 /// known by the records it made before it changed any, as the module's
 /// docs say.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Leftovers(BTreeSet<PathBuf>);
+pub struct Leftovers {
+    parts: BTreeSet<PathBuf>,
+    moving: BTreeSet<PathBuf>,
+}
 
 impl Leftovers {
     /// What runs may have left that `outputs` records and that the moves
@@ -419,34 +425,26 @@ impl Leftovers {
         let parts = (outputs.iter())
             .filter(|(_, w)| w.plan.is_none())
             .flat_map(|(path, w)| w.files(path))
-            .map(|file| named(file, PART));
-        let moving = moving.into_iter().map(|to| named(to, MOVING));
-        Self(parts.chain(moving).collect())
-    }
-
-    /// The `.part` files writing a song's files at `paths` stages.
-    #[must_use]
-    pub fn staged(paths: impl IntoIterator<Item = PathBuf>) -> Self {
-        Self(paths.into_iter().map(|p| named(&p, PART)).collect())
+            .map(|file| named(file, PART))
+            .collect();
+        let moving = moving.into_iter().map(|to| named(to, MOVING)).collect();
+        Self { parts, moving }
     }
 
     /// Whether `rel`, a path in the library, is one of them.
     #[must_use]
     pub fn contains(&self, rel: &Path) -> bool {
-        self.0.contains(rel)
+        self.parts.contains(rel) || self.moving.contains(rel)
     }
 
-    /// The first of them anything is at in `library`.
-    #[must_use]
-    pub fn found(&self, library: &Path) -> Option<&PathBuf> {
-        (self.0.iter()).find(|left| std::fs::symlink_metadata(library.join(left)).is_ok())
-    }
-
-    /// Remove each of them that is a file in `library`.
+    /// Remove each `.part` of them that is a file in `library`. A
+    /// `.moving` is never removed: a rename moves a file whole, so it is
+    /// the only copy of the file its move was taking, which the next sync
+    /// finishes moving ([`finish_move`]) or leaves where it is.
     // Removes what a stopped run left beside the paths it wrote.
     #[expect(clippy::disallowed_methods)]
     pub fn clear(&self, library: &Path) {
-        for left in &self.0 {
+        for left in &self.parts {
             let left = library.join(left);
             if left.is_file() {
                 let _ = crate::atomic::remove(&left);
@@ -607,6 +605,24 @@ mod tests {
         ] {
             assert!(!left.contains(Path::new(theirs)), "{theirs}");
         }
+    }
+
+    #[test]
+    fn a_moving_file_a_stopped_run_left_is_never_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        let outputs = BTreeMap::from([(PathBuf::from("A/x.opus"), written(None, None))]);
+        std::fs::write(root.join("A/x.opus.part"), "half").unwrap();
+        std::fs::write(root.join("A/Z.opus.moving"), "the only copy").unwrap();
+        let left = Leftovers::of(&outputs, &[PathBuf::from("A/Z.opus")]);
+        assert!(left.contains(Path::new("A/Z.opus.moving")));
+        left.clear(root);
+        assert!(!root.join("A/x.opus.part").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("A/Z.opus.moving")).unwrap(),
+            "the only copy"
+        );
     }
 
     #[test]

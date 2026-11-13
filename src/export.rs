@@ -422,7 +422,7 @@ pub fn export<R: Runner, W: Write>(
     } else {
         Some(settings_of(&manifest, options.settings)?)
     };
-    let mut state = State::load(&dirs.home)?;
+    let mut state = reconcile::found(dirs)?;
     let store = Store::scan(dirs)?;
     let writes_under = settings.as_ref().unwrap_or(&manifest.settings);
     let (output, target) = target_of(options, writes_under)?;

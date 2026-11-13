@@ -101,18 +101,9 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
 /// a sync would plan it, for every section to read.
 fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
     let manifest = Manifest::load(&dirs.home)?;
-    // The state as a sync takes it, in memory: a library folder named
-    // anew followed, copies with new times vouched for.
     let mut state = State::load(&dirs.home)?;
-    let moved_from = state
-        .library
-        .clone()
-        .filter(|l| !crate::platform::same_path(l, &dirs.library));
-    if moved_from.is_some() {
-        let earlier = reconcile::left_in(&state, &dirs.library);
-        reconcile::rehome(&mut state.outputs, earlier, &dirs.library);
-    }
-    reconcile::vouch_for_copies(&dirs.library, &mut state);
+    let moved_from = reconcile::as_found(dirs, &mut state, crate::history::Moves::Foresee)?
+        .map(|adopted| adopted.from);
     let store = Store::scan(dirs)?;
     // A source a sync fetches is there by the time it plans; one it does
     // not, as a file of the user's own or one whose fetch failed lately, is not.

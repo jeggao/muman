@@ -2925,6 +2925,43 @@ fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
 }
 
 #[test]
+fn a_library_folder_left_keeps_its_records_while_away_and_the_last_few_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let written = |stamp: u128| Written {
+        sources: vec![],
+        sidecars: Vec::new(),
+        plan: None,
+        stamp: Some(format!("1:{stamp}")),
+        digest: None,
+    };
+    let one = |stamp: u128| BTreeMap::from([(PathBuf::from("A/x.flac"), written(stamp))]);
+    let mut state = State {
+        library: Some(dir.path().join("now")),
+        outputs: one(100),
+        ..State::default()
+    };
+    for n in 1..=LEFT_KEPT + 1 {
+        let away = dir.path().join(format!("away{n}"));
+        state.left.insert(away, one(n as u128));
+    }
+    let emptied = dir.path().join("emptied");
+    std::fs::create_dir_all(&emptied).unwrap();
+    state.left.insert(emptied.clone(), one(99));
+    adopt(&mut state, &dir.path().join("next")).unwrap();
+    let kept: Vec<PathBuf> = state.left.keys().cloned().collect();
+    let mut expected: Vec<PathBuf> = (3..=LEFT_KEPT + 1)
+        .map(|n| dir.path().join(format!("away{n}")))
+        .chain([dir.path().join("now")])
+        .collect();
+    expected.sort();
+    assert_eq!(kept, expected, "away1 and away2 written into longest ago");
+    assert!(
+        !state.left.contains_key(&emptied),
+        "there, and holds none of its files"
+    );
+}
+
+#[test]
 fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("lib");
@@ -2943,7 +2980,7 @@ fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
             digest: None,
         },
     );
-    assert!(adopt(&mut state, &file, &mut Vec::new()).is_err());
+    assert!(adopt(&mut state, &file).is_err());
     assert_eq!(state.outputs.len(), 1);
     assert_eq!(state.library, Some(dir.path().join("music")));
 }

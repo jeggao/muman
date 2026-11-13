@@ -99,18 +99,11 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
     {
         said.warning(line)?;
     }
-    let mut state = State::load(&dirs.home)?;
-    let store = Store::scan(dirs)?;
-    let library = &dirs.library;
-    crate::reconcile::vouch_for_copies(library, &mut state);
     // As the next sync reads it: a file a stopped run moved before the
     // state could say so is where it went, and no file is missing.
-    crate::history::follow_moves(
-        &dirs.home,
-        library,
-        &mut state,
-        crate::history::Moves::Foresee,
-    );
+    let state = crate::reconcile::found(dirs)?;
+    let store = Store::scan(dirs)?;
+    let library = &dirs.library;
     // What a run under way is writing is no run's leftover.
     let busy = crate::atomic::Lock::busy(&dirs.home);
     if busy {

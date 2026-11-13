@@ -192,7 +192,7 @@ pub struct Read {
 impl Read {
     pub fn new(dirs: &Dirs, terms: &[String]) -> Result<Self> {
         let manifest = Manifest::load(&dirs.home)?;
-        let state = State::load(&dirs.home)?;
+        let state = crate::reconcile::found(dirs)?;
         let (views, resolved): (Vec<View>, Vec<_>) =
             query::resolved_views(&manifest, &state, &dirs.library)?
                 .into_iter()
@@ -399,7 +399,7 @@ impl Leaving {
                 continue;
             };
             let left: Vec<&Path> = match fate {
-                Pruned::LeftChanged => state.outputs[&path].files(&path).filter(there).collect(),
+                Pruned::LeftChanged => std::iter::once(path.as_path()).filter(there).collect(),
                 _ => fate.left().iter().map(PathBuf::as_path).collect(),
             };
             for file in fate.gone() {

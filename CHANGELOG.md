@@ -9,6 +9,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A rename of case a stopped run left halfway is finished, whatever
+  failed before it**: the next sync follows every move the run made, not
+  only those before the first that failed, as over a file held open, and
+  never deletes a `.moving`, which holds the song's only copy, where it
+  deleted the file and your edits to it with it.
+- **A library folder away at a switch is still muman's when pointed back
+  at**: what muman wrote in a folder not there, as a drive unplugged, is
+  kept until the folder holds none of those files or is not one of the
+  few folders it wrote into last, where it was forgotten at the next
+  switch and the folder's untouched files read as yours.
+- **A library put back without its times is judged once it is vouched
+  for**: every command, `remove`'s listing and the sync's plan among
+  them, takes the library as found before it judges any file, where
+  `remove` said a file stayed that the sync then deleted, and one sync
+  deleted a folder's `cover.jpg` the next wrote back.
+- **A `.part` of yours fails only a write that stages at its name**: a
+  change that writes no `.lrc`, as a new genre, goes ahead beside a
+  `<song>.lrc.part` of yours, where it failed with exit 4, `--force` too.
+- **"The library moved" counts files**, a song's and those beside it,
+  where it counted songs as files.
 - **A song half written stays muman's**: when its file cannot be
   replaced after its `.lrc` was, as a file a player holds open on
   Windows, the song is said half written and the next sync writes it

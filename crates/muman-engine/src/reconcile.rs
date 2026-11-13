@@ -5,7 +5,9 @@
 //! file muman wrote that no song makes now deleted.
 //!
 //! This module runs the steps in order; each is a module of its own:
-//! `measure` the sources, `keys` renamed or followed, `damage` noted,
+//! the library taken as found before any file of it is judged
+//! ([`as_found`], as every command takes it), `measure` the sources,
+//! `keys` renamed or followed, `damage` noted,
 //! each song resolved to its `plan`, what to do with its file decided
 //! (`decide`) by what is muman's (`owned`), the files moved and written
 //! (`write`), the rest pruned (`prune`), and for a dry run the `report`
@@ -54,8 +56,8 @@ pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
 pub use self::measure::{analyze_mixes, compare};
 pub use self::owned::{
-    adopt, changed_since_written, edited_since_written, left_in, rehome, sidecar_as_written,
-    vouch_for_copies,
+    Adopted, LEFT_KEPT, adopt, as_found, changed_since_written, edited_since_written, found,
+    rehome, sidecar_as_written, vouch_for_copies,
 };
 use self::plan::plan_awaiting;
 pub use self::plan::{
@@ -200,20 +202,22 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .transpose()?
         .filter(|q| !q.is_empty());
     let mut state = State::load(home)?;
-    if state
-        .library
-        .as_deref()
-        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
-    {
-        let moves = if opts.dry_run {
-            crate::history::Moves::Foresee
-        } else {
-            crate::history::Moves::Follow
-        };
-        crate::history::follow_moves(home, &dirs.library, &mut state, moves);
-        if let Some(run) = rec.run().filter(|_| !opts.dry_run) {
+    let same =
+        (state.library.as_deref()).is_some_and(|l| crate::platform::same_path(l, &dirs.library));
+    let moves = if opts.dry_run {
+        crate::history::Moves::Foresee
+    } else {
+        crate::history::Moves::Follow
+    };
+    if let Some(adopted) = as_found(dirs, &mut state, moves)? {
+        adopted.say(out)?;
+    }
+    if !opts.dry_run {
+        if let Some(run) = rec.run().filter(|_| same) {
             run.forget_unmade(&dirs.library);
         }
+        let moving = crate::history::moving(home);
+        crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
     }
     let store = Store::scan(dirs)?;
     let temp = crate::atomic::Scratch::new()?;
@@ -375,12 +379,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
     // Every song this sync fails, by its place in the list, with why, so
     // `check` names each until a sync writes it.
     let mut song_errors: Vec<(usize, String)> = Vec::new();
-    adopt(&mut state, &dirs.library, out)?;
-    vouch_for_copies(&dirs.library, &mut state);
-    if !opts.dry_run {
-        let moving = crate::history::moving(home);
-        crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
-    }
     let located: BTreeMap<SourceKey, Located> = listed
         .iter()
         .filter_map(|k| Some((k.clone(), store.locate(k)?)))

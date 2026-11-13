@@ -808,27 +808,47 @@ fn a_song_one_file_of_the_user_s_refuses_changes_none_of_its_files() {
 
 #[cfg(unix)]
 #[test]
-fn a_link_left_at_a_staged_name_is_not_written_through() {
+fn a_link_left_at_a_staged_name_fails_the_write_and_is_not_written_through() {
     let f = fixture();
     let folder = f.dir.path().join("lib/A/Record");
     fs::create_dir_all(&folder).unwrap();
     let elsewhere = f.dir.path().join("elsewhere");
     fs::write(&elsewhere, "not the library's").unwrap();
-    for name in ["Song.opus.part", "Song.lrc.part"] {
-        std::os::unix::fs::symlink(&elsewhere, folder.join(name)).unwrap();
-    }
-    let r = go(
+    std::os::unix::fs::symlink(&elsewhere, folder.join("Song.opus.part")).unwrap();
+    let e = go(
         &Fake::default(),
         &f,
         &plan(Format::Copy { codec: Codec::Opus }),
     )
-    .unwrap();
+    .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("A/Record/Song.opus.part is not muman's"),
+        "{e:#}"
+    );
     assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "not the library's");
-    assert_eq!(names(&r).len(), 1);
-    for file in std::iter::once(&r.audio).chain(&names(&r)) {
-        let meta = fs::symlink_metadata(f.dir.path().join("lib").join(file)).unwrap();
-        assert!(meta.file_type().is_file(), "{}", file.display());
-    }
+    assert!(fs::symlink_metadata(folder.join("Song.opus.part")).is_ok());
+}
+
+#[test]
+fn a_part_of_the_user_s_fails_only_a_write_that_stages_its_name() {
+    let f = fixture();
+    let built = plan(Format::Copy { codec: Codec::Opus });
+    let first = go(&Fake::default(), &f, &built).unwrap();
+    let folder = f.dir.path().join("lib/A/Record");
+    let mine = folder.join("Song.lrc.part");
+    fs::write(&mine, "mine").unwrap();
+    let mut retitled = built.clone();
+    retitled.tags[0] = ("TITLE".into(), vec!["Song, retitled".into()]);
+    retag_over(&Fake::default(), &f, &retitled, &first, false).unwrap();
+    assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
+
+    let e = go(&Fake::default(), &f, &built).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("A/Record/Song.lrc.part is not muman's"),
+        "{e:#}"
+    );
+    assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
+    assert_eq!(leftover_parts(&folder), [mine]);
 }
 
 #[test]

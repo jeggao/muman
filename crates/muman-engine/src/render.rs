@@ -7,14 +7,18 @@
 //!
 //! Every file is written as `<name>.part` and renamed into place, the
 //! audio last, so a player scanning the library never sees half a track.
-//! A `.part` is made anew, whatever was at its name removed first and the
-//! file created only if nothing took its place: a link left there by
-//! someone who may write the library folder would send the write
-//! elsewhere. ffmpeg, which opens its output itself, writes into a `.part`
-//! made so just before it runs. A song's files go into place through
-//! [`crate::library::put`] and [`crate::library::clear`], over or in
-//! place of only the files the sync claimed as muman's or took over,
-//! every one checked before any is changed ([`crate::library::claimed`]):
+//! A `.part` is made only where nothing is: the sync clears what its
+//! stopped runs left first ([`crate::library::Leftovers`]), so a file at
+//! the name is someone else's, a link that would send the write elsewhere
+//! among them, and the write that stages there fails, naming it. A write
+//! removes the `.part` files it staged, and only those, when it fails or
+//! a panic unwinds it, so a `.part` of the user's at a name it does not
+//! stage is nothing to it. ffmpeg, which opens its output itself, writes
+//! into a `.part` made so just before it runs. A song's files go into
+//! place through [`crate::library::put`] and [`crate::library::clear`],
+//! over or in place of only the files the sync claimed as muman's or
+//! took over, every one checked before any is changed
+//! ([`crate::library::claimed`]):
 //! a song one file refuses changes none, and keeps its file as its record
 //! says, never one written but recorded as it was. A rename that fails
 //! all the same once another file of the song is in place, as over a file
@@ -206,21 +210,47 @@ fn part(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// A new, empty file at `part`, whatever was there removed first.
-// Makes a song's staged file anew.
-#[expect(clippy::disallowed_methods)]
-fn stage(part: &Path) -> Result<fs::File> {
-    match fs::remove_file(part) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).with_context(|| format!("removing {}", part.display()));
+/// The `.part` files one write staged, each removed unless put in place:
+/// a write that fails, or a build that panics and unwinds, leaves none of
+/// them, and removes no file it did not make.
+#[derive(Debug, Default)]
+struct Staged(Vec<PathBuf>);
+
+impl Staged {
+    /// A new, empty file at `part`, in `library`, staged. A file already
+    /// there is refused, named: the sync cleared what its stopped runs
+    /// left first, so it is someone else's.
+    // Makes a song's staged file anew.
+    #[expect(clippy::disallowed_methods)]
+    fn stage(&mut self, library: &Path, part: &Path) -> Result<fs::File> {
+        let made = OpenOptions::new().write(true).create_new(true).open(part);
+        match made {
+            Ok(file) => {
+                self.0.push(part.to_path_buf());
+                Ok(file)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(anyhow!(
+                "{} is not muman's, and is in the way of writing it; move it aside",
+                crate::relpath::show(part.strip_prefix(library).unwrap_or(part))
+            )),
+            Err(e) => Err(e).with_context(|| format!("creating {}", part.display())),
         }
-        _ => {}
     }
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(part)
-        .with_context(|| format!("creating {}", part.display()))
+
+    /// Every file staged is put in place, none left to remove.
+    fn placed(mut self) {
+        self.0.clear();
+    }
+}
+
+impl Drop for Staged {
+    // Removes the staged files of a write that did not put them in place.
+    #[expect(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        for part in &self.0 {
+            let _ = fs::remove_file(part);
+        }
+    }
 }
 
 /// The inputs of one ffmpeg run, each file once.
@@ -281,8 +311,6 @@ fn audio_output(
 
 // The steps read in the order they run; split up, the order would be in the call sites.
 #[expect(clippy::too_many_lines)]
-// Removes a song's staged files when it fails.
-#[expect(clippy::disallowed_methods)]
 pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let made = job.parts;
     let locate = |key: &SourceKey| {
@@ -377,7 +405,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
 
     let input_paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
-    stage(&audio_part)?;
+    let mut staging = Staged::default();
+    staging.stage(job.library, &audio_part)?;
     let results = ffmpeg::run_outputs(runner, &input_paths, &outputs);
     let failed = |path: &Path| failure(&outputs, &results, path);
     let staged = (|| -> Result<Vec<PathBuf>> {
@@ -456,7 +485,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             failed,
             &mut problems,
         ));
-        stage_beside(job, (&rels, &parts), &held, &mut problems)
+        stage_beside(job, (&rels, &parts), &held, (&mut staging, &mut problems))
     })();
     let placed = staged.and_then(|written| {
         let (beside, changed) = put_beside(job, &parts, &rels, &written)?;
@@ -464,20 +493,14 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .map_err(|e| crate::library::half_written(e, changed))?;
         Ok(beside)
     });
-    match placed {
-        Ok(beside) => Ok(Rendered {
-            audio_bytes: size_of(&audio_path),
-            audio: audio_rel,
-            beside,
-            problems,
-        }),
-        Err(e) => {
-            for staged in std::iter::once(&audio_part).chain(&parts) {
-                let _ = fs::remove_file(staged);
-            }
-            Err(e)
-        }
-    }
+    let beside = placed?;
+    staging.placed();
+    Ok(Rendered {
+        audio_bytes: size_of(&audio_path),
+        audio: audio_rel,
+        beside,
+        problems,
+    })
 }
 
 /// Why the output of `outputs` writing `path` failed, by `results`.
@@ -489,14 +512,14 @@ fn failure(outputs: &[Output], results: &[Result<()>], path: &Path) -> Option<St
         .and_then(|(_, r)| r.as_ref().err().map(|e| format!("{e:#}")))
 }
 
-/// Each of `contents` staged at its file's `.part`, made anew: the files
-/// of `rels` staged. A folder's file at a name a file not muman's holds
-/// is left alone, said in `problems`.
+/// Each of `contents` staged at its file's `.part`, made anew into
+/// `staging`: the files of `rels` staged. A folder's file at a name a
+/// file not muman's holds is left alone, said in `problems`.
 fn stage_beside(
     job: &Job<'_>,
     (rels, parts): (&[PathBuf], &[PathBuf]),
     contents: &[Option<Vec<u8>>],
-    problems: &mut Vec<String>,
+    (staging, problems): (&mut Staged, &mut Vec<String>),
 ) -> Result<Vec<PathBuf>> {
     let mut staged = Vec::new();
     for ((rel, part), content) in rels.iter().zip(parts).zip(contents) {
@@ -510,7 +533,7 @@ fn stage_beside(
             ));
             continue;
         }
-        std::io::Write::write_all(&mut stage(part)?, content)
+        std::io::Write::write_all(&mut staging.stage(job.library, part)?, content)
             .with_context(|| format!("writing {}", part.display()))?;
         staged.push(rel.clone());
     }
@@ -624,8 +647,6 @@ fn embeddable(made: &Parts<'_>, text: &str, problems: &mut Vec<String>) -> Optio
 /// over the file `job`'s claim holds by [`Retagged::put`], once the files
 /// beside it are, so a song whose other files fail keeps its file as it
 /// was, and as its record says.
-// Removes a song's staged file when its tags fail.
-#[expect(clippy::disallowed_methods)]
 pub(crate) fn retag<R: Runner>(
     runner: &R,
     job: &Job<'_>,
@@ -650,7 +671,8 @@ pub(crate) fn retag<R: Runner>(
     let staged = part(&path);
     // Into a new file, as a song written anew is: a copy would carry over
     // a read-only mode and refuse the tags.
-    let mut into = stage(&staged)?;
+    let mut staging = Staged::default();
+    let mut into = staging.stage(library, &staged)?;
     std::io::copy(
         &mut fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?,
         &mut into,
@@ -695,18 +717,14 @@ pub(crate) fn retag<R: Runner>(
         set_opus_header(&staged, made.tags.opus_header)?;
         Ok(verify(&staged, &tags, covered))
     })();
-    match result {
-        Ok(verified) => Ok(Retagged {
-            staged: Some(staged),
-            audio: audio.to_path_buf(),
-            beside: beside.to_vec(),
-            problems: problems.into_iter().chain(verified).collect(),
-        }),
-        Err(e) => {
-            let _ = fs::remove_file(&staged);
-            Err(e)
-        }
-    }
+    let verified = result?;
+    staging.placed();
+    Ok(Retagged {
+        staged: Some(staged),
+        audio: audio.to_path_buf(),
+        beside: beside.to_vec(),
+        problems: problems.into_iter().chain(verified).collect(),
+    })
 }
 
 /// A song's file [`retag`] staged with its new tags, not yet in place:
@@ -851,8 +869,6 @@ fn size_of(path: &Path) -> u64 {
 /// last build left that it has none of now gone: over or in place of only
 /// the files `claim` holds, all checked before any is changed, a file of
 /// its `folder` at a name a file not muman's holds left alone, said.
-// Removes a song's staged files when they cannot be put in place.
-#[expect(clippy::disallowed_methods)]
 pub fn place(
     from: &Path,
     rendered: &Rendered,
@@ -868,17 +884,18 @@ pub fn place(
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let staged = part(&to);
-        let copied = stage(&staged).and_then(|mut into| {
-            let mut made = fs::File::open(from.join(rel))?;
-            std::io::copy(&mut made, &mut into)?;
-            Ok(())
-        });
-        copied
-            .and_then(|()| crate::library::put(library, &staged, rel, claim))
-            .inspect_err(|_| {
-                let _ = fs::remove_file(&staged);
+        let mut staging = Staged::default();
+        staging
+            .stage(library, &staged)
+            .and_then(|mut into| {
+                let mut made = fs::File::open(from.join(rel))?;
+                std::io::copy(&mut made, &mut into)?;
+                Ok(())
             })
-            .with_context(|| format!("copying {} into the library", rel.display()))
+            .and_then(|()| crate::library::put(library, &staged, rel, claim))
+            .with_context(|| format!("copying {} into the library", rel.display()))?;
+        staging.placed();
+        Ok(())
     };
     let (left, beside): (Vec<_>, Vec<_>) = rendered
         .beside
@@ -940,8 +957,6 @@ pub struct Beside {
 /// nothing is written. Those of `keep`, as they would be written already,
 /// are left as they are, and nothing is made for them. A file the last build left beside it that
 /// the plan has none of goes, as [`render`] clears it.
-// Removes the staged files beside a song when they cannot be put in place.
-#[expect(clippy::disallowed_methods)]
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<Beside> {
     let made = job.parts;
     let mut problems = Vec::new();
@@ -1002,21 +1017,15 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<
         .filter(|(rel, _)| !keep.contains(rel))
         .unzip();
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
-    let placed = stage_beside(job, (&rels, &parts), &held, &mut problems)
-        .and_then(|written| put_beside(job, &parts, &rels, &written));
-    match placed {
-        Ok((files, changed)) => Ok(Beside {
-            files,
-            problems,
-            changed,
-        }),
-        Err(e) => {
-            for staged in &parts {
-                let _ = fs::remove_file(staged);
-            }
-            Err(e)
-        }
-    }
+    let mut staging = Staged::default();
+    let written = stage_beside(job, (&rels, &parts), &held, (&mut staging, &mut problems))?;
+    let (files, changed) = put_beside(job, &parts, &rels, &written)?;
+    staging.placed();
+    Ok(Beside {
+        files,
+        problems,
+        changed,
+    })
 }
 
 /// The vendor string ffmpeg names its Vorbis comments with, bit-exact.
