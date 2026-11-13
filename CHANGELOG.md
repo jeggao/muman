@@ -7,7 +7,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **A lossy copy is told made from a narrower one by the treble each
+  holds**: an encoder keeps each band's energy, so a copy holding more
+  treble above a narrower copy's lowpass than its encoder rounds by
+  keeps its width, and an Opus copy of a master wins over an MP3 or AAC
+  of it cut at 16 kHz, where it lost; an Opus copy holding no more
+  counts no wider, however much wider it measures. `status` says what
+  the treble showed. Every source's audio is decoded once more to
+  measure it.
+
 ### Fixed
+
+- **An Opus copy is no longer replaced by an AAC copy made from it**:
+  an Opus copy at 160 kbit/s holding treble an AAC copy at 128 kbit/s
+  made from it lacks is no longer counted as filled from that AAC and
+  ranked after it.
 
 - **A run stopped in its moves after the library's times changed, or
   after the library folder moved, is followed by the next**: a sync

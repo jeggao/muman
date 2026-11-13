@@ -22,7 +22,9 @@
 //!
 //! 1. **Analysis**, here: one decode, many analyzers. Loudness
 //!    ([`crate::loudness`]) is the first, and the peaks dynamics are
-//!    ranked by ([`crate::dynamics`]) the second; silence at the ends, DC
+//!    ranked by ([`crate::dynamics`]) the second, and the treble each
+//!    band holds, block by block, that tells a lossy copy made from
+//!    another ([`crate::treble`]), the third; silence at the ends, DC
 //!    offset or tempo would each be one more [`Kind`], one field of
 //!    [`Analysis`] and a module of their own. Integrity
 //!    ([`crate::integrity`]) is measured by the pass itself, which counts
@@ -46,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use crate::dynamics;
 use crate::integrity;
 use crate::loudness;
+use crate::treble;
 
 /// What is analyzed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +56,7 @@ pub enum Kind {
     Loudness,
     Integrity,
     Dynamics,
+    Treble,
 }
 
 impl Kind {
@@ -64,6 +68,7 @@ impl Kind {
             Self::Loudness => loudness::METHOD,
             Self::Integrity => integrity::METHOD,
             Self::Dynamics => dynamics::METHOD,
+            Self::Treble => treble::METHOD,
         }
     }
 
@@ -73,7 +78,7 @@ impl Kind {
     pub fn mixed(self) -> bool {
         match self {
             Self::Loudness => true,
-            Self::Integrity | Self::Dynamics => false,
+            Self::Integrity | Self::Dynamics | Self::Treble => false,
         }
     }
 }
@@ -97,6 +102,8 @@ pub struct Analysis {
     pub integrity: Option<Measured<integrity::Measure>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamics: Option<Measured<dynamics::Measure>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treble: Option<Measured<treble::Measure>>,
 }
 
 impl Analysis {
@@ -112,6 +119,7 @@ impl Analysis {
                     Kind::Loudness => self.loudness.as_ref().map(|m| m.method.as_str()),
                     Kind::Integrity => self.integrity.as_ref().map(|m| m.method.as_str()),
                     Kind::Dynamics => self.dynamics.as_ref().map(|m| m.method.as_str()),
+                    Kind::Treble => self.treble.as_ref().map(|m| m.method.as_str()),
                 };
                 method != Some(kind.method())
             })
@@ -145,6 +153,15 @@ impl Analysis {
             .and_then(|m| m.value.as_ref())
     }
 
+    /// The treble measured, if it was by today's method.
+    #[must_use]
+    pub fn treble(&self) -> Option<&treble::Measure> {
+        self.treble
+            .as_ref()
+            .filter(|m| m.method == treble::METHOD)
+            .and_then(|m| m.value.as_ref())
+    }
+
     /// `newer` over this analysis: each kind it took replaces this one's.
     pub fn merge(&mut self, newer: Self) {
         if newer.loudness.is_some() {
@@ -156,20 +173,27 @@ impl Analysis {
         if newer.dynamics.is_some() {
             self.dynamics = newer.dynamics;
         }
+        if newer.treble.is_some() {
+            self.treble = newer.treble;
+        }
     }
 }
 
 /// The kinds the settings want measured: integrity always, loudness as
-/// `loudness` measures it, and peaks where `dynamics` ranks sources by
-/// them, which needs their loudness too.
+/// `loudness` measures it, peaks where `dynamics` ranks sources by them,
+/// which needs their loudness too, and treble where `treble`, bandwidth,
+/// ranks them.
 #[must_use]
-pub fn wanted(loudness: &crate::loudness::Loudness, dynamics: bool) -> Vec<Kind> {
+pub fn wanted(loudness: &crate::loudness::Loudness, dynamics: bool, treble: bool) -> Vec<Kind> {
     let mut kinds = vec![Kind::Integrity];
     if loudness.measured() {
         kinds.push(Kind::Loudness);
         if dynamics {
             kinds.push(Kind::Dynamics);
         }
+    }
+    if treble {
+        kinds.push(Kind::Treble);
     }
     kinds
 }
@@ -196,6 +220,7 @@ fn start(kind: Kind, stream: &Stream) -> Option<Box<dyn Analyzer>> {
     match kind {
         Kind::Loudness => loudness::Meter::new(stream).map(|m| Box::new(m) as Box<dyn Analyzer>),
         Kind::Dynamics => Some(Box::new(dynamics::Meter::new(stream))),
+        Kind::Treble => Some(Box::new(treble::Meter::new(stream))),
         Kind::Integrity => None,
     }
 }
@@ -418,6 +443,12 @@ impl Pass {
                         value: None,
                     });
                 }
+                Kind::Treble => {
+                    analysis.treble.get_or_insert(Measured {
+                        method,
+                        value: None,
+                    });
+                }
                 Kind::Integrity => {
                     let rate = self.header.stream.map(|s| s.rate);
                     let value = integrity::measure(rate, self.counted, self.unfinite, found);
@@ -568,10 +599,11 @@ mod tests {
             mode: crate::loudness::LoudnessMode::Off,
             ..crate::loudness::Loudness::default()
         };
-        assert_eq!(wanted(&off, true), [Kind::Integrity]);
+        assert_eq!(wanted(&off, true, false), [Kind::Integrity]);
+        assert_eq!(wanted(&off, true, true), [Kind::Integrity, Kind::Treble]);
         let on = crate::loudness::Loudness::default();
-        assert_eq!(wanted(&on, false), [Kind::Integrity, Kind::Loudness]);
-        assert!(wanted(&on, true).contains(&Kind::Dynamics));
+        assert_eq!(wanted(&on, false, false), [Kind::Integrity, Kind::Loudness]);
+        assert!(wanted(&on, true, false).contains(&Kind::Dynamics));
         let old = Analysis {
             loudness: Some(Measured {
                 method: loudness::METHOD.into(),
@@ -579,10 +611,16 @@ mod tests {
             }),
             integrity: None,
             dynamics: None,
+            treble: None,
         };
         assert_eq!(
-            old.stale(&[Kind::Integrity, Kind::Loudness, Kind::Dynamics]),
-            [Kind::Integrity, Kind::Dynamics]
+            old.stale(&[
+                Kind::Integrity,
+                Kind::Loudness,
+                Kind::Dynamics,
+                Kind::Treble
+            ]),
+            [Kind::Integrity, Kind::Dynamics, Kind::Treble]
         );
         let mut p = Pass::new(vec![Kind::Integrity]);
         p.take(b"not audio at all");
@@ -590,5 +628,6 @@ mod tests {
         assert_eq!(unread.stale(&[Kind::Integrity]), [] as [Kind; 0]);
         assert!(unread.integrity().is_none());
         assert!(!Kind::Integrity.mixed() && Kind::Loudness.mixed() && !Kind::Dynamics.mixed());
+        assert!(!Kind::Treble.mixed());
     }
 }

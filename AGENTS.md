@@ -91,7 +91,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   similar.rs, picture.rs   names and texts compared in any script; perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
-  analysis.rs       the whole of a source's audio, one decode, every analyzer
+  analysis.rs, treble.rs   the whole of a source's audio, one decode, every analyzer; the treble in each band
   integrity.rs      whether a source's audio is all there: cut off or missing
   loudness.rs, dynamics.rs   EBU R128 loudness and a song's gains; how high its peaks stand
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'

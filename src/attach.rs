@@ -1408,6 +1408,7 @@ pub fn attach<R: Runner, W: Write>(
             analyses: crate::analysis::wanted(
                 &manifest.settings.loudness,
                 manifest.settings.audio.pick.dynamics.enabled,
+                manifest.settings.audio.pick.bandwidth.weight() != 0,
             ),
         };
         reconcile::measure(

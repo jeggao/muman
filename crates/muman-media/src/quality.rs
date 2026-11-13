@@ -20,8 +20,11 @@
 //!   fills past it, where that stands 20 dB down; where it stands higher,
 //!   as at 128 kbit/s and under it does, Opus's own lowpass, and ranking
 //!   counts the copy no wider than one it may have been made from
-//!   ([`fill_hz`]). A recording whose treble fades into its noise floor
-//!   shows no wall and measures full, and so does one whose notes'
+//!   ([`fill_hz`]). Which copy was made from which, the treble each holds
+//!   above the narrower one's wall tells, as an encoder keeps each band's
+//!   energy ([`excess_db`], measured by [`crate::treble`]). A recording
+//!   whose treble fades into its noise floor shows no wall and measures
+//!   full, and so does one whose notes'
 //!   partials end low over a noise floor that runs on to the top. Where
 //!   the audio clips, only frames holding no sample at its clip level
 //!   count, while any excerpt holds one: clipping splatters harmonics
@@ -382,6 +385,127 @@ pub fn carried_hz(bandwidth_hz: f64, codec: &str, profile: Option<&str>, sample_
     } else {
         bandwidth_hz
     }
+}
+
+/// Where the bands Opus codes from 4 kHz up start, and the top one's end
+/// at 48 kHz (RFC 6716, Table 55). Opus codes each band's energy and
+/// spreads it over the band: whatever the copy it was made from held
+/// anywhere in a band, an Opus copy holds the same energy over the whole
+/// of it, so the region it is compared over starts at the foot of the
+/// band its source's wall falls in ([`excess_db`]). Starting 5.1 kHz under
+/// the wall, where [`OPUS_FILL_HZ`] reaches, would have released 2% of the
+/// siblings that hold real treble.
+pub const OPUS_BANDS_HZ: [f64; 9] = [
+    4000.0, 4800.0, 5600.0, 6800.0, 8000.0, 9600.0, 12_000.0, 15_600.0, 20_000.0,
+];
+
+/// How much more treble a lossy copy may hold than a copy it was made
+/// from, in dB of its energy over [`crate::treble::REFERENCE_HZ`]'s, from
+/// the region [`excess_db`] sums: a copy holding more holds sound its
+/// source lacked, so it was made from another.
+///
+/// Measured on 29 masters, 8 full-band live FLACs and 13 netlabel MP3s
+/// reaching 20.3 to 22 kHz, cut 30 s long, each made 12 first-generation
+/// copies (MP3 at 128 kbit/s, one cut at 16 kHz, and V0; AAC at 128 and
+/// 256 kbit/s, one at 128 cut at 16 kHz; Vorbis at quality 4; Opus at 64
+/// to 192 kbit/s), and six of those made again into Opus at 64 to 192
+/// kbit/s, AAC at 128 and 256, Vorbis at quality 5 and MP3 at 320; and on
+/// 43 corpus files and 11 copies of each. Of the 466 copies measuring
+/// wider than the copy they were made from by more than 517 Hz, the most
+/// any held beyond it, by its codec:
+///
+/// | Copy | Most held beyond its source |
+/// |---|---|
+/// | Opus at 64 kbit/s | 1.64 dB (0.68 on corpus files) |
+/// | Opus at 96 kbit/s | 1.32 dB |
+/// | Opus at 128 kbit/s | 0.37 dB |
+/// | Opus at 160 kbit/s | 0.09 dB |
+/// | Opus at 192 kbit/s | 0.07 dB |
+/// | AAC at 128 kbit/s | 1.78 dB |
+/// | AAC at 256 kbit/s | 0.34 dB |
+/// | Vorbis | 0.01 dB |
+/// | MP3 at 320 kbit/s | 0.0 dB |
+///
+/// 99% held 0.82 dB or less. Of first-generation siblings, an Opus copy
+/// against a narrower one of the same master, those held beyond it what
+/// the master held: an MP3 cut at 16 kHz, whose master held a median
+/// 8.7 dB more, was held to by 140 of 145 Opus copies at this tolerance;
+/// MP3 at 128 kbit/s, 5.7 dB, 140; AAC cut at 16 kHz, 3.1 dB, 81; AAC at
+/// 128 kbit/s, 1.7 dB, 30; Vorbis at quality 4, 0.2 dB, none. Of the 694
+/// siblings whose master held 3 dB or more beyond the narrower copy, 679
+/// were told apart.
+pub const HOLDS_MORE_DB: f64 = 2.5;
+
+/// [`HOLDS_MORE_DB`] for an Opus copy of [`FINE_OPUS_KBPS`] or more,
+/// which codes each band's energy more finely: the 72 such copies of
+/// [`HOLDS_MORE_DB`]'s measures held 0.043 dB beyond their source at the
+/// most. At this tolerance, Opus at 160 and 192 kbit/s was told from 28
+/// of 29 siblings in each of MP3 at 128 kbit/s, cut at 16 kHz or not, and
+/// AAC at 128 kbit/s, cut or not, where [`HOLDS_MORE_DB`] told none.
+pub const HOLDS_MORE_FINE_DB: f64 = 0.5;
+
+/// The stream rate from which an Opus copy is held to
+/// [`HOLDS_MORE_FINE_DB`], its bytes over its length. Not a rate that
+/// says what an Opus copy carries: YouTube's Opus streams run 120 to
+/// 160 kbit/s, and a cap would split them at random.
+pub const FINE_OPUS_KBPS: f64 = 144.0;
+
+/// The tolerance [`excess_db`] is held to for a copy in `codec` of `kbps`:
+/// [`HOLDS_MORE_FINE_DB`] for Opus of [`FINE_OPUS_KBPS`] or more, else
+/// [`HOLDS_MORE_DB`].
+#[must_use]
+pub fn holds_more_db(codec: &str, kbps: Option<f64>) -> f64 {
+    if codec == "opus" && kbps.is_some_and(|k| k >= FINE_OPUS_KBPS) {
+        HOLDS_MORE_FINE_DB
+    } else {
+        HOLDS_MORE_DB
+    }
+}
+
+/// How much more treble a copy B holds than a narrower copy A of its
+/// recording, from where.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Excess {
+    /// Where the region summed starts.
+    pub from_hz: f64,
+    /// B's energy there over A's, each over its own from 1 to 8 kHz.
+    pub db: f64,
+}
+
+/// What a copy B in `codec_b` holds beyond a narrower copy A whose wall
+/// stands at `wall_a`, from A's measure `a` and B's `b`, over the stretch
+/// both play ([`crate::treble::Shared`]): B's energy from where the
+/// region starts up over A's, each over its own energy from 1 to 8 kHz,
+/// in dB. The region starts, for an Opus copy, at the foot of the Opus
+/// band A's wall stands in ([`OPUS_BANDS_HZ`]), from the band edge at or
+/// under it ([`crate::treble::edge_under_hz`]), and for any other codec
+/// 1 kHz under A's wall, where AAC at 256 kbit/s over AAC at 128 kbit/s
+/// was told apart in 26 of 29 masters, against 6 from Opus's band, and
+/// every AAC transcode held 1.81 dB more at the most. `None` where the
+/// two share no whole block or either holds nothing to compare by.
+#[must_use]
+pub fn excess_db(
+    a: &crate::treble::Measure,
+    b: &crate::treble::Measure,
+    shared: &crate::treble::Shared,
+    wall_a: f64,
+    codec_b: &str,
+) -> Option<Excess> {
+    let foot = OPUS_BANDS_HZ[..OPUS_BANDS_HZ.len() - 1]
+        .iter()
+        .rev()
+        .find(|e| **e <= wall_a)
+        .filter(|_| codec_b == "opus");
+    let from_hz = match foot {
+        Some(foot) => crate::treble::edge_under_hz(*foot),
+        None => crate::treble::edge_hz(wall_a - 1000.0),
+    };
+    let (in_a, in_b) = shared.spans();
+    let (a, b) = (a.share(in_a, from_hz)?, b.share(in_b, from_hz)?);
+    (a > 0.0 && b > 0.0).then(|| Excess {
+        from_hz,
+        db: 10.0 * (b / a).log10(),
+    })
 }
 
 /// What lossless audio's measures show it holds less of than it declares.
@@ -972,10 +1096,10 @@ fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
 /// The twiddle factors of each stage of [`fft`], as `(cos, sin)`, each
 /// stage's by the recurrence from 1 that walks them, computed once for
 /// every transform of a size rather than once per butterfly.
-struct Twiddles(Vec<Vec<(f64, f64)>>);
+pub(crate) struct Twiddles(Vec<Vec<(f64, f64)>>);
 
 impl Twiddles {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         let mut stages = Vec::new();
         let mut len = 2;
         while len <= n {
@@ -1000,7 +1124,7 @@ impl Twiddles {
 
 /// An in-place radix-2 FFT; `re.len()` must be a power of two, and
 /// `twiddles` made for it.
-fn fft(re: &mut [f64], im: &mut [f64], twiddles: &Twiddles) {
+pub(crate) fn fft(re: &mut [f64], im: &mut [f64], twiddles: &Twiddles) {
     let n = re.len();
     let mut j = 0;
     for i in 1..n {
@@ -1415,6 +1539,70 @@ mod tests {
             .flat_map(|(l, r)| [*l as f32, *r as f32])
             .collect();
         Segment::new(2, samples)
+    }
+
+    /// `blocks` blocks of a source at 48 kHz, each band holding `density`
+    /// of each Hz it spans.
+    fn treble(blocks: usize, density: impl Fn(f64) -> f64) -> crate::treble::Measure {
+        use crate::treble::EDGES_HZ;
+        let bands: Vec<f64> = (0..EDGES_HZ.len() - 1)
+            .map(|i| {
+                let (lo, hi) = (f64::from(EDGES_HZ[i]), f64::from(EDGES_HZ[i + 1]));
+                let steps = ((hi - lo) / 10.0) as usize;
+                (0..steps)
+                    .map(|k| 10.0 * density(lo + 10.0 * k as f64 + 5.0))
+                    .sum::<f64>()
+            })
+            .collect();
+        crate::treble::Measure::of_powers(bands.len(), &bands.repeat(blocks))
+    }
+
+    #[test]
+    fn a_transcode_holds_no_more_treble_than_its_source_and_a_sibling_does() {
+        let cut = |f: f64| if f < 16_000.0 { 1.0 } else { 0.0 };
+        let mp3 = treble(30, cut);
+        // An Opus copy of it spreads the energy its top band held from
+        // 15.6 to 16 kHz over the whole band, to 20 kHz.
+        let spread = |f: f64| match f {
+            f if f < 15_600.0 => 1.0,
+            f if f < 20_000.0 => 400.0 / 4400.0,
+            _ => 0.0,
+        };
+        let transcode = treble(31, spread);
+        let sibling = treble(31, |f| if f < 20_000.0 { 1.0 } else { 0.0 });
+        let shared = crate::treble::Shared {
+            offset_ms: 2000.0,
+            stretch: 1.0,
+            a_ms: 60_000.0,
+            b_ms: 62_000.0,
+        };
+        let made = excess_db(&mp3, &transcode, &shared, 16_125.0, "opus").unwrap();
+        assert!((made.from_hz - 15_500.0).abs() < 1e-9, "{made:?}");
+        assert!(made.db.abs() < 0.1, "{made:?}");
+        let apart = excess_db(&mp3, &sibling, &shared, 16_125.0, "opus").unwrap();
+        assert!(apart.db > 9.0, "{apart:?}");
+        assert!(made.db <= holds_more_db("opus", Some(160.0)));
+        assert!(apart.db > holds_more_db("opus", Some(64.0)));
+        let other = excess_db(&mp3, &sibling, &shared, 16_125.0, "vorbis").unwrap();
+        assert!(
+            (other.from_hz - 15_000.0).abs() < 1e-9,
+            "1 kHz under the wall, to the nearest edge: {other:?}"
+        );
+        assert!(other.db > HOLDS_MORE_DB, "{other:?}");
+        let apart_in_time = crate::treble::Shared {
+            offset_ms: 60_500.0,
+            ..shared
+        };
+        assert!(excess_db(&mp3, &sibling, &apart_in_time, 16_125.0, "opus").is_none());
+    }
+
+    #[test]
+    fn opus_is_held_finely_from_its_fine_rate_on() {
+        let held = |codec: &str, kbps: Option<f64>| holds_more_db(codec, kbps).to_bits();
+        assert_eq!(held("opus", Some(160.0)), HOLDS_MORE_FINE_DB.to_bits());
+        assert_eq!(held("opus", Some(128.0)), HOLDS_MORE_DB.to_bits());
+        assert_eq!(held("opus", None), HOLDS_MORE_DB.to_bits());
+        assert_eq!(held("aac", Some(256.0)), HOLDS_MORE_DB.to_bits());
     }
 
     #[test]

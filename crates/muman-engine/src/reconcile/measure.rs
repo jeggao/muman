@@ -107,8 +107,11 @@ fn unmixed(
     state: &State,
     (settings, fitted): (&crate::settings::Settings, bool),
 ) -> (Vec<crate::analysis::Kind>, Vec<Unmixed>) {
-    let mut wanted =
-        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
+    let mut wanted = crate::analysis::wanted(
+        &settings.loudness,
+        settings.audio.pick.dynamics.enabled,
+        settings.audio.pick.bandwidth.weight() != 0,
+    );
     wanted.retain(|k| k.mixed());
     if wanted.is_empty() {
         return (wanted, Vec::new());
@@ -171,8 +174,11 @@ pub(super) fn pending(
     let keys = manifest.keys();
     let settings = &manifest.settings;
     let now = state::now_secs();
-    let analyses =
-        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
+    let analyses = crate::analysis::wanted(
+        &settings.loudness,
+        settings.audio.pick.dynamics.enabled,
+        settings.audio.pick.bandwidth.weight() != 0,
+    );
     let fitted = settings.library.max_size.is_some();
     let moving = |l: &Located| {
         (state.facts.get(&l.key))

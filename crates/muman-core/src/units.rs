@@ -454,6 +454,14 @@ pub fn stream_bytes(kbps: f64, seconds: f64) -> f64 {
     data.get::<information::byte>()
 }
 
+/// The rate in kbit/s at which `bytes` stream over `seconds`.
+#[must_use]
+pub fn stream_kbps(bytes: f64, seconds: f64) -> f64 {
+    let data = Information::new::<information::byte>(bytes);
+    let rate: InformationRate = (data / Seconds::new::<time::second>(seconds)).into();
+    rate.get::<information_rate::kilobit_per_second>()
+}
+
 /// Parts per million as a fraction.
 #[must_use]
 pub fn ratio_of_ppm(ppm: f64) -> f64 {
@@ -774,6 +782,7 @@ mod tests {
         assert!((minutes_of_seconds(90.0) - 1.5).abs() < 1e-12);
         assert!((khz_of_hz(19_810.0) - 19.81).abs() < 1e-12);
         assert!((stream_bytes(160.0, 60.0) - 1_200_000.0).abs() < 1e-6);
+        assert!((stream_kbps(1_200_000.0, 60.0) - 160.0).abs() < 1e-9);
         assert!((ratio_of_ppm(1500.0) - 0.0015).abs() < 1e-15);
         assert!((ppm_of_ratio(0.0015) - 1500.0).abs() < 1e-9);
     }

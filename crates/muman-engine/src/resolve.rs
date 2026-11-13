@@ -95,17 +95,31 @@
 //! wider than it may come from a better source, though of these the Opus
 //! copies at 96 kbit/s measured wider in 17. A lossy copy counts no wider
 //! either than any copy of its recording, lossy or lossless, it may have
-//! been made from: one narrower by no more than its codec fills past a
-//! lowpass it was given ([`crate::quality::fill_hz`]), up to its top band
-//! for Opus, past its own lowpass for AAC, and
-//! [`crate::quality::SMEAR_BANDS`] for any other, whose noise moves the
-//! wall of a lowpass by as much; and of two copies that count alike, one
-//! narrowed to the other by more than that noise ranks after it, so an
-//! Opus or AAC transcode never wins over the file it may have been made
-//! from by a tie-break. Which was made from which no measure says: of a 64 kbit/s
-//! Opus copy measuring 20.6 kHz and its 128 kbit/s MP3 at 16.9, the MP3
-//! wins whichever came first, while an MP3 at 14.8 kHz, from which an
-//! Opus copy would have measured 15.75, bounds nothing. Whole steps alone
+//! been made from ([`made_from`]). An encoder keeps each band's energy,
+//! so what a copy holds above a narrower one's wall, beside what the
+//! narrower holds there, each over its own energy from 1 to 8 kHz, says
+//! whether it was made from it ([`crate::quality::excess_db`]): over 29
+//! masters, a master held a median 8.7 dB more there than an MP3 of it
+//! cut at 16 kHz, and an Opus copy of the master as much, where an Opus
+//! copy of that MP3 held nothing more. A copy holding more than its encoder rounds by was not,
+//! and keeps its width; an Opus copy holding no more was, however much
+//! wider it measures. A copy in another codec was made from it only
+//! where it is also narrower by no more than its codec fills past a
+//! lowpass it was given ([`crate::quality::fill_hz`]), past its own
+//! lowpass for AAC and [`crate::quality::SMEAR_BANDS`] for any other,
+//! whose noise moves the wall of a lowpass by as much. Copies whose
+//! treble was not measured, or that share no whole block of it, are
+//! held to that fill alone, up to its top band for Opus. Of two copies
+//! that count alike, one narrowed to the other by more than an encoder's
+//! noise ranks after it, so an Opus or AAC transcode never wins over the
+//! file it may have been made from by a tie-break. Which of two copies
+//! holding the same treble was made from which no measure says: of a
+//! 64 kbit/s Opus copy of a 128 kbit/s MP3, the MP3 wins whichever came
+//! first, and so does an AAC copy at 128 kbit/s made from an Opus copy
+//! of a master holding nothing above the AAC's lowpass; while an MP3 at
+//! 320 kbit/s made from a Vorbis copy at 18.8 kHz, measuring 22.05 kHz,
+//! keeps its width, as a source measuring wider than its transcode does
+//! ([`made_from`]). Whole steps alone
 //! do not absorb an encoder's noise, two near-equals straddling a step's
 //! edge a step apart: a Vorbis copy of an MP3 measured 19.12 kHz to its
 //! 18.95, a step wider, though above 19 kHz both held the same. HE-AAC
@@ -1426,6 +1440,8 @@ struct Scored<'a> {
     beyond: Option<i64>,
     /// The most of the song another source plays on past its cut.
     lacks: i64,
+    /// What the treble it holds said against a narrower copy ([`Held`]).
+    held: Option<String>,
 }
 
 /// Each audio source of another recording than the chosen audio's, or at
@@ -1480,7 +1496,10 @@ fn pick_audio(
             let unmatched = beyond
                 .map(|ms| ms + lacks.max(missing))
                 .or_else(|| any_missing.then_some(missing));
-            let (q, made_from) = bounded(facts, &compared, &audible).unzip();
+            let (q, made_from, held) = match bounded(facts, &compared, &audible) {
+                Some((q, filled, held)) => (Some(q), Some(filled), held),
+                None => (None, None, None),
+            };
             let w = &input.audio.pick;
             let [unknown, sum] = audio_score(w, unmatched, q, facts);
             let rank: Rank = vec![
@@ -1499,6 +1518,7 @@ fn pick_audio(
                 rank,
                 beyond,
                 lacks,
+                held: held.map(|h| h.said()),
             }
         })
         .collect();
@@ -1680,6 +1700,7 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
         )]
         .into_iter()
         .chain(flagged(audio))
+        .chain(chosen.held.clone())
         .collect::<Vec<_>>()
         .join(", "),
         None => "not measured".to_string(),
@@ -1711,15 +1732,15 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
 /// what clipping adds above a lowpass is no sound of the recording, nor
 /// what an encoder fills in above it, and a step of bandwidth outweighs
 /// all of clipping and every tie-break. Lossy, it counts no wider either
-/// than any copy it may have been made from, one narrower by no more
-/// than its codec fills ([`crate::quality::fill_hz`]); and with it,
-/// whether such a copy narrowed it by more than an encoder's noise moves
-/// a lowpass, a fill that copy then ranks ahead of.
-fn bounded(
+/// than any narrower copy it may have been made from ([`made_from`]);
+/// and with it, whether such a copy narrowed it by more than an
+/// encoder's noise moves a lowpass, a fill that copy then ranks ahead
+/// of, and what the treble each holds said ([`Held`]).
+fn bounded<'a>(
     facts: &Facts,
-    compared: &[&Aligned],
+    compared: &[&'a Aligned],
     audible: &[(usize, &SourceKey, &Facts)],
-) -> Option<(AudioQuality, bool)> {
+) -> Option<(AudioQuality, bool, Option<Held<'a>>)> {
     let audio = facts.audio.as_ref()?;
     let q = audio.quality?;
     let lossy = !audio.is_lossless();
@@ -1733,32 +1754,152 @@ fn bounded(
     };
     let measured = carried(audio, &q);
     let others = || {
-        compared
-            .iter()
-            .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
-            .filter_map(|(_, _, facts)| {
-                Some((facts.audio.as_ref()?, facts.audio.as_ref()?.quality?))
-            })
+        compared.iter().filter_map(|a| {
+            let (_, _, other) = audible.iter().find(|(_, key, _)| **key == a.b)?;
+            let audio = other.audio.as_ref()?;
+            Some((*a, *other, audio, audio.quality?))
+        })
     };
     let cleaner = others()
-        .filter(|(audio, _)| audio.is_lossless() && !audio.flags().band_limited)
-        .filter(|(_, other)| lossy || other.clipping < q.clipping)
-        .map(|(_, other)| other.bandwidth_hz)
+        .filter(|(_, _, audio, _)| audio.is_lossless() && !audio.flags().band_limited)
+        .filter(|(_, _, _, other)| lossy || other.clipping < q.clipping)
+        .map(|(_, _, _, other)| other.bandwidth_hz)
         .reduce(f64::max);
-    let floor = measured - crate::quality::fill_hz(&audio.codec, audio.sample_rate);
-    let made_from = others()
+    let smear = crate::quality::smear_hz(audio.sample_rate);
+    let judged: Vec<(f64, bool, Option<Held<'a>>)> = others()
         .filter(|_| lossy)
-        .map(|(audio, other)| carried(audio, &other))
-        .filter(|hz| *hz >= floor)
-        .reduce(f64::min)
-        .filter(|hz| *hz < measured);
+        .map(|(aligned, other, other_audio, other_q)| {
+            (aligned, other, carried(other_audio, &other_q))
+        })
+        .filter(|(_, _, hz)| *hz < measured)
+        .map(|(aligned, other, hz)| {
+            let held = held(facts, other, aligned, hz).filter(|_| measured - hz > smear);
+            let made = made_from(audio, measured, hz, held.as_ref());
+            (hz, made, held.map(|h| Held { made, ..h }))
+        })
+        .collect();
+    let bound = judged
+        .iter()
+        .filter(|(_, made, _)| *made)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let made_from = bound.map(|(hz, _, _)| *hz);
     let bandwidth_hz = [cleaner, made_from]
         .into_iter()
         .flatten()
         .fold(measured, f64::min);
-    let filled =
-        made_from.is_some_and(|hz| measured - hz > crate::quality::smear_hz(audio.sample_rate));
-    Some((AudioQuality { bandwidth_hz, ..q }, filled))
+    let filled = made_from.is_some_and(|hz| measured - hz > smear);
+    let said = match bound {
+        Some((_, _, held)) => held.clone(),
+        None if cleaner.is_none_or(|hz| hz >= measured) => judged
+            .iter()
+            .filter_map(|(_, _, held)| held.clone())
+            .min_by(|a, b| a.excess.db.total_cmp(&b.excess.db)),
+        None => None,
+    };
+    Some((AudioQuality { bandwidth_hz, ..q }, filled, said))
+}
+
+/// What a lossy copy holds above a narrower copy of its recording,
+/// measured by the treble each holds over the stretch both play
+/// ([`crate::quality::excess_db`]), and so whether it was made from it.
+#[derive(Debug, Clone)]
+struct Held<'a> {
+    other: &'a SourceKey,
+    excess: crate::quality::Excess,
+    /// The most it may hold beyond the other and be made from it.
+    tolerance: f64,
+    opus: bool,
+    made: bool,
+}
+
+impl Held<'_> {
+    /// What the treble said, in words, as the copy's audio is described.
+    fn said(&self) -> String {
+        // Rounded first, so what holds a hair less reads as +0.0, not -0.0.
+        let db = (self.excess.db * 10.0).round() / 10.0 + 0.0;
+        let from = units::khz_of_hz(self.excess.from_hz);
+        let other = self.other;
+        let rounding = if self.opus {
+            "Opus's energy"
+        } else {
+            "an encoder's"
+        };
+        if self.made {
+            format!(
+                "from {from:.1} kHz up it holds no more than {other} ({db:+.1} dB), as a copy \
+                 made from it would"
+            )
+        } else if self.excess.db > self.tolerance {
+            format!(
+                "holds {db:.1} dB more above {from:.1} kHz than {other}, more than {rounding} \
+                 rounding allows, so it was not made from it"
+            )
+        } else {
+            format!(
+                "from {from:.1} kHz up it holds {db:+.1} dB beside {other}, but measures wider \
+                 than its codec fills past a lowpass"
+            )
+        }
+    }
+}
+
+/// What lossy `facts` holds beyond `other`, a narrower copy measuring
+/// `hz`, as `aligned` places the two; `None` where either lacks the
+/// measure or they share no whole block.
+fn held<'a>(facts: &Facts, other: &Facts, aligned: &'a Aligned, hz: f64) -> Option<Held<'a>> {
+    let audio = facts.audio.as_ref()?;
+    let b = audio.analysis.treble()?;
+    let a = other.audio.as_ref()?.analysis.treble()?;
+    let shared = crate::treble::Shared {
+        offset_ms: aligned.offset_ms as f64,
+        stretch: aligned.alignment().stretch(),
+        a_ms: aligned.b_ms as f64,
+        b_ms: aligned.a_ms as f64,
+    };
+    let excess = crate::quality::excess_db(a, b, &shared, hz, &audio.codec)?;
+    let kbps = audio
+        .bytes
+        .zip(facts.length().filter(|s| *s > 0.0))
+        .map(|(bytes, seconds)| units::stream_kbps(bytes as f64, seconds));
+    Some(Held {
+        other: &aligned.b,
+        excess,
+        tolerance: crate::quality::holds_more_db(&audio.codec, kbps),
+        opus: audio.codec == "opus",
+        made: false,
+    })
+}
+
+/// Whether lossy `audio`, measuring `measured`, may have been made from a
+/// copy measuring `hz`, narrower, holding `held` beyond it, measured where
+/// it is wider by more than [`crate::quality::SMEAR_BANDS`], as an
+/// encoder's noise moves a wall by as much.
+///
+/// Where the treble each holds was measured over a stretch both play, an
+/// Opus copy was when it holds no more than its tolerance beyond it,
+/// however much wider, as Opus keeps each band's energy and fills the
+/// band from it; a copy in any other codec was when it also measures no
+/// wider than its codec fills past a lowpass ([`crate::quality::fill_hz`]).
+/// Where it was not measured, as for copies measured before the treble
+/// was, or that share no whole block, it was when it measures no wider
+/// than its codec fills.
+///
+/// A copy in another codec wider than that is never held to the other,
+/// however little more it holds: which of two copies holding alike was
+/// made from which no measure says. Held to it from 0.5 dB down, 3 of the
+/// 9 transcodes measuring wider than their source by more than an
+/// encoder's noise would have been, as an MP3 at 320 kbit/s made from a
+/// Vorbis copy at 18.8 kHz that measures 22.05 kHz; but so would 108 of
+/// the 329 sources measuring that much wider than a copy made from them,
+/// each then ranked after its own transcode, as an MP3 V0 measuring
+/// 22.05 kHz after its MP3 at 320 kbit/s at 19.1, whose treble from
+/// 18 kHz up it tops by under 0.5 dB.
+fn made_from(audio: &AudioFacts, measured: f64, hz: f64, held: Option<&Held<'_>>) -> bool {
+    let near = hz >= measured - crate::quality::fill_hz(&audio.codec, audio.sample_rate);
+    match held {
+        Some(held) => (near || held.opus) && held.excess.db <= held.tolerance,
+        None => near,
+    }
 }
 
 /// How far `facts`' peak ([`crate::dynamics`]) stands above its
