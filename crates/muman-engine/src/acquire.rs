@@ -215,7 +215,7 @@ pub struct Additions {
 }
 
 /// The envelope of a local file's audio.
-pub(crate) fn local_envelope<R: Runner>(runner: &R, path: &Path) -> Result<Vec<f64>> {
+pub(crate) fn local_envelope<R: Runner>(runner: &R, path: &Path) -> Result<align::Envelope> {
     Ok(align::envelope(&runner.output(&align::pcm_command(path))?))
 }
 
@@ -225,7 +225,7 @@ fn remote_envelope<R: Runner>(
     passed: &Passed,
     id: &str,
     dir: &Path,
-) -> Result<Vec<f64>> {
+) -> Result<align::Envelope> {
     std::fs::create_dir_all(dir)?;
     let printed = runner.output(&download::audio_command(&watch_url(id), id, dir, passed))?;
     let path = String::from_utf8_lossy(&printed)
@@ -294,7 +294,7 @@ pub(crate) fn reverse_lookup<R: Runner>(
     sites: &Sites,
     passed: &Passed,
     track: &Entry,
-    track_audio: &[f64],
+    track_audio: &align::Envelope,
     audio: &Path,
 ) -> Result<Option<(Entry, Alignment)>> {
     let Some(search) = music::video_search_command(track, passed) else {
@@ -520,10 +520,28 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             });
         }
         if add.proposals.is_empty() && ok {
-            crate::ui::info(
-                self.out,
-                "Nothing new: every video named is a source already",
-            )?;
+            let known = |v: &Entry| {
+                (v.key(self.fetcher.sites, None)).is_some_and(|k| self.known.contains(&k))
+            };
+            if !listed.videos.is_empty() && listed.videos.iter().all(known) {
+                crate::ui::info(
+                    self.out,
+                    "Nothing new: every video named is a source already",
+                )?;
+            } else {
+                ok = false;
+                crate::ui::warning(
+                    self.out,
+                    &if listed.videos.is_empty() {
+                        "Nothing added: no address given named a video to fetch".to_string()
+                    } else {
+                        format!(
+                            "Nothing added: yt-dlp fetched none of the {} video(s) named",
+                            listed.videos.len()
+                        )
+                    },
+                )?;
+            }
         }
         Ok((ok, add))
     }

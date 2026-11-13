@@ -43,7 +43,10 @@
 //!
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
-//! a song's sidecar or a folder's cover by its name.
+//! a song's sidecar or a folder's cover by its name. A copy is muman's
+//! only while it holds the bytes `add` copied, as the state records them:
+//! one changed since, or any other file the user put there, is the
+//! user's, and no purge deletes it ([`Store::purgeable`]).
 //!
 //! A torrent's files are kept in a folder of its hash beside its
 //! metainfo, `sources/torrent/<hash>.torrent`, each at the path
@@ -1092,11 +1095,25 @@ impl Store {
     /// names, as `status` and `info` name them and `purge` deletes them: a
     /// fetched file, a torrent's, a kept record, or a copy `add` made in
     /// the manual folder's `added/`, never another file of the user's.
+    /// `made` holds each copy `add` made, by its key, with the digest of
+    /// its bytes as made ([`crate::hash::digest_file`]): a file in
+    /// `added/` is a copy while it holds those bytes, and any other there,
+    /// as a file dropped in or a copy changed since, is the user's.
     #[must_use]
-    pub fn purgeable(&self, dirs: &Dirs, known: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
+    pub fn purgeable(
+        &self,
+        dirs: &Dirs,
+        known: &BTreeSet<SourceKey>,
+        made: &BTreeMap<SourceKey, String>,
+    ) -> Vec<PathBuf> {
         let added = dirs.manual().join(crate::dirs::ADDED);
+        let as_made = |p: &Path| {
+            let key = (self.manual.keys()).find(|rel| self.manual_file(rel) == p);
+            key.and_then(|rel| made.get(&SourceKey::Manual(rel.into())))
+                .is_some_and(|d| crate::hash::digest_file(p).as_ref() == Some(d))
+        };
         (self.unused(known).into_iter())
-            .filter(|p| !p.starts_with(dirs.manual()) || p.starts_with(&added))
+            .filter(|p| !p.starts_with(dirs.manual()) || (p.starts_with(&added) && as_made(p)))
             .collect()
     }
 
@@ -1628,7 +1645,7 @@ mod tests {
         assert!(store.has(&SourceKey::parse("lrclib:7").unwrap()));
         assert!(!store.has(&SourceKey::parse("lrclib:8").unwrap()));
         let known = BTreeSet::from([SourceKey::parse("lrclib:9").unwrap()]);
-        let named = store.purgeable(&d, &known);
+        let named = store.purgeable(&d, &known, &BTreeMap::new());
         assert_eq!(named, [upper[0].clone(), orphan.clone()]);
         assert_eq!(
             store.with_their_files(&d, &known, &named),
@@ -1851,7 +1868,7 @@ mod tests {
             SourceKey::Torrent(TorrentKey::new(&hash, Path::new("a.flac"))),
         ]);
         let store = Store::scan(&d).unwrap();
-        let named = store.purgeable(&d, &known);
+        let named = store.purgeable(&d, &known, &BTreeMap::new());
         assert_eq!(named, [other, subtitle, thumbnail, second]);
         assert_eq!(store.with_their_files(&d, &known, &named), named);
         let used = [
@@ -1866,6 +1883,34 @@ mod tests {
             store.with_their_files(&d, &known, &used),
             named[1..],
             "a file in use is never purged, whichever file it comes with"
+        );
+    }
+
+    #[test]
+    fn a_file_in_added_is_purged_only_while_it_holds_what_add_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let copy = touch(dir.path(), "sources/manual/added/words.lrc");
+        let changed = touch(dir.path(), "sources/manual/added/front.jpg");
+        let dropped = touch(dir.path(), "sources/manual/added/draft.lrc");
+        let elsewhere = touch(dir.path(), "sources/manual/other/notes.lrc");
+        let made = BTreeMap::from([
+            (
+                manual("added/words.lrc"),
+                crate::hash::digest_file(&copy).unwrap(),
+            ),
+            (
+                manual("added/front.jpg"),
+                crate::hash::digest_file(&changed).unwrap(),
+            ),
+        ]);
+        std::fs::write(&changed, "drawn over by hand").unwrap();
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(store.unused(&BTreeSet::new()).len(), 4);
+        assert_eq!(
+            store.purgeable(&d, &BTreeSet::new(), &made),
+            [copy],
+            "{dropped:?} and {elsewhere:?} are the user's, as is a copy changed since"
         );
     }
 

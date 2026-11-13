@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/14";
+pub const METHOD: &str = "tags/17";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -267,9 +267,10 @@ pub enum Kind {
     /// A product's barcode, its digits alone, leading zeros kept: a UPC's
     /// 12, an EAN's 13 or 8, a GTIN's 14.
     Barcode,
-    /// A language by its ISO 639-2 code, as `jpn`; any other spelling of
-    /// it, as `ja` or `ja-JP`, read as it. `zxx` names none, as a song
-    /// with no words has.
+    /// A language by its ISO 639-2 code, as `jpn` ([`crate::lang::Lang::iso639`]);
+    /// any other spelling of it, as `ja` or `ja-JP`, read as it, and a
+    /// code no ISO 639 table names, as `xx`, refused. `zxx` names none, as
+    /// a song with no words has.
     Language,
     /// A ReplayGain peak, measured by muman: full scale 1, six decimals.
     Peak,
@@ -412,7 +413,7 @@ fn barcode(text: &str) -> Option<String> {
 fn language(text: &str) -> Option<String> {
     let code = text.trim().to_ascii_lowercase();
     match crate::lang::Lang::parse(&code) {
-        Some(lang) => Some(lang.iso639_2()),
+        Some(lang) => lang.iso639(),
         None => ["und", "mul", "mis", "zxx"]
             .contains(&code.as_str())
             .then_some(code),
@@ -1240,6 +1241,15 @@ fn time_of_day(t: &str) -> bool {
     }
 }
 
+/// Whether `value` is a language tag well formed but of a language no ISO
+/// 639 table names, as `xx`, given as `name`, a language: one [`by_hand`]
+/// refuses that an earlier muman took, so a song list may hold it.
+#[must_use]
+pub fn unnamed_language(name: &str, value: &str) -> bool {
+    Field::named(name).is_some_and(|f| f.spec().kind == Kind::Language)
+        && crate::lang::Lang::parse(value).is_some_and(|l| l.iso639().is_none())
+}
+
 /// What is wrong with `value` as `name`'s, set by hand, as [`by_hand`]
 /// reads it.
 #[must_use]
@@ -1435,9 +1445,41 @@ pub fn from_info(info: &VideoInfo) -> Offers {
     o
 }
 
+/// What a file yt-dlp fetched offers where its tags are its own,
+/// `own`, as [`VideoInfo::muman_own_tags`] says: those
+/// tags first, as any file's, then what its info JSON offers, so a
+/// site's upload date or channel never stands where the file names a
+/// date or an artist.
+#[must_use]
+pub fn of_fetched(own: &BTreeMap<String, Vec<String>>, info: &VideoInfo) -> Offers {
+    let mut o = from_container(own);
+    for (field, offer) in from_info(info) {
+        let Some(first) = o.get_mut(&field) else {
+            o.insert(field, offer);
+            continue;
+        };
+        let Offer {
+            values,
+            structured,
+            also,
+        } = offer;
+        let then = std::iter::once(Offer {
+            values,
+            structured,
+            also: Vec::new(),
+        });
+        for next in then.chain(also) {
+            if first.values != next.values && !first.also.iter().any(|o| o.values == next.values) {
+                first.also.push(next);
+            }
+        }
+    }
+    o
+}
+
 /// Every field a MusicBrainz record can offer, as [`from_record`] does
 /// for one that names all it may.
-pub const RECORD_FIELDS: [Field; 27] = [
+pub const RECORD_FIELDS: [Field; 28] = [
     Field::Title,
     Field::Artist,
     Field::Artists,
@@ -1445,6 +1487,7 @@ pub const RECORD_FIELDS: [Field; 27] = [
     Field::MusicBrainzTrackId,
     Field::MusicBrainzArtistId,
     Field::Language,
+    Field::Genre,
     Field::Album,
     Field::AlbumArtist,
     Field::Track,
@@ -1468,7 +1511,8 @@ pub const RECORD_FIELDS: [Field; 27] = [
 ];
 
 /// What a MusicBrainz record offers: the recording's title, artists,
-/// ISRCs, IDs, first release's date and its works' lyrics languages, and
+/// ISRCs, IDs, first release's date and its works' lyrics languages, the
+/// genres MusicBrainz's users voted for ([`crate::genres`]), and
 /// its release's album, album
 /// artist, track, disc, date, track total, country, IDs, status, types
 /// and medium, and the labels, catalogue numbers, barcode, ASIN and
@@ -1605,8 +1649,10 @@ fn offer_release(o: &mut Offers, r: &crate::record::Release) {
 /// named as muman writes them (`render`), and a comment given
 /// twice, as two `TITLE`s, kept as two values where ffprobe joins them
 /// with `;`. The file's main tag first; another, as an `ID3v1` beside an
-/// `ID3v2`, adds only names the first lacks. `None` for a file `lofty`
-/// does not read, as Matroska.
+/// `ID3v2`, adds only names the first lacks. A genre frame naming none,
+/// as `TCON` `(255)`, is read as an empty genre ([`native`]), so neither
+/// reader gives its number as a genre. `None` for a file `lofty` does not
+/// read, as Matroska.
 #[must_use]
 pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>> {
     use lofty::file::TaggedFileExt;
@@ -1680,7 +1726,9 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
 /// freeform atom under Picard's capitals, a Vorbis comment its map has
 /// no key for, as `ASIN`, or an `ID3v2.3` genre given by its `ID3v1`
 /// number. An `ID3v2.3` artist is read whole, `/` and all, as Picard
-/// reads it: the slash that would part two names is in one's too.
+/// reads it: the slash that would part two names is in one's too. A
+/// `TCON` naming no genre, as `(255)`, reads as an empty genre, so no
+/// other reading of the file gives the number as one.
 fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<String, Vec<String>> {
     use lofty::file::{AudioFile, FileType};
 
@@ -1706,10 +1754,15 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
     if let Some(comments) = comments {
         return comments;
     }
+    let mut genre_frame = false;
     let read = match kind {
         FileType::Mpeg => lofty::mpeg::MpegFile::read_from(&mut file, options)
             .ok()
-            .and_then(|f| f.id3v2().map(id3_fields)),
+            .and_then(|f| {
+                let tag = f.id3v2()?;
+                genre_frame = tcon(tag).is_some();
+                Some(id3_fields(tag))
+            }),
         FileType::Mp4 => lofty::mp4::Mp4File::read_from(&mut file, options)
             .ok()
             .and_then(|f| f.ilst().map(ilst_fields)),
@@ -1718,11 +1771,17 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
             .and_then(|f| f.ape().map(ape_fields)),
         _ => None,
     };
-    read.unwrap_or_default()
+    let mut fields: BTreeMap<String, Vec<String>> = read
+        .unwrap_or_default()
         .into_iter()
         .filter(|(_, values)| !values.is_empty())
         .map(|(spec, values)| (spec.vorbis.to_ascii_lowercase(), values))
-        .collect()
+        .collect();
+    if genre_frame {
+        let genre = Field::Genre.vorbis().to_ascii_lowercase();
+        fields.entry(genre).or_default();
+    }
+    fields
 }
 
 type Read = Vec<(&'static Spec, Vec<String>)>;
@@ -1741,12 +1800,56 @@ fn vorbis_fields(comments: &lofty::ogg::tag::VorbisComments) -> BTreeMap<String,
     fields
 }
 
-/// The genres of `TCON`: an `ID3v1` number, `(17)` in 2.3 or `17` in
-/// 2.4, as its name, and a name given after its number once.
-fn genres(tag: &lofty::id3::v2::Id3v2Tag) -> Vec<String> {
+/// A `TCON` frame's text, its values parted by NUL as 2.4 parts them.
+fn tcon(tag: &lofty::id3::v2::Id3v2Tag) -> Option<&str> {
+    lofty::id3::v2::FrameId::new("TCON")
+        .ok()
+        .and_then(|id| tag.get_text(&id))
+}
+
+/// The genres of a `TCON` frame's text, as ID3 writes them: in 2.4 each
+/// value, in 2.3 each `(17)` reference and the text after them, where `((`
+/// starts text with `(`. A number is an `ID3v1` genre, read as its name,
+/// and `RX` and `CR` are `Remix` and `Cover`; 255, which `ID3v1` writes
+/// for none, or a number its list names nothing at, gives no genre. A
+/// bracket holding anything else is text, as `(Rock/Pop)`, and a name
+/// given after its number is given once.
+fn genres(text: &str) -> Vec<String> {
+    /// The genres a reference names, one or none; `None` for no reference.
+    fn reference(r: &str) -> Option<&'static [&'static str]> {
+        match r.trim() {
+            "RX" => Some(&["Remix"]),
+            "CR" => Some(&["Cover"]),
+            n if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => Some(
+                n.parse::<usize>()
+                    .ok()
+                    .and_then(|n| lofty::id3::v1::GENRES.get(n..=n))
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        }
+    }
+    let mut named: Vec<&str> = Vec::new();
+    for value in text.split('\0') {
+        let mut rest = value.trim();
+        while let Some(after) = rest.strip_prefix('(').filter(|a| !a.starts_with('('))
+            && let Some((r, tail)) = after.split_once(')')
+            && let Some(genre) = reference(r)
+        {
+            named.extend(genre);
+            rest = tail.trim_start();
+        }
+        match reference(rest) {
+            Some(genre) => named.extend(genre),
+            None => named.push(
+                rest.strip_prefix('(')
+                    .filter(|r| r.starts_with('('))
+                    .unwrap_or(rest),
+            ),
+        }
+    }
     let mut out: Vec<String> = Vec::new();
-    for genre in tag.genres().into_iter().flatten() {
-        let genre = genre.trim();
+    for genre in named.into_iter().map(str::trim) {
         if !genre.is_empty() && !out.iter().any(|g| g == genre) {
             out.push(genre.to_string());
         }
@@ -1775,7 +1878,7 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
         .iter()
         .map(|spec| {
             let values = match spec.id3 {
-                Id3::Text("TCON") => genres(tag),
+                Id3::Text("TCON") => tcon(tag).map(genres).unwrap_or_default(),
                 // iTunes writes a grouping into `GRP1`, its `TIT1` then the work.
                 Id3::Text("TIT1") => text("GRP1").or_else(|| text("TIT1")).unwrap_or_default(),
                 Id3::Text(id) | Id3::Place(id) => text(id).unwrap_or_default(),
@@ -1939,35 +2042,99 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// The file at `path` read by `lofty` for its tags alone. Its audio's
 /// properties are not read: `lofty` refuses some a file may hold, as an
 /// Opus stream of mapping family 255, and a file's tags never need them.
-/// Its format is told by its bytes, as ffprobe tells it, its name only
-/// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
-/// and `song.opus.part` is a file being written. An Ogg stream of a codec
-/// `lofty` does not read, as Ogg FLAC, it takes for MPEG by a frame sync
-/// inside its audio, and finds no tags in: such a file is refused as of
-/// no format `lofty` knows, so its tags are read as ffprobe reads them.
+/// Its format is told by its bytes, its name only where they say nothing:
+/// a FLAC named `.mp3` holds Vorbis comments, and `song.opus.part` is a
+/// file being written. Whether that format is the file's own, a source's
+/// facts ask [`reads_as`] first.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    use lofty::file::FileType;
-    use std::io::Read;
-
-    let probe = lofty::probe::Probe::open(path)?.guess_file_type()?;
-    let ogg = matches!(
-        probe.file_type(),
-        Some(FileType::Vorbis | FileType::Opus | FileType::Speex)
-    );
-    let mut magic = [0; 4];
-    if !ogg
-        && std::fs::File::open(path)
-            .and_then(|mut f| f.read_exact(&mut magic))
-            .is_ok()
-        && magic == *b"OggS"
-    {
-        return Err(lofty::error::UnknownFormatError.into());
-    }
-    probe
+    lofty::probe::Probe::open(path)?
+        .guess_file_type()?
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
+}
+
+/// The formats `lofty` reads tags of, by ffprobe's name for each, and as
+/// what `lofty` reads it.
+const LOFTY_READS: [(&str, &[lofty::file::FileType]); 11] = {
+    use lofty::file::FileType;
+    [
+        ("mp3", &[FileType::Mpeg]),
+        ("aac", &[FileType::Aac]),
+        ("flac", &[FileType::Flac]),
+        ("ogg", &[FileType::Vorbis, FileType::Opus, FileType::Speex]),
+        ("wav", &[FileType::Wav]),
+        ("aiff", &[FileType::Aiff]),
+        ("ape", &[FileType::Ape]),
+        ("wv", &[FileType::WavPack]),
+        ("mpc", &[FileType::Mpc]),
+        ("mpc8", &[FileType::Mpc]),
+        (MP4, &[FileType::Mp4]),
+    ]
+};
+
+/// ffprobe's name for the ISO base media formats, MPEG-4 and QuickTime.
+const MP4: &str = "mov,mp4,m4a,3gp,3g2,mj2";
+
+/// Whether `lofty` reads the file at `path` as the format ffprobe found it
+/// to be, `probed`, so that the tags, lyrics and pictures it reads are the
+/// file's; where it does not, they are read as ffprobe reads them. Where
+/// its bytes name no format `lofty` knows, `lofty` takes a file for MPEG
+/// by a frame sync in its first kilobyte, as PCM, ALAC or FLAC audio
+/// holds by chance, and finds no tags in it: so it read a CAF, an RF64
+/// WAVE and an Ogg FLAC. ffmpeg reads MPEG-4 and QuickTime with one
+/// demuxer, its major brand `qt` telling QuickTime apart, which keeps its
+/// tags as `udta` atoms where `lofty` looks for MPEG-4's `ilst` alone.
+#[must_use]
+pub fn reads_as(path: &std::path::Path, probed: &crate::probe::Probed) -> bool {
+    let guessed = lofty::probe::Probe::open(path).map(lofty::probe::Probe::guess_file_type);
+    let Some(read) = guessed
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|p| p.file_type())
+    else {
+        return false;
+    };
+    let quicktime = probed.format == MP4
+        && probed
+            .tags
+            .get("major_brand")
+            .is_some_and(|b| b.trim() == "qt");
+    !quicktime
+        && LOFTY_READS
+            .iter()
+            .any(|(format, types)| *format == probed.format && types.contains(&read))
+}
+
+/// A file's own tags, as both readers read them: `lofty`'s reading,
+/// `read`, where it read the file as the format it is ([`reads_as`]), and
+/// with it each tag ffprobe read, `probed`, of a field none of its names
+/// sets; all of ffprobe's where `lofty`'s reading is not the file's. So
+/// neither hides a field the other found: `lofty` reads no MP4 item keyed
+/// through a `keys` atom, as ffmpeg writes every tag with
+/// `use_metadata_tags`, and ffprobe joins a field given twice into one
+/// value, which `lofty` keeps apart, so for a field both read, `lofty`'s
+/// values stand.
+#[must_use]
+pub fn of_both(
+    read: Option<BTreeMap<String, Vec<String>>>,
+    probed: &BTreeMap<String, String>,
+) -> BTreeMap<String, Vec<String>> {
+    let field = |key: &str| r128(key).or_else(|| Field::named(key));
+    let Some(mut tags) = read else {
+        return (probed.iter())
+            .map(|(k, v)| (k.clone(), vec![v.clone()]))
+            .collect();
+    };
+    let found: Vec<Field> = tags.keys().filter_map(|k| field(k)).collect();
+    for (key, value) in probed {
+        if field(key).is_some_and(|f| !found.contains(&f)) {
+            tags.entry(key.clone())
+                .or_insert_with(|| vec![value.clone()]);
+        }
+    }
+    tags
 }
 
 /// A track or disc written `3/12` offers its total too, unless the file
@@ -2199,6 +2366,44 @@ mod tests {
     }
 
     #[test]
+    fn a_fetched_file_s_own_tags_stand_before_what_its_site_says() {
+        let site = info(
+            r#"{"title": "track01", "uploader": "uploads@orchard.example",
+                "upload_date": "20031226", "creator": "Marlo Venn", "album": "Harbor Nights",
+                "muman_own_tags": "own"}"#,
+        );
+        let own = BTreeMap::from([
+            ("TITLE".to_string(), vec!["Night Ferry".to_string()]),
+            ("ARTIST".to_string(), vec!["Marlo Venn".to_string()]),
+            ("DATE".to_string(), vec!["1997".to_string()]),
+        ]);
+        let o = of_fetched(&own, &site);
+        let derived = |value: &str| Offer {
+            values: vec![value.into()],
+            structured: false,
+            also: Vec::new(),
+        };
+        assert_eq!(
+            o[&Field::Date],
+            Offer {
+                values: vec!["1997".into()],
+                structured: true,
+                also: vec![derived("2003-12-26")],
+            }
+        );
+        assert_eq!(o[&Field::Title].values, ["Night Ferry"]);
+        assert_eq!(o[&Field::Title].also, [derived("track01")]);
+        assert_eq!(
+            o[&Field::Artist].also,
+            [derived("uploads@orchard.example")],
+            "the creator agrees with the file"
+        );
+        assert_eq!(o[&Field::Album].values, ["Harbor Nights"]);
+        let none = of_fetched(&BTreeMap::new(), &site);
+        assert_eq!(format!("{none:?}"), format!("{:?}", from_info(&site)));
+    }
+
+    #[test]
     fn a_video_offers_the_language_its_audio_is_in_as_derived() {
         let language = |json: &str| from_info(&info(json)).get(&Field::Language).cloned();
         let derived = |code: &str| {
@@ -2358,6 +2563,11 @@ mod tests {
         assert_eq!(read(Kind::Barcode, "12345"), None);
         assert_eq!(read(Kind::Language, "ja").as_deref(), Some("jpn"));
         assert_eq!(read(Kind::Language, "SWE").as_deref(), Some("swe"));
+        assert_eq!(read(Kind::Language, "yue").as_deref(), Some("yue"));
+        assert_eq!(read(Kind::Language, "zxx").as_deref(), Some("zxx"));
+        for none in ["xx", "zz-ZZ", "qaa", "Klingon"] {
+            assert_eq!(read(Kind::Language, none), None, "{none}");
+        }
         assert!(id3_key("Abm") && id3_key("F#") && id3_key("C") && id3_key("o"));
         assert!(!id3_key("8A") && !id3_key("H") && !id3_key("A minor") && !id3_key("Am#"));
         assert_eq!(Field::named("initialkey"), Some(Field::InitialKey));
@@ -2470,6 +2680,10 @@ mod tests {
         let o = from_record(&record);
         let mut whole = record.clone();
         whole.credit = "A & B".into();
+        whole.genres = vec![crate::record::Genre {
+            name: "ambient".into(),
+            count: 2,
+        }];
         if let Some(r) = whole.release.as_mut() {
             r.track_id = Some("00000000-0000-0000-0000-00000000000c".into());
             r.details.asin = Some("B000000001".into());
@@ -2587,18 +2801,44 @@ mod tests {
     }
 
     #[test]
-    fn an_ogg_flac_is_no_file_lofty_reads_tags_from() {
+    fn lofty_counts_only_where_it_reads_a_file_as_the_format_ffprobe_found() {
         let dir = tempfile::tempdir().unwrap();
-        let oga = dir.path().join("a.oga");
-        std::fs::write(&oga, include_bytes!("../../../testdata/silence.oga")).unwrap();
+        let probed = |format: &str, brand: Option<&str>| crate::probe::Probed {
+            format: format.into(),
+            tags: brand
+                .map(|b| ("major_brand".to_string(), b.to_string()))
+                .into_iter()
+                .collect(),
+            ..crate::probe::Probed::default()
+        };
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let synced = |head: &[u8]| [head, &[0, 0x12, 0xff, 0xfb, 0x90, 0x64, 0, 0]].concat();
+        let ogg = probed("ogg", None);
+        let oga = file("a.oga", include_bytes!("../../../testdata/silence.oga"));
+        assert!(!reads_as(&oga, &ogg), "lofty takes an Ogg FLAC for MPEG");
+        assert!(reads_as(
+            &file("a.ogg", crate::testing::SILENCE_VORBIS),
+            &ogg
+        ));
+        let rf64 = file("b.wav", &synced(b"RF64\xff\xff\xff\xffWAVEds64"));
+        assert!(!reads_as(&rf64, &probed("wav", None)), "nor an RF64 WAVE");
+        let riff = file("c.wav", &synced(b"RIFF\x40\0\0\0WAVEfmt "));
+        assert!(reads_as(&riff, &probed("wav", None)));
+        let caf = file("d.caf", &synced(b"caff\0\x01\0\0desc"));
+        assert!(!reads_as(&caf, &probed("caf", None)), "nor a CAF");
+        let mov = file("e.mov", &synced(b"\0\0\0\x14ftypqt  \0\0\x02\0qt  "));
+        let mp4 = "mov,mp4,m4a,3gp,3g2,mj2";
         assert!(
-            read_tagged(&oga).is_err_and(|e| e.is_unknown_format()),
-            "lofty takes it for MPEG and finds no tags"
+            !reads_as(&mov, &probed(mp4, Some("qt  "))),
+            "QuickTime keeps udta"
         );
-        assert_eq!(read_file(&oga), None);
-        let ogg = dir.path().join("a.ogg");
-        std::fs::write(&ogg, crate::testing::SILENCE_VORBIS).unwrap();
-        assert!(read_file(&ogg).is_some());
+        let m4a = file("f.m4a", crate::testing::SILENCE_M4A);
+        assert!(reads_as(&m4a, &probed(mp4, Some("M4A "))));
+        assert!(!reads_as(&m4a, &probed("matroska,webm", None)));
     }
 
     #[test]
@@ -2675,6 +2915,48 @@ mod tests {
             assert_eq!(o[&Field::Grouping].values, [grouping]);
             assert!(!o.contains_key(&Field::Work));
         }
+    }
+
+    #[test]
+    fn a_tcon_reads_as_id3_writes_its_genres() {
+        for (text, read) in [
+            ("(17)", vec!["Rock"]),
+            ("(17)(13)", vec!["Rock", "Pop"]),
+            ("(17)Rock", vec!["Rock"]),
+            ("(RX)(CR)", vec!["Remix", "Cover"]),
+            ("(12){unknown}", vec!["Other", "{unknown}"]),
+            ("((Harbor) Folk", vec!["(Harbor) Folk"]),
+            ("17\0Night Pop\0CR", vec!["Rock", "Night Pop", "Cover"]),
+            ("(Rock/Pop)", vec!["(Rock/Pop)"]),
+            ("Ambient", vec!["Ambient"]),
+            ("(255)", vec![]),
+            ("255", vec![]),
+            ("(17)(255)(400)", vec!["Rock"]),
+            ("99999999999999999999", vec![]),
+        ] {
+            assert_eq!(genres(text), read, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_tcon_naming_no_genre_gives_none_by_any_reading() {
+        use lofty::config::WriteOptions;
+        use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("a.mp3");
+        std::fs::write(&mp3, crate::testing::SILENCE_MP3).unwrap();
+        let mut id3 = Id3v2Tag::new();
+        id3.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::new("TCON").unwrap(),
+            lofty::TextEncoding::UTF8,
+            "(255)".to_string(),
+        )));
+        id3.save_to_path(&mp3, WriteOptions::default()).unwrap();
+        let probed = BTreeMap::from([("genre".to_string(), "(255)".to_string())]);
+        let o = from_container(&of_both(read_file(&mp3), &probed));
+        assert!(!o.contains_key(&Field::Genre), "{o:?}");
     }
 
     #[test]
@@ -2857,12 +3139,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_field_either_reader_finds_is_read_and_lofty_s_values_stand_where_both_do() {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            (pairs.iter())
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let probed = map(&[
+            ("title", "Keyed Song"),
+            ("artist", "Marlo Venn"),
+            ("album", "Odd Boxes"),
+            ("track", "3/12"),
+            ("major_brand", "M4A "),
+        ]);
+        // As `lofty` reads an MP4 whose items are all keyed through `keys`.
+        let mdta = of_both(Some(BTreeMap::new()), &probed);
+        let offers = from_container(&mdta);
+        assert_eq!(offers[&Field::Title].values, ["Keyed Song"], "{mdta:?}");
+        assert_eq!(offers[&Field::Album].values, ["Odd Boxes"], "{mdta:?}");
+        assert!(
+            !mdta.contains_key("major_brand"),
+            "names no field: {mdta:?}"
+        );
+
+        let lofty: BTreeMap<String, Vec<String>> = [
+            ("title", vec!["Paper Comets", "Paper Comets (Live)"]),
+            ("tracknumber", vec!["3"]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect();
+        let both = of_both(Some(lofty), &probed);
+        let offers = from_container(&both);
+        assert_eq!(
+            offers[&Field::Title].values,
+            ["Paper Comets", "Paper Comets (Live)"]
+        );
+        assert_eq!(offers[&Field::Artist].values, ["Marlo Venn"]);
+        assert!(!both.contains_key("track"), "a field lofty read: {both:?}");
+
+        let alone = of_both(None, &probed);
+        assert_eq!(alone.len(), probed.len(), "ffprobe's whole reading");
+    }
+
     /// What every format's tags and lyrics offer once `lofty` writes them,
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/14",
-        "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
+        "tags/17",
+        "5867e0cfc67f5bc7fe9430cc4f2437e695a13e6010b58d2fc11c02142afceb90",
     );
 
     #[test]
@@ -2896,6 +3222,15 @@ mod tests {
             (ItemKey::ReplayGainTrackPeak, "0.98"),
         ];
         let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+        let probed: BTreeMap<String, String> = [
+            ("TITLE", "Lantern Weather"),
+            ("album_artist", "Ada Quill"),
+            ("lyricist", "Odile Marsh"),
+            ("encoder", "Lavf60.16.100"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         let formats = [
             (
                 "a.flac",
@@ -2947,7 +3282,8 @@ mod tests {
             digest
                 .debug(&read)
                 .debug(&from_container(&read))
-                .debug(&lyrics_in(&path));
+                .debug(&lyrics_in(&path))
+                .debug(&of_both(Some(read), &probed));
         }
         let release = r#"{"title": "Paper Comets (Official Video)", "track": "Paper Comets",
             "artists": ["Marlo Venn", "Ada Quill"], "album": "The Glass Orchards",

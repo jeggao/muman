@@ -94,6 +94,21 @@ const BUILT_TABLE: &str = "
     );
 ";
 
+/// The copies `add` made in the manual folder, a table a store made
+/// before it lacks, so made on every open.
+const COPIES_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS copies (key TEXT PRIMARY KEY, digest TEXT NOT NULL);
+";
+
+/// The outputs of each library folder muman was pointed away from, a
+/// table a store made before it lacks, so made on every open.
+const LEFT_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS left_outputs (
+        library TEXT NOT NULL, path TEXT NOT NULL, row TEXT NOT NULL,
+        PRIMARY KEY (library, path)
+    );
+";
+
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
 const TABLES: &str = "
@@ -171,6 +186,8 @@ impl Db {
                 }
                 tx.execute_batch(SONG_FAILURES)?;
                 tx.execute_batch(BUILT_TABLE)?;
+                tx.execute_batch(COPIES_TABLE)?;
+                tx.execute_batch(LEFT_TABLE)?;
                 Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
@@ -178,6 +195,8 @@ impl Db {
             db.conn
                 .execute_batch(SONG_FAILURES)
                 .and_then(|()| db.conn.execute_batch(BUILT_TABLE))
+                .and_then(|()| db.conn.execute_batch(COPIES_TABLE))
+                .and_then(|()| db.conn.execute_batch(LEFT_TABLE))
                 .and_then(|()| db.conn.execute_batch(RENAMINGS))
                 .with_context(|| format!("opening {}", db.file.display()))?;
         }
@@ -204,6 +223,8 @@ impl Db {
             for (name, made) in [
                 ("song_failures", SONG_FAILURES),
                 ("built", BUILT_TABLE),
+                ("copies", COPIES_TABLE),
+                ("left_outputs", LEFT_TABLE),
                 ("renamings", RENAMINGS),
             ] {
                 let held: i64 = conn.query_row(
@@ -358,10 +379,12 @@ struct Table {
 
 const META: Table = table("meta", &["key"], Some("value"), false);
 const OUTPUTS: Table = table("outputs", &["path"], Some("row"), true);
+const LEFT: Table = table("left_outputs", &["library", "path"], Some("row"), false);
 const REPLACED: Table = table("replaced", &["old"], Some("new"), false);
 const LISTED: Table = table("listed", &["key"], None, false);
 const DAMAGED: Table = table("damaged", &["key"], Some("audio"), false);
 const TRUSTED: Table = table("trusted", &["name"], Some("digest"), false);
+const COPIES: Table = table("copies", &["key"], Some("digest"), false);
 const FACTS: Table = table("facts", &["key"], Some("row"), true);
 const ALIGNMENTS: Table = table(
     "alignments",
@@ -391,13 +414,15 @@ const fn table(
 }
 
 /// Every table, in the order a snapshot reads them.
-const TABLES_OF_STATE: [&Table; 14] = [
+const TABLES_OF_STATE: [&Table; 16] = [
     &META,
     &OUTPUTS,
+    &LEFT,
     &REPLACED,
     &LISTED,
     &DAMAGED,
     &TRUSTED,
+    &COPIES,
     &SONGS_FAILED,
     &BUILT,
     &FACTS,
@@ -478,6 +503,16 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
         let written = serde_json::from_str(&value(row)).map_err(|_| refused())?;
         state.outputs.insert(path, written);
     }
+    // One that does not read is let go of: it only makes a folder's files
+    // muman's again, which a sync then writes anew.
+    for row in parse(&LEFT) {
+        let library = serde_json::from_str::<PathBuf>(&row.keys[0]);
+        let path = crate::relpath::recorded(&row.keys[1]);
+        let written = serde_json::from_str(&value(row));
+        if let (Ok(library), Ok(path), Ok(written)) = (library, path, written) {
+            state.left.entry(library).or_default().insert(path, written);
+        }
+    }
     for row in parse(&REPLACED) {
         if let (Some(old), Some(new)) = (key_of(&row.keys[0]), key_of(&value(row))) {
             state.replaced.insert(old, new);
@@ -491,6 +526,11 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
     }
     for row in parse(&TRUSTED) {
         state.trusted.insert(row.keys[0].clone(), value(row));
+    }
+    for row in parse(&COPIES) {
+        if let Some(k) = key_of(&row.keys[0]) {
+            state.copies.insert(k, value(row));
+        }
     }
     for row in parse(&FACTS) {
         if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
@@ -575,6 +615,15 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
             })
             .collect::<Result<_>>()?,
     ));
+    let mut left = Vec::new();
+    for (library, outputs) in &state.left {
+        let library = json(library)?;
+        for (p, w) in outputs {
+            let keys = vec![library.clone(), crate::relpath::to_portable(p)];
+            left.push(Row::new(keys, Some(json(w)?)));
+        }
+    }
+    tables.push((&LEFT, left));
     tables.push((
         &REPLACED,
         state
@@ -605,6 +654,14 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
             .trusted
             .iter()
             .map(|(name, digest)| Row::new(vec![name.clone()], Some(digest.clone())))
+            .collect(),
+    ));
+    tables.push((
+        &COPIES,
+        state
+            .copies
+            .iter()
+            .map(|(k, digest)| Row::new(vec![key(k)], Some(digest.clone())))
             .collect(),
     ));
     tables.push((
@@ -1058,11 +1115,17 @@ mod tests {
             },
         );
         state
+            .left
+            .entry(PathBuf::from("Elsewhere"))
+            .or_default()
+            .extend(state.outputs.clone());
+        state
             .replaced
             .insert(SourceKey::youtube("bbbbbbbbbbb"), key.clone());
         state.listed.push(manual.clone());
         state.damaged.insert(key.clone(), "a1".into());
         state.trusted.insert("hooks".into(), "t1".into());
+        state.copies.insert(manual.clone(), "c1".into());
         state.songs_failed([(key.clone(), "no audio".to_string())]);
         state
             .facts

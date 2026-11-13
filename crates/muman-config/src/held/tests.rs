@@ -238,3 +238,38 @@ fn a_source_two_songs_share_is_held_by_each() {
         "{text}"
     );
 }
+
+#[test]
+fn the_tags_a_site_listed_are_held_apart_from_a_file_s_own() {
+    let yt = SourceKey::youtube("aaaaaaaaaaa");
+    let listed = "1111111111111111aaaa";
+    let mut facts = crate::facts::Facts::unreadable("r".into());
+    facts.served = Some(crate::facts::Served {
+        format: "251".into(),
+        size: Some(100),
+        url: None,
+        duration_ms: None,
+        listed: Some(listed.into()),
+    });
+    facts.tags_digest = Some("2222222222222222bbbb".into());
+    let held = Held::now(&yt, &facts, &Sites::default()).unwrap();
+    assert_eq!(held.listed.as_deref(), Some("1111111111111111"));
+    assert!(
+        !held.tags_differ(listed),
+        "the listing fetched again is the same"
+    );
+    assert!(held.tags_differ("3333333333333333"));
+    let (dir, mut m) = load(SONG);
+    m.edit(Edit::Hold {
+        song: yt.clone(),
+        key: yt.clone(),
+        held: held.clone(),
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].held[&yt], held);
+    facts.tags_digest = Some(listed.into());
+    let plain = Held::now(&yt, &facts, &Sites::default()).unwrap();
+    assert_eq!(plain.listed, None, "tags of the listing alone stand for it");
+    assert!(!plain.tags_differ(listed));
+}

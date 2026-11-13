@@ -25,7 +25,9 @@
 //! [`Lock::folder`] sweeps the settled ones from its folder once it holds
 //! it, and a run sweeps its history's run folders as it begins
 //! ([`clear_parts`]). A part beside a file a link leads to outside the
-//! home stays.
+//! home stays. A run's scratch folder, `.muman-scratch-<random>`, holds
+//! its own lock; one a stopped run left goes as the next run makes one
+//! in the same folder, or an export names that folder ([`Scratch`]).
 //!
 //! On Windows a file open in a player, the search indexer or a virus
 //! scanner cannot be replaced or deleted for a moment: the call fails
@@ -423,14 +425,24 @@ impl Lock {
 /// What a run's scratch folder is named after.
 const SCRATCH: &str = ".muman-scratch-";
 
-/// How old a scratch folder whose lock is free must be before it is
-/// taken for a run's that ended without removing it: a folder just made
-/// is locked a moment after.
+/// How old an empty scratch folder, or a part, must be before it is
+/// taken for one a stopped run left: a scratch folder just made is
+/// locked a moment after, and a part just begun is written to.
 const SCRATCH_SETTLED: Duration = Duration::from_secs(60);
+
+/// How many scratch folders a run makes in turn while another run's
+/// clearing removes each before its lock is held.
+const SCRATCH_TRIES: usize = 8;
 
 /// A folder for one run's scratch files, removed when dropped. It holds
 /// its own lock while in use, so one a run killed partway left behind,
-/// whose lock is free, is removed by the next run to make one there.
+/// whose lock is free, is removed by the next run to make one in the
+/// same folder ([`clear_scratch`]).
+///
+/// A folder is made, then locked, so another run clearing scratch may
+/// find it in between. That run removes it holding its lock, so this
+/// one, its lock taken, checks the lock file is still the one at its
+/// path, as [`Lock::library`] does, and makes another if not.
 #[derive(Debug)]
 pub struct Scratch {
     // Released before the folder goes: Windows removes no folder holding
@@ -454,11 +466,28 @@ impl Scratch {
         builder.prefix(SCRATCH);
         #[cfg(unix)]
         builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
-        let dir = builder
-            .tempdir_in(parent)
-            .with_context(|| format!("creating a scratch folder in {}", parent.display()))?;
-        let lock = Lock::folder(dir.path())?;
-        Ok(Self { _lock: lock, dir })
+        for _ in 0..SCRATCH_TRIES {
+            let dir = builder
+                .tempdir_in(parent)
+                .with_context(|| format!("creating a scratch folder in {}", parent.display()))?;
+            let path = dir.path().join(LOCK_FILE);
+            let lock = match Lock::at(&path, dir.path()) {
+                Ok(lock) => lock,
+                Err(_) if !dir.path().is_dir() => continue,
+                Err(e) => return Err(e),
+            };
+            let held = lock.file.try_clone().and_then(same_file::Handle::from_file);
+            let named = same_file::Handle::from_path(&path);
+            if let (Ok(held), Ok(named)) = (held, named)
+                && held == named
+            {
+                return Ok(Self { _lock: lock, dir });
+            }
+        }
+        anyhow::bail!(
+            "another run kept removing the scratch folders made in {}",
+            parent.display()
+        )
     }
 
     #[must_use]
@@ -494,29 +523,38 @@ pub fn clear_parts(dir: &Path) {
     }
 }
 
-/// Remove the scratch folders in `parent` no run holds.
+/// Remove the scratch folders in `parent` no run holds: one whose lock
+/// file is free at once, its lock held while it goes, and one empty, as
+/// a run stopped between making and locking it leaves, once settled. A
+/// folder so named holding files but no lock file is no run's, and
+/// stays.
 // Removes the scratch folders a stopped run left.
 #[expect(clippy::disallowed_methods)]
-fn clear_scratch(parent: &Path) {
+pub fn clear_scratch(parent: &Path) {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let ours = entry.file_name().to_string_lossy().starts_with(SCRATCH);
-        let settled = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > SCRATCH_SETTLED));
-        if !ours || !settled || !path.is_dir() {
+        if !ours || !entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
-        let free = File::options()
-            .write(true)
-            .open(path.join(LOCK_FILE))
-            .map_or(true, |f| f.try_lock().is_ok());
-        if free {
+        let Ok(lock) = File::options().write(true).open(path.join(LOCK_FILE)) else {
+            let settled = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > SCRATCH_SETTLED));
+            if settled {
+                let _ = std::fs::remove_dir(&path);
+            }
+            continue;
+        };
+        if lock.try_lock().is_ok() {
             let _ = std::fs::remove_dir_all(&path);
+            drop(lock);
+            // Where the lock file outlived its handle, as on older Windows.
+            let _ = std::fs::remove_dir(&path);
         }
     }
 }
@@ -556,16 +594,31 @@ mod tests {
     #[test]
     fn a_scratch_folder_left_behind_is_removed_and_one_in_use_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join(format!("{SCRATCH}left"));
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("facts-1"), "measured").unwrap();
         let earlier = std::time::SystemTime::now() - Duration::from_secs(3600);
-        filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(earlier)).unwrap();
+        let folder = |name: &str, files: &[&str], old: bool| {
+            let path = dir.path().join(format!("{SCRATCH}{name}"));
+            std::fs::create_dir_all(&path).unwrap();
+            for file in files {
+                std::fs::write(path.join(file), "measured").unwrap();
+            }
+            if old {
+                filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(earlier))
+                    .unwrap();
+            }
+            path
+        };
+        let left = folder("left", &[LOCK_FILE, "facts-1"], false);
+        let unlocked = folder("made", &[], true);
+        let fresh = folder("new", &[], false);
+        let mine = folder("notes", &["facts-1"], true);
         let held = Scratch::within(dir.path()).unwrap();
         filetime::set_file_mtime(held.path(), filetime::FileTime::from_system_time(earlier))
             .unwrap();
         let other = Scratch::within(dir.path()).unwrap();
-        assert!(!old.exists());
+        assert!(!left.exists(), "its lock free, at once");
+        assert!(!unlocked.exists(), "empty and settled");
+        assert!(fresh.exists(), "empty, but maybe about to be locked");
+        assert!(mine.exists(), "files but no lock: no run's");
         assert!(held.path().exists() && other.path().exists());
         let gone = held.path().to_path_buf();
         drop(held);

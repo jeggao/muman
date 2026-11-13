@@ -45,7 +45,10 @@
 //! and a size under another ID is taken for the same file renumbered,
 //! as a site that numbers its formats by place does when it lists a new
 //! one. The listing holds the tag fields too, so other tags are found
-//! the same way.
+//! the same way, against `listed`, the digest of those fields alone
+//! when they were fetched. It is recorded where `tags` holds more, the
+//! file's own tags beside them, which no listing says; elsewhere `tags`
+//! is that digest and stands for it.
 
 use std::collections::BTreeMap;
 
@@ -96,6 +99,9 @@ pub struct Held {
     pub format: Option<String>,
     /// The size the site gave that format's audio.
     pub size: Option<u64>,
+    /// The first [`DIGITS`] of the digest of the tag fields the site
+    /// listed, where `tags` holds the file's own tags beside them.
+    pub listed: Option<String>,
     /// The page it was fetched from, for a site whose keys name none.
     pub url: Option<String>,
 }
@@ -170,6 +176,10 @@ impl Held {
             tags: facts.tags_digest.as_deref().and_then(cut),
             format: served.map(|s| s.format.clone()),
             size: served.and_then(|s| s.size),
+            listed: served
+                .and_then(|s| s.listed.as_deref())
+                .and_then(cut)
+                .filter(|l| facts.tags_digest.as_deref().and_then(cut).as_ref() != Some(l)),
             url: served
                 .and_then(|s| s.url.clone())
                 .filter(|_| sites.fetch_url(key).is_none()),
@@ -206,10 +216,13 @@ impl Held {
     }
 
     /// Whether this records tags other than those `digest` is of, as a
-    /// site's listing gives them; recording none, it cannot tell.
+    /// site's listing gives them: its `listed`, or else its `tags`;
+    /// recording neither, it cannot tell.
     #[must_use]
     pub fn tags_differ(&self, digest: &str) -> bool {
-        self.tags.as_deref().is_some_and(|t| !agree(t, digest))
+        (self.listed.as_deref())
+            .or(self.tags.as_deref())
+            .is_some_and(|t| !agree(t, digest))
     }
 
     /// `now`, keeping what this records of the fetch where `now` knows
@@ -219,6 +232,9 @@ impl Held {
         if now.format.is_none() {
             now.format.clone_from(&self.format);
             now.size = self.size;
+            if now.tags == self.tags {
+                now.listed.clone_from(&self.listed);
+            }
         }
         if now.url.is_none() {
             now.url.clone_from(&self.url);
@@ -257,6 +273,9 @@ impl Held {
         if let Some(s) = self.size.and_then(|s| i64::try_from(s).ok()) {
             t.insert("size", s.into());
         }
+        if let Some(l) = &self.listed {
+            t.insert("listed", l.as_str().into());
+        }
         if let Some(u) = &self.url {
             t.insert("url", u.as_str().into());
         }
@@ -267,18 +286,16 @@ impl Held {
         let Some(t) = item.as_table_like() else {
             bail!("{what} must be a table, such as {{ audio = \"7c1cfa040b3b82c0\" }}");
         };
-        let digest = |aspect: Aspect| -> Result<Option<String>> {
-            let Some(d) = t.get(aspect.name()).and_then(Item::as_str) else {
+        let hex = |name: &str| -> Result<Option<String>> {
+            let Some(d) = t.get(name).and_then(Item::as_str) else {
                 return Ok(None);
             };
             if d.len() < DIGITS || d.len() > 64 || !d.bytes().all(|b| b.is_ascii_hexdigit()) {
-                bail!(
-                    "{what}: `{}` must be at least {DIGITS} hex digits",
-                    aspect.name()
-                );
+                bail!("{what}: `{name}` must be at least {DIGITS} hex digits");
             }
             Ok(Some(d.to_ascii_lowercase()))
         };
+        let digest = |aspect: Aspect| hex(aspect.name());
         let held = Self {
             audio: digest(Aspect::Audio)?,
             cover: digest(Aspect::Cover)?,
@@ -289,6 +306,7 @@ impl Held {
                 .get("size")
                 .and_then(Item::as_integer)
                 .and_then(|s| u64::try_from(s).ok()),
+            listed: hex("listed")?,
             url: t.get("url").and_then(Item::as_str).map(str::to_string),
         };
         if Aspect::ALL.iter().all(|a| held.digest(*a).is_none()) {

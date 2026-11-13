@@ -99,10 +99,10 @@ A quantity takes its unit after the number; the space is optional:
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
-Every unit but `LUFS` and `LKFS` may be spelled out, as `"2 gibibytes"`
+Every unit but `LUFS` and `LKFS` may be spelled out, in any case, as `"2 gibibytes"`
 or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary sizes; `KB`,
-`MB` and `GB` decimal. A bare number is bytes, hertz or a fraction; a
-bitrate, time, loudness or level needs its unit.
+`MB` and `GB` decimal, `Mb` too: a size is never in bits. A bare number
+is bytes, hertz or a fraction; a bitrate, time, loudness or level needs its unit.
 
 | Table | Sets |
 |---|---|
@@ -345,7 +345,7 @@ Songs share an album as their tags [agree on one](metadata.md#tags); a
 single is an album of its own. A folder holding songs of several albums gets no
 file, and `sync` says so, unless `mixed = "majority"` takes the album
 most of its songs are on; the library folder itself never gets one. A
-file of yours at that name is left alone, even by `sync --force`. This
+file there muman never wrote is left alone, even by `sync --force`. This
 writes the cover inside each song and as `cover.jpg` in its folder:
 
 ```toml

@@ -136,6 +136,24 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
     assert!(facts.audio.unwrap().is_lossless());
 }
 
+#[test]
+fn a_file_lofty_reads_as_another_format_brings_the_tags_ffprobe_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.caf");
+    let mut pcm = vec![0_u8; 1024];
+    pcm[40..44].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+    std::fs::write(&source.path, [&b"caff\0\x01\0\0desc"[..], &pcm].concat()).unwrap();
+    assert!(
+        tags::read_file(&source.path).is_some_and(|t| t.is_empty()),
+        "lofty takes it for an MP3 with no tags"
+    );
+    let caf = FLAC.replace(r#""format_name": "flac""#, r#""format_name": "caf""#);
+    let fake = Fake::default().probe("Song.caf", &caf);
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
+    assert_eq!(facts.tags[&tags::Field::Title].values, ["Song"]);
+    assert_eq!(facts.tags[&tags::Field::Album].values, ["Record"]);
+}
+
 /// A FLAC at `path` holding `picture`'s bytes as its front cover,
 /// labelled `label`.
 fn with_cover(path: &Path, picture: &[u8], label: lofty::picture::MimeType) {

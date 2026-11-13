@@ -202,6 +202,40 @@ fn purge_deletes_the_lyrics_add_copied_once_no_song_lists_them() {
 }
 
 #[test]
+fn purge_leaves_a_file_of_yours_in_added_and_a_copy_you_changed() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let lrc = s.written("elsewhere/Lantern Weather.lrc", "[00:01.00]first light\n");
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok, "{text}");
+    let added = s.dir.path().join("home/sources/manual/added");
+    std::fs::write(added.join("draft.lrc"), "[00:01.00]still writing\n").unwrap();
+    std::fs::write(added.join("my-photo.png"), b"not muman's").unwrap();
+    std::fs::write(
+        added.join("Lantern Weather.lrc"),
+        "[00:01.00]first light, my way\n",
+    )
+    .unwrap();
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let key = ", \"manual:added/Lantern Weather.lrc\"";
+    assert!(listed.contains(key), "{listed}");
+    std::fs::write(&songs, listed.replace(key, "")).unwrap();
+    s.run(&fake, &["sync"]);
+    let (_, said) = s.report(&fake, &["status"]);
+    assert!(!said.contains("Unused:"), "{said}");
+    let (ok, text) = s.run(&fake, &["purge", "-y"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Nothing unused to delete"), "{text}");
+    assert_eq!(
+        s.added(),
+        ["Lantern Weather.lrc", "draft.lrc", "my-photo.png"],
+        "{text}"
+    );
+}
+
+#[test]
 fn lyrics_tags_name_their_song_and_a_length_far_off_keeps_them_out() {
     let s = Setup::new();
     let fake = library();
@@ -534,6 +568,155 @@ fn a_cue_sheet_retags_the_songs_its_file_lines_name() {
     }
 }
 
+/// A disc's cue sheet naming its own `01.flac` and `02.flac`.
+fn disc_cue(disc: u32) -> String {
+    format!(
+        "PERFORMER \"Marlo Venn\"\nTITLE \"The Glass Orchards\"\nREM DISCNUMBER {disc}\n\
+         FILE \"01.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Ember {disc}\"\n    INDEX 01 00:00:00\n\
+         FILE \"02.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Tide {disc}\"\n    INDEX 01 00:00:00\n"
+    )
+}
+
+fn discs() -> Fake {
+    library()
+        .probe("01.flac", &flac("Track", "Marlo Venn", "", 1, 200, ""))
+        .probe("02.flac", &flac("Track", "Marlo Venn", "", 2, 210, ""))
+}
+
+fn title_and_disc(s: &Setup, file: &str) -> (String, String) {
+    let song = s.song_with(file);
+    let tag = |name: &str| {
+        (song.tags.iter())
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.join("; "))
+            .unwrap_or_default()
+    };
+    (tag("title"), tag("disc"))
+}
+
+#[test]
+fn each_disc_s_cue_sheet_names_the_files_beside_it() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+        s.written(&format!("rips/Orchards/CD{disc}/disc.cue"), &disc_cue(disc));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    for disc in [1, 2] {
+        for (file, title) in [("01", "Ember"), ("02", "Tide")] {
+            assert_eq!(
+                title_and_disc(&s, &format!("Orchards/CD{disc}/{file}")),
+                (format!("{title} {disc}"), disc.to_string()),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_cue_sheet_given_later_names_the_files_of_its_own_folder_or_of_to() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let second = s.written("notes/CD2/disc.cue", &disc_cue(2));
+    let (ok, text) = s.run(&fake, &["add", &second]);
+    assert!(ok, "the folder it is in names its disc: {text}");
+    let undiscd = disc_cue(1).replace("REM DISCNUMBER 1\n", "");
+    let first = s.written("notes/first.cue", &undiscd);
+    let said = s.not_added(&fake, &["add", &first]);
+    assert!(said.contains("not surely a song's"), "{said}");
+    let (ok, text) = s.run(&fake, &["add", &first, "--to", "key:CD1"]);
+    assert!(ok, "--to leaves the other disc out: {text}");
+    for disc in [1, 2] {
+        assert_eq!(
+            title_and_disc(&s, &format!("Orchards/CD{disc}/01")).0,
+            format!("Ember {disc}"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_cue_sheet_given_alone_names_the_files_of_the_disc_it_states() {
+    let s = Setup::new();
+    let mut fake = library();
+    for disc in [1, 2] {
+        for (track, seconds) in [(1, 200), (2, 210)] {
+            let file = format!("CD{disc}{}0{track}.flac", std::path::MAIN_SEPARATOR);
+            let disc_tag = format!(r#", "disc": "{disc}""#);
+            fake = fake.probe(
+                &file,
+                &flac(
+                    "Track",
+                    "Marlo Venn",
+                    "The Glass Orchards",
+                    track,
+                    seconds,
+                    &disc_tag,
+                ),
+            );
+            s.file(&format!("rips/Orchards/CD{disc}/0{track}.flac"));
+        }
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    for disc in [2, 1] {
+        let cue = s.written(&format!("notes/cd{disc}.cue"), &disc_cue(disc));
+        let (ok, text) = s.run(&fake, &["add", &cue]);
+        assert!(ok, "its disc number names its disc's files: {text}");
+    }
+    for disc in [1, 2] {
+        assert_eq!(
+            title_and_disc(&s, &format!("Orchards/CD{disc}/01")),
+            (format!("Ember {disc}"), disc.to_string()),
+        );
+    }
+}
+
+#[test]
+fn a_sheet_whose_tracks_are_in_doubt_offers_song_by_song_first() {
+    let s = Setup::new();
+    let fake = discs();
+    for disc in [1, 2] {
+        s.file(&format!("rips/Orchards/CD{disc}/01.flac"));
+        s.file(&format!("rips/Orchards/CD{disc}/02.flac"));
+    }
+    let album = s.dir.path().join("rips").join("Orchards");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let cue = s.written(
+        "notes/undiscd.cue",
+        &disc_cue(2).replace("REM DISCNUMBER 2\n", ""),
+    );
+    let mut p = MockPrompter::new();
+    p.push_select(None);
+    let (ok, _) = s.asking(&fake, &["add", &cue], &mut p).unwrap();
+    assert!(ok);
+    let mut offered = p.asked[0].lines();
+    assert!(
+        offered.next().unwrap().contains("2 as near another song"),
+        "{:?}",
+        p.asked
+    );
+    assert_eq!(
+        offered.next().map(str::trim),
+        Some("Choose song by song"),
+        "{:?}",
+        p.asked
+    );
+}
+
 #[test]
 fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     let s = Setup::new();
@@ -635,7 +818,7 @@ fn lyrics_of_a_song_s_own_words_find_it_by_its_lyrics_tag() {
     let same = s.written("dl/same.lrc", words[0].1);
     let (ok, text) = s.run(&fake, &["add", &same]);
     assert!(
-        ok && text.contains("Lantern Weather.flac already holds it"),
+        ok && text.contains("Lantern Weather — Marlo Venn already holds it"),
         "{text}"
     );
     let lrc = s.written(
@@ -806,6 +989,37 @@ fn a_loose_file_left_out_still_lets_the_songs_added_with_it_be_written() {
 }
 
 #[test]
+fn lyrics_of_id_tags_or_cues_alone_are_no_lyrics_and_not_added() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    for (name, text) in [
+        ("tags.lrc", "[ti:Lantern Weather]\n[ar:Marlo Venn]\n"),
+        ("cues.lrc", "[00:01.00][Chorus]\n[00:05.00]\u{266a}\n"),
+        ("blank.lrc", "\n"),
+    ] {
+        let lrc = s.written(&format!("dl/{name}"), text);
+        let mut out = Vec::new();
+        let e = run_with(
+            &s.job(&["add", &lrc, "--to", "Lantern Weather"]),
+            &fake,
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        let said = crate::ui::plain(&String::from_utf8(out).unwrap());
+        assert!(said.contains("holds no lyrics"), "{name}: {said}");
+        assert!(
+            format!("{e:#}").contains("1 file(s) could not be added"),
+            "{name}: {e:#}"
+        );
+    }
+    assert!(s.added().is_empty(), "{:?}", s.added());
+}
+
+#[test]
 fn a_sheet_of_tracks_not_surely_songs_is_left_out_without_a_terminal() {
     let s = Setup::new();
     let fake = library();
@@ -963,7 +1177,7 @@ fn choosing_song_by_song_never_gives_one_song_two_tracks() {
          FILE \"t1.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n",
     );
     let mut p = MockPrompter::new();
-    p.push_select(Some(1))
+    p.push_select(Some(0))
         .push_select(Some(0))
         .push_select(None);
     let (ok, _) = s.asking(&fake, &["add", &cue], &mut p).unwrap();

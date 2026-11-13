@@ -4,7 +4,8 @@
 //! into a size, where audio is mixed, where
 //! a file beside a song is named, where ffmpeg is given a file to read,
 //! where what the user gives is walked and copied, where a provider is
-//! asked and named, and where text is written to a terminal. Each rule
+//! asked and named, where text is written to a terminal, and how a
+//! message names a library file. Each rule
 //! names the one place a thing is done; code that does it anywhere else
 //! fails here until the rule, and the reason beside it, is changed on
 //! purpose.
@@ -687,6 +688,63 @@ fn a_file_beside_a_song_is_named_in_one_place() {
         wrong.is_empty(),
         "a path is given an extension outside `outputs.rs`, so a file beside a \
          song may be named two ways:\n{}",
+        wrong.join("\n")
+    );
+}
+
+/// The modules that name library files by their place in the library,
+/// which a message shows with `/` on every system, through
+/// `relpath::show`, as the guide promises.
+const LIBRARY_NAMING: &[&str] = &[
+    "crates/muman-engine/src/reconcile.rs",
+    "crates/muman-engine/src/reconcile/",
+    "crates/muman-engine/src/diagnose.rs",
+    "crates/muman-engine/src/folder.rs",
+    "crates/muman-engine/src/history.rs",
+    "crates/muman-engine/src/library.rs",
+    "crates/muman-engine/src/outputs.rs",
+    "crates/muman-engine/src/render.rs",
+    "src/change.rs",
+];
+
+/// The paths those modules show as the platform writes them, each from
+/// the root: the library folder, the place it moved from, its root as a
+/// folder whose time is set, scratch folders, a leftover found by
+/// walking the library, the store's sources and the copies `add` made of
+/// them; and a path joined to a folder of the home. One joined to the
+/// library's is a library file.
+const FROM_THE_ROOT: &[&str] = &[
+    "library", "before", "dir", "scratch", "part", "source", "unused", "copy",
+];
+
+#[test]
+fn a_library_file_is_named_in_a_message_with_slashes() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if !LIBRARY_NAMING.iter().any(|m| file.starts_with(m)) {
+            continue;
+        }
+        for line in lines_with(&text, &[".display()"]) {
+            let parts: Vec<&str> = line.split(".display()").collect();
+            let rooted = parts[..parts.len() - 1].iter().all(|before| {
+                let name = before
+                    .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("");
+                FROM_THE_ROOT.contains(&name)
+                    || (name.is_empty()
+                        && before.contains(".join(")
+                        && !before.contains("library.join("))
+            });
+            if !rooted {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a path shown by `display` where a library file is named, which Windows would show \
+         with `\\`; show one through `relpath::show`, or name a path from the root here:\n{}",
         wrong.join("\n")
     );
 }

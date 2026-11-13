@@ -129,7 +129,6 @@ use crate::platform::Defaults;
 use crate::query::QueryMatch;
 use crate::reconcile::Options;
 use crate::runner::{Runner, System, Traced};
-use crate::state::State;
 use crate::ui::{InquirePrompter, Prompter};
 
 /// One run, with every path resolved.
@@ -436,7 +435,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 Some(report),
             )?
             .ok;
-            let problems = diagnose::diagnose(dirs)?.problems();
+            let problems = diagnose::diagnose(runner, dirs, job.settling)?.problems();
             if problems > 0 {
                 ui::warning(
                     out,
@@ -453,11 +452,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             changes: Some(fields),
             ..
         } => {
-            overview::changes(dirs, fields, data)?;
+            overview::changes(runner, (dirs, job.settling), fields, data)?;
             Ok(true)
         }
         Command::Info { .. } => {
-            overview::info(dirs, job.verbose, data)?;
+            overview::info(runner, (dirs, job.settling), job.verbose, data)?;
             let found: Vec<tools::Status> = tools::TOOLS
                 .iter()
                 .filter_map(|t| runner.tool(t.name))
@@ -529,7 +528,13 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => check::calibrate(dirs, data),
         Command::Check {
             decode, upstream, ..
-        } => check::check(runner, dirs, (*decode, *upstream), out, data),
+        } => check::check(
+            runner,
+            (dirs, job.settling),
+            (*decode, *upstream),
+            out,
+            data,
+        ),
         Command::Export {
             output,
             folder,
@@ -562,7 +567,12 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             // waited for rather than read as stopped, and no run begins
             // between the undo and its sync.
             let runs = Lock::runs(&dirs.home)?;
-            let planned = history::plan(dirs)?;
+            let scratch = crate::atomic::Scratch::new()?;
+            let plan = || {
+                let hear = reconcile::hearing(runner, scratch.path());
+                history::plan_hearing(dirs, job.settling, hear)
+            };
+            let planned = plan()?;
             ui::info(out, "Undoing the last run:")?;
             for line in planned.lines() {
                 ui::line(out, &format!("  {line}"))?;
@@ -584,7 +594,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let mut undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let _library = Lock::library(&dirs.library, dirs.lock_folder()?)?;
-                let again = history::plan(dirs)?;
+                let again = plan()?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(
                         "Another run changed the history meanwhile; run `undo` again".into(),
@@ -663,7 +673,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             confirm,
         } => {
             let mut later = Later::new(&dirs.home)?;
-            let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
+            let changed = change::remove(
+                runner,
+                (dirs, job.settling),
+                query,
+                *purge,
+                confirm,
+                prompter,
+                &mut later,
+                out,
+            );
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(
                     job,
@@ -677,7 +696,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Restore { query, confirm } => {
             let mut later = Later::new(&dirs.home)?;
-            let changed = change::restore(runner, dirs, query, confirm, prompter, &mut later, out);
+            let changed = change::restore(
+                runner,
+                (dirs, job.settling),
+                query,
+                confirm,
+                prompter,
+                &mut later,
+                out,
+            );
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
@@ -990,7 +1017,7 @@ fn list_songs<D: Write>(
 ) -> Result<()> {
     let manifest = Manifest::load(&dirs.home)?;
     let parsed = query::Query::parse(terms, &query::extractors(&manifest))?;
-    let state = State::load(&dirs.home)?;
+    let state = crate::reconcile::found(dirs)?;
     let views = if removed {
         manifest
             .removed
@@ -1001,11 +1028,10 @@ fn list_songs<D: Write>(
         query::views(&manifest, &state, &dirs.library)?
     };
     parsed.check_fields(&views)?;
-    let template = match (format, keys, removed) {
-        (Some(f), _, _) => f,
-        (None, true, _) => "{key}",
-        (None, false, true) => "{key}\\t{title}",
-        (None, false, false) => "{key}\\t{artist}\\t{title}\\t{album}",
+    let template = match (format, keys) {
+        (Some(f), _) => f,
+        (None, true) => "{key}",
+        (None, false) => "{key}\\t{artist}\\t{title}\\t{album}",
     };
     query::check_format(template, &views)?;
     for view in views

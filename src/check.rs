@@ -7,8 +7,10 @@
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
 //!
-//! What it reports without running a tool is [`crate::diagnose`]'s,
-//! which `status` counts too.
+//! What it reports without measuring or decoding is
+//! [`crate::diagnose`]'s, which `status` counts too: its problems, which
+//! make it exit 4, and its warnings, picks in doubt among them, which are
+//! choices to look at and which its last line counts apart.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -42,7 +44,7 @@ pub fn calibrate<D: Write>(dirs: &Dirs, data: &mut D) -> Result<bool> {
 /// Returns whether there was none.
 pub fn check<R: Runner, W: Write, D: Write>(
     runner: &R,
-    dirs: &Dirs,
+    (dirs, settling): (&Dirs, std::time::Duration),
     (decode, upstream): (bool, bool),
     out: &mut W,
     report: &mut D,
@@ -52,8 +54,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
         manifest,
         state,
         store,
-    } = crate::diagnose::diagnose(dirs)?;
+    } = crate::diagnose::diagnose(runner, dirs, settling)?;
     let mut problems = 0_usize;
+    let mut warnings = 0_usize;
     let mut problem = |out: &mut D, text: String| {
         problems += 1;
         crate::ui::warning(out, &text)
@@ -61,7 +64,10 @@ pub fn check<R: Runner, W: Write, D: Write>(
     for line in said {
         match line {
             Said::Info(line) => crate::ui::info(report, &line)?,
-            Said::Warning(line) => crate::ui::warning(report, &line)?,
+            Said::Warning(line) => {
+                warnings += 1;
+                crate::ui::warning(report, &line)?;
+            }
             Said::Problem(line) => problem(report, line)?,
         }
     }
@@ -125,8 +131,11 @@ pub fn check<R: Runner, W: Write, D: Write>(
             }
         }
     }
-    if problems == 0 {
-        crate::ui::success(report, "No problems found")?;
+    // A warning, as a pick in doubt, is a choice to look at, not a fault.
+    match (problems, warnings) {
+        (0, 0) => crate::ui::success(report, "No problems found")?,
+        (0, w) => crate::ui::success(report, &format!("No problems found; {w} warning(s) above"))?,
+        _ => {}
     }
     Ok(problems == 0)
 }
@@ -435,7 +444,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(
@@ -491,7 +507,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(text.contains("No site can be reached"), "{text}");
@@ -534,7 +557,14 @@ mod tests {
             ..Fake::default()
         };
         let (mut out, mut report) = (Vec::new(), Vec::new());
-        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let ok = check(
+            &fake,
+            (&dirs, std::time::Duration::ZERO),
+            (false, true),
+            &mut out,
+            &mut report,
+        )
+        .unwrap();
         let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(!text.contains("No site can be reached"), "{text}");
@@ -560,42 +590,57 @@ mod tests {
             )
         };
         let was = crate::info::tags_digest(listing("Lantern Weather").as_bytes()).unwrap();
-        std::fs::write(
-            dirs.manifest(),
-            format!(
-                "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
-                 held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", tags = \"{}\", \
-                 format = \"251\", size = 100 }}\n",
-                &was[..16]
-            ),
-        )
-        .unwrap();
-        let ask = |title: &str| {
-            let fake = Fake {
-                lines: vec![listing(title).replace("\"epoch\": 1", "\"epoch\": 2")],
-                ..Fake::default()
+        // A file that kept its own tags holds them in `tags` beside the
+        // listing's, which `listed` holds alone.
+        for tags in [
+            format!("tags = \"{}\"", &was[..16]),
+            format!("tags = \"fedcba9876543210\", listed = \"{}\"", &was[..16]),
+        ] {
+            std::fs::write(
+                dirs.manifest(),
+                format!(
+                    "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
+                     held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", {tags}, \
+                     format = \"251\", size = 100 }}\n"
+                ),
+            )
+            .unwrap();
+            let ask = |title: &str| {
+                let fake = Fake {
+                    lines: vec![listing(title).replace("\"epoch\": 1", "\"epoch\": 2")],
+                    ..Fake::default()
+                };
+                let (mut out, mut report) = (Vec::new(), Vec::new());
+                check(
+                    &fake,
+                    (&dirs, std::time::Duration::ZERO),
+                    (false, true),
+                    &mut out,
+                    &mut report,
+                )
+                .unwrap();
+                crate::ui::plain(&String::from_utf8(report).unwrap())
             };
-            let (mut out, mut report) = (Vec::new(), Vec::new());
-            check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
-            crate::ui::plain(&String::from_utf8(report).unwrap())
-        };
-        let same = ask("Lantern Weather");
-        assert!(
-            same.contains("1 of 1 source(s) served as fetched"),
-            "a new epoch is no change: {same}"
-        );
-        let retitled = ask("Paper Comets");
-        assert!(
-            retitled.contains("Serves other tags: youtube.com:aaaaaaaaaaa"),
-            "{retitled}"
-        );
-        assert!(
-            retitled.contains("0 of 1 source(s) served as fetched"),
-            "{retitled}"
-        );
+            let same = ask("Lantern Weather");
+            assert!(
+                same.contains("1 of 1 source(s) served as fetched"),
+                "a new epoch is no change: {tags}: {same}"
+            );
+            let retitled = ask("Paper Comets");
+            assert!(
+                retitled.contains("Serves other tags: youtube.com:aaaaaaaaaaa"),
+                "{tags}: {retitled}"
+            );
+            assert!(
+                retitled.contains("0 of 1 source(s) served as fetched"),
+                "{tags}: {retitled}"
+            );
+        }
     }
 
     #[test]
+    // One home holding a file of each kind `check` tells apart, checked whole.
+    #[expect(clippy::too_many_lines)]
     fn missing_changed_and_stray_files_are_found() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = Dirs {
@@ -605,13 +650,23 @@ mod tests {
         };
         std::fs::create_dir_all(dirs.library.join("A")).unwrap();
         std::fs::create_dir_all(&dirs.home).unwrap();
-        std::fs::write(dirs.library.join("A/kept.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/changed.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/stray.opus"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/notes.txt"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/.hidden"), "x").unwrap();
-        std::fs::write(dirs.library.join("A/half.opus.part"), "x").unwrap();
+        let names = "kept.opus changed.opus stray.opus notes.txt .hidden gone.opus.part \
+                     notes.part stray.opus.part";
+        for name in names.split(' ') {
+            std::fs::write(dirs.library.join("A").join(name), "x").unwrap();
+        }
+        // Each file a song listed has, but one whose song was taken out of the list.
+        let ids = ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd"];
+        let songs = (ids.iter())
+            .map(|id| format!("[[song]]\nsources = [\"youtube.com:{id}\"]\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        std::fs::write(dirs.manifest(), format!("version = 1\n{songs}")).unwrap();
         let mut state = crate::state::State::default();
+        let of = |id: &str, written: Written| Written {
+            sources: vec![crate::source::SourceKey::youtube(id)],
+            ..written
+        };
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
             sidecars: Vec::new(),
@@ -637,29 +692,45 @@ mod tests {
             digest: None,
         };
         let kept = store::stamp_text(&dirs.library.join("A/kept.opus"));
-        state.outputs.insert("A/kept.opus".into(), written(kept));
         state
             .outputs
-            .insert("A/changed.opus".into(), written(Some("1:1".into())));
-        state.outputs.insert("A/gone.opus".into(), written(None));
+            .insert("A/kept.opus".into(), of(ids[0], written(kept)));
+        state.outputs.insert(
+            "A/changed.opus".into(),
+            of(ids[1], written(Some("1:1".into()))),
+        );
+        // About to be written when its run stopped, as a sync records it.
+        let unfinished = Written {
+            plan: None,
+            ..written(None)
+        };
+        state
+            .outputs
+            .insert("A/gone.opus".into(), of(ids[2], unfinished));
+        state
+            .outputs
+            .insert("A/dropped.opus".into(), of("eeeeeeeeeee", written(None)));
         std::fs::write(dirs.library.join("A/sung.opus"), "x").unwrap();
         let sung = Written {
             sidecars: vec![crate::state::Sidecar::at("A/sung.lrc".into())],
-            ..written(store::stamp_text(&dirs.library.join("A/sung.opus")))
+            ..of(
+                ids[3],
+                written(store::stamp_text(&dirs.library.join("A/sung.opus"))),
+            )
         };
         state.outputs.insert("A/sung.opus".into(), sung);
         state.save(&dirs.home).unwrap();
         let (mut out, mut report) = (Vec::new(), Vec::new());
         let ok = check(
             &Fake::default(),
-            &dirs,
+            (&dirs, std::time::Duration::ZERO),
             (false, false),
             &mut out,
             &mut report,
         )
         .unwrap();
         assert!(out.is_empty(), "the problems are the report");
-        let text = String::from_utf8(report).unwrap();
+        let text = crate::ui::plain(&String::from_utf8(report).unwrap());
         assert!(!ok);
         assert!(
             text.contains("Missing, `sync` writes it again: A/gone.opus"),
@@ -668,18 +739,23 @@ mod tests {
         assert!(text.contains("Changed since muman wrote it"), "{text}");
         assert!(text.contains("A/changed.opus"), "{text}");
         assert!(!text.contains("A/kept.opus"), "{text}");
-        assert!(
-            text.contains("Not muman's, left alone: A/stray.opus"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Not muman's, left alone: A/notes.txt"),
-            "{text}"
-        );
         assert!(!text.contains(".hidden"), "{text}");
-        assert!(text.contains("Left by an interrupted run"), "{text}");
+        let said = |line: String| text.lines().any(|l| l == line);
+        assert!(said("Left by an interrupted run: A/gone.opus.part".into()));
+        for theirs in ["stray.opus", "notes.txt", "notes.part", "stray.opus.part"] {
+            assert!(
+                said(format!("Not muman's, left alone: A/{theirs}")),
+                "{text}"
+            );
+        }
         assert!(
             text.contains("Missing beside its song, `sync` writes it again: A/sung.lrc"),
+            "{text}"
+        );
+        // A sync writes nothing again for a song no longer listed: it lets go of its file.
+        assert!(!text.contains("again: A/dropped.opus"), "{text}");
+        assert!(
+            said("Missing, and no song listed has it: `sync` lets it go: A/dropped.opus".into()),
             "{text}"
         );
 
@@ -688,7 +764,7 @@ mod tests {
         let mut report = Vec::new();
         check(
             &Fake::default(),
-            &dirs,
+            (&dirs, std::time::Duration::ZERO),
             (false, false),
             &mut Vec::new(),
             &mut report,

@@ -14,7 +14,15 @@
 //! of songs typed instead: `undo` cannot take a file back from the
 //! desktop's trash on every platform, and a yes given from habit should
 //! not be enough to put it there.
+//!
+//! What `remove` says of the library files it deletes and leaves is what
+//! the sync after it decides ([`crate::reconcile::foresight`]), of the songs
+//! planned as the list is without the songs it removes: a file beside a
+//! song that the user changed since muman wrote it is left in place, said
+//! so and not counted, as the sync leaves it, and a folder's file the next
+//! song of its folder takes is not said at all.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -27,6 +35,8 @@ use crate::dirs::Dirs;
 use crate::manifest::{self, Edit, Manifest, Rewritten, Song, SongTable};
 use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
+use crate::reconcile::Pruned;
+use crate::relpath;
 use crate::resolve::Resolved;
 use crate::rows;
 use crate::source::SourceKey;
@@ -184,7 +194,7 @@ pub struct Read {
 impl Read {
     pub fn new(dirs: &Dirs, terms: &[String]) -> Result<Self> {
         let manifest = Manifest::load(&dirs.home)?;
-        let state = State::load(&dirs.home)?;
+        let state = crate::reconcile::found(dirs)?;
         let (views, resolved): (Vec<View>, Vec<_>) =
             query::resolved_views(&manifest, &state, &dirs.library)?
                 .into_iter()
@@ -240,14 +250,14 @@ impl Read {
         let changed = self.manifest.save_if_unchanged(&expected, run)?;
         if !changed.is_empty() {
             self.manifest.discard();
-            bail!(
+            return refuse(format!(
                 "the song list changed while this ran, for {}; nothing was changed, run it again",
                 changed
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ")
-            );
+            ));
         }
         Ok(())
     }
@@ -278,8 +288,11 @@ fn store_files(store: &Store, key: &SourceKey) -> Vec<PathBuf> {
 
 /// Remove the songs the query picks, and with `purge` their sources.
 /// Returns whether anything was removed.
-pub fn remove<W: Write>(
-    dirs: &Dirs,
+// One more than clippy allows: the runner and the settling the sync after hears and waits by.
+#[expect(clippy::too_many_arguments)]
+pub fn remove<R: crate::runner::Runner, W: Write>(
+    runner: &R,
+    (dirs, settling): (&Dirs, std::time::Duration),
     terms: &[String],
     purge: bool,
     confirm: &Confirm,
@@ -295,33 +308,16 @@ pub fn remove<W: Write>(
     }
     let store = Store::scan(dirs)?;
     let mut doomed: Vec<(PathBuf, bool)> = Vec::new();
+    // Each song's files of the user's own it trashes, noted under
+    // `[[removed]]` so `restore` waits for every one of them.
+    let mut trashed: Vec<Vec<SourceKey>> = Vec::new();
     let mut deleted = 0;
+    let leaving = Leaving::of(runner, (dirs, settling), &read, &picked)?;
     for n in &picked {
+        let mut own_trashed = Vec::new();
         let view = &read.views[*n];
         crate::ui::line(out, &format!("  − {}", named(view)))?;
-        let written = read
-            .state
-            .outputs
-            .iter()
-            .filter(|(_, w)| view.id().is_some_and(|id| w.sources.contains(id)));
-        for (path, w) in written {
-            // As the sync after does: a song's files stay whole when its
-            // audio changed since written.
-            let changed =
-                crate::reconcile::edited_since_written(&dirs.library, &read.state.outputs, path);
-            let how = if changed {
-                "leaves in place, changed since muman wrote it,"
-            } else {
-                "deletes"
-            };
-            for file in w.files(path) {
-                deleted += usize::from(!changed);
-                crate::ui::line(
-                    out,
-                    &format!("    {how} {}", dirs.library.join(file).display()),
-                )?;
-            }
-        }
+        deleted += leaving.say(&read.state, view, out)?;
         if purge {
             // A record another song still lists stays for that song.
             let shared = |k: &SourceKey| {
@@ -338,21 +334,35 @@ pub fn remove<W: Write>(
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
-                    for file in store_files(&store, key) {
+                    for source in store_files(&store, key) {
                         crate::ui::line(
                             out,
-                            &format!("    keeps {}, which a removed song lists", file.display()),
+                            &format!("    keeps {}, which a removed song lists", source.display()),
                         )?;
                     }
                     continue;
                 }
-                for file in store_files(&store, key) {
+                for source in store_files(&store, key) {
                     let how = if own { "trashes" } else { "deletes" };
-                    crate::ui::line(out, &format!("    {how} {}", file.display()))?;
-                    doomed.push((file, own));
+                    crate::ui::line(out, &format!("    {how} {}", source.display()))?;
+                    if own && let Ok(rel) = source.strip_prefix(dirs.manual()) {
+                        own_trashed.push(SourceKey::Manual(rel.into()));
+                    }
+                    doomed.push((source, own));
                 }
             }
         }
+        trashed.push(own_trashed);
+    }
+    for file in &leaving.others {
+        deleted += 1;
+        crate::ui::line(
+            out,
+            &format!(
+                "  and the sync after deletes {}, as `muman status` says",
+                relpath::show(file)
+            ),
+        )?;
     }
     let own = doomed.iter().filter(|(_, own)| *own).count();
     let runs = read.manifest.settings.history.runs;
@@ -361,7 +371,7 @@ pub fn remove<W: Write>(
     if !confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
-    for n in &picked {
+    for (n, files) in picked.iter().zip(trashed) {
         let view = &read.views[*n];
         let Some(id) = view.id() else {
             continue;
@@ -369,6 +379,10 @@ pub fn remove<W: Write>(
         read.manifest.edit(Edit::Remove {
             key: id.clone(),
             note: view.note(),
+        });
+        read.manifest.edit(Edit::Trashed {
+            key: id.clone(),
+            files,
         });
     }
     let run = later.begin()?;
@@ -380,19 +394,113 @@ pub fn remove<W: Write>(
     Ok(true)
 }
 
+/// What the sync after `remove` does with each library file of the songs
+/// it removes, as it decides it ([`crate::reconcile::foresight`]), and the
+/// files of other songs it removes too, as one `max_size` leaves out.
+struct Leaving {
+    fates: BTreeMap<PathBuf, Pruned>,
+    others: Vec<PathBuf>,
+}
+
+impl Leaving {
+    /// What the sync after the songs at `picked` leave `read`'s list
+    /// decides of their files, from the grounds it gathers
+    /// ([`crate::reconcile::gather`]), a moved source heard by `runner`: of
+    /// the songs planned as the list is without them, as a folder's file
+    /// the next song of its folder takes. A list whose settings the sync
+    /// refuses removes nothing.
+    fn of<R: crate::runner::Runner>(
+        runner: &R,
+        (dirs, settling): (&Dirs, std::time::Duration),
+        read: &Read,
+        picked: &[usize],
+    ) -> Result<Self> {
+        let paths: BTreeSet<PathBuf> = (picked.iter())
+            .flat_map(|n| files_of(&read.state, &read.views[*n]))
+            .collect();
+        // As `read` loaded it, so a song is at the place it was picked by.
+        let mut manifest = Manifest::load(&dirs.home)?;
+        let listed = std::mem::take(&mut manifest.songs);
+        manifest.songs = (listed.into_iter().enumerate())
+            .filter(|(n, _)| !picked.contains(n))
+            .map(|(_, song)| song)
+            .collect();
+        let scratch = crate::atomic::Scratch::new()?;
+        let ground = crate::reconcile::gather(
+            dirs,
+            manifest,
+            crate::reconcile::Gathering::forecast(&dirs.home, settling),
+            crate::reconcile::hearing(runner, scratch.path()),
+            &mut std::io::sink(),
+        )?;
+        let grounds = ground.grounds(&dirs.library, (false, false));
+        let removals = match crate::reconcile::foresight(runner, &grounds) {
+            Ok(foresight) => foresight.intent.removals().cloned().collect(),
+            Err(e) if e.downcast_ref::<crate::errors::Refused>().is_some() => Vec::new(),
+            Err(e) => return Err(e),
+        };
+        let (fates, rest): (Vec<_>, Vec<_>) =
+            (removals.into_iter()).partition(|(path, _)| paths.contains(path));
+        Ok(Self {
+            fates: fates.into_iter().collect(),
+            others: (rest.iter())
+                .flat_map(|(_, fate)| fate.gone())
+                .cloned()
+                .collect(),
+        })
+    }
+
+    /// Say what becomes of each file of `view`'s song; how many go.
+    fn say<W: Write>(&self, state: &State, view: &View, out: &mut W) -> Result<usize> {
+        let mut deleted = 0;
+        for path in files_of(state, view) {
+            let Some(fate) = self.fates.get(&path) else {
+                continue;
+            };
+            let left: &[PathBuf] = match fate {
+                Pruned::LeftChanged => std::slice::from_ref(&path),
+                _ => fate.left(),
+            };
+            for file in fate.gone() {
+                deleted += 1;
+                crate::ui::line(out, &format!("    deletes {}", relpath::show(file)))?;
+            }
+            for file in left {
+                crate::ui::line(
+                    out,
+                    &format!(
+                        "    leaves in place, changed since muman wrote it, {}",
+                        relpath::show(file)
+                    ),
+                )?;
+            }
+        }
+        Ok(deleted)
+    }
+}
+
+/// The library files the state records of `view`'s song.
+fn files_of(state: &State, view: &View) -> Vec<PathBuf> {
+    let id = view.id();
+    (state.outputs.iter())
+        .filter(|(_, w)| id.is_some_and(|id| w.sources.contains(id)))
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+
 /// Move each file of `doomed` that is the user's own to the trash, and
 /// delete the others, which muman fetched.
 // Deletes a removed song's fetched source, with `remove --purge`.
 #[expect(clippy::disallowed_methods)]
 fn purge_all(doomed: Vec<(PathBuf, bool)>) -> Result<()> {
-    for (file, own) in doomed {
+    for (source, own) in doomed {
         if own {
-            crate::history::to_trash(&file)
-                .with_context(|| format!("moving {} to the trash", file.display()))?;
+            crate::history::to_trash(&source)
+                .with_context(|| format!("moving {} to the trash", source.display()))?;
         } else {
-            match std::fs::remove_file(&file) {
+            match std::fs::remove_file(&source) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(e).with_context(|| format!("deleting {}", file.display()));
+                    return Err(e).with_context(|| format!("deleting {}", source.display()));
                 }
                 _ => {}
             }
@@ -463,7 +571,7 @@ fn removal(
 /// was.
 pub fn restore<R: crate::runner::Runner, W: Write>(
     runner: &R,
-    dirs: &Dirs,
+    (dirs, settling): (&Dirs, std::time::Duration),
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
@@ -495,21 +603,26 @@ pub fn restore<R: crate::runner::Runner, W: Write>(
     // listed with nothing to make it from, and every sync failing.
     // A file moved within the folder is followed by the sync after.
     let store = Store::scan(dirs)?;
-    let mut unlisted =
-        crate::reconcile::Unlisted::of(&manifest, &state, &store, crate::store::SETTLING);
     let scratch = crate::atomic::Scratch::new()?;
     let hear = crate::reconcile::hearing(runner, scratch.path());
-    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
-    let gone: Vec<String> = picked
+    let moves = crate::reconcile::found_moves(&manifest, &state, &store, settling, hear);
+    let gone: std::collections::BTreeSet<String> = picked
         .iter()
-        .flat_map(|n| &manifest.removed[*n].sources)
+        .flat_map(|n| {
+            let removed = &manifest.removed[*n];
+            crate::reconcile::not_back(
+                &dirs.manual(),
+                &store,
+                &moves.moved,
+                (&removed.sources, &removed.trashed),
+            )
+        })
         .filter_map(|k| match k {
-            SourceKey::Manual(m) if store.locate(k).is_none() && !moves.moved.contains_key(k) => {
-                Some(format!("  {}", dirs.manual().join(m.path()).display()))
-            }
+            SourceKey::Manual(m) => Some(format!("  {}", dirs.manual().join(m.path()).display())),
             _ => None,
         })
         .collect();
+    let gone: Vec<String> = gone.into_iter().collect();
     if !gone.is_empty() {
         return Err(Refused(format!(
             "These files of your own are gone, as `remove --purge` moves them to the \

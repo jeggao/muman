@@ -348,6 +348,27 @@ fn others(n: usize) -> String {
     }
 }
 
+/// Whether `a` and `b` are one recording, as [`Recordings::of`] tells a
+/// song's sources apart by `aligned`: `None` where it cannot tell, the
+/// two neither compared nor holding the same packets, or either too short
+/// to compare. A source joins a song only on this rule, so its song never
+/// holds it as another recording on a comparison made after.
+pub fn one<'x>(
+    a: &Audible<'_>,
+    b: &Audible<'_>,
+    aligned: impl Fn(&SourceKey, &SourceKey) -> Option<&'x Aligned>,
+) -> Option<bool> {
+    let same = a.digest.is_some() && a.digest == b.digest;
+    if !same && aligned(a.key, b.key).is_none() && aligned(b.key, a.key).is_none() {
+        return None;
+    }
+    let found = Recordings::of(&[a.clone(), b.clone()], &[], aligned);
+    if found.short.contains(a.key) || found.short.contains(b.key) {
+        return None;
+    }
+    Some(!found.several())
+}
+
 /// The root of `i`'s set, each set rooted at its smallest member.
 fn top(root: &[usize], mut i: usize) -> usize {
     while root[i] != i {

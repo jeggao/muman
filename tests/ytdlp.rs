@@ -19,9 +19,9 @@ use muman::settings::Ytdlp;
 
 const MEDIA: &[u8] = include_bytes!("../testdata/silence.m4a");
 
-/// Serve `MEDIA` at `/silence.m4a` to every request on a loopback port,
+/// Serve `media` at `/silence.m4a` to every request on a loopback port,
 /// answering whole whatever the range asked, until the process ends.
-fn serve() -> String {
+fn serve(media: Vec<u8>) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -34,10 +34,10 @@ fn serve() -> String {
                 stream,
                 "HTTP/1.0 200 OK\r\nContent-Type: audio/mp4\r\nContent-Length: {}\r\n\
                  Accept-Ranges: none\r\nConnection: close\r\n\r\n",
-                MEDIA.len()
+                media.len()
             );
             if !head {
-                let _ = stream.write_all(MEDIA);
+                let _ = stream.write_all(&media);
             }
         }
     });
@@ -78,7 +78,25 @@ fn yt_dlp_takes_every_option_muman_passes() {
         passed: &passed,
         batch: None,
     };
-    let url = serve();
+    let plain = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("silence.m4a");
+    let tagged = root.join("tagged.m4a");
+    let mut tag: Vec<OsString> = ["ffmpeg", "-v", "error", "-i"].map(Into::into).into();
+    tag.push(plain.into_os_string());
+    for arg in [
+        "-c",
+        "copy",
+        "-metadata",
+        "title=Night Ferry",
+        "-metadata",
+        "date=1997",
+    ] {
+        tag.push(arg.into());
+    }
+    tag.push(tagged.clone().into_os_string());
+    runner.run(&tag).expect("ffmpeg tags the file served");
+    let url = serve(std::fs::read(&tagged).unwrap());
     let cmd = ytdlp_command(&places, None, std::slice::from_ref(&url));
     let (ok, text) = lines(&runner, &cmd);
     assert!(ok, "yt-dlp failed:\n{text}");
@@ -110,6 +128,16 @@ fn yt_dlp_takes_every_option_muman_passes() {
     );
     let info = muman::info::parse(&kept).unwrap();
     assert_eq!(info.id.as_deref(), Some("silence"));
+    assert!(info.muman_own_tags.is_some(), "{text}");
+    let own = muman::probe::parse(&runner.output(&muman::probe::ffprobe_command(file)).unwrap())
+        .unwrap()
+        .tags;
+    assert_eq!(
+        own.get("title").map(String::as_str),
+        Some("Night Ferry"),
+        "{own:?}"
+    );
+    assert_eq!(own.get("date").map(String::as_str), Some("1997"), "{own:?}");
     assert_eq!(info.formats.len(), 1, "{text}");
     assert!(info.audio_format().is_some(), "{text}");
 
@@ -117,6 +145,37 @@ fn yt_dlp_takes_every_option_muman_passes() {
     let (ok, text) = lines(&runner, &listing);
     assert!(ok, "yt-dlp failed:\n{text}");
     assert!(text.contains("\"id\": \"silence\""), "{text}");
+    listed_as_fetched(&runner, file, &text, &root.join("hashed"));
+}
+
+/// Assert that `listing`, yt-dlp's listing of `file` just fetched, lists
+/// the tag fields it was fetched with, as `check --upstream` compares
+/// them, its own tags apart; hashed in `scratch`.
+fn listed_as_fetched(runner: &System, file: &Path, listing: &str, scratch: &Path) {
+    let listed = listing
+        .lines()
+        .find_map(|l| muman::info::tags_digest(l.as_bytes()))
+        .unwrap_or_else(|| panic!("{listing}"));
+    let located = muman::store::Located {
+        key: muman::source::SourceKey::parse("generic:silence").unwrap(),
+        path: file.to_path_buf(),
+        kind: muman::store::Kind::Media,
+        lyrics: None,
+        covers: Vec::new(),
+    };
+    let (digests, served) = muman::facts::hash(runner, &located, scratch).unwrap();
+    let mut facts = muman::facts::Facts::unreadable("r".into());
+    facts.take(&digests, served);
+    let held = muman::held::Held::now(&located.key, &facts, &muman::sites::Sites::default())
+        .expect("a record");
+    assert!(
+        held.listed.is_some(),
+        "its own tags are held beside the listing's: {held:?}"
+    );
+    assert!(
+        !held.tags_differ(&listed),
+        "listed again, the file just fetched serves the tags it was fetched with: {held:?}"
+    );
 }
 
 #[test]
@@ -134,7 +193,7 @@ fn the_song_list_s_arguments_reach_yt_dlp_from_its_config_file_as_written() {
     };
     let passed = Passed::write(&options, dir.path()).unwrap();
     let own = ["yt-dlp", "--ignore-config", "--simulate"].map(OsString::from);
-    let cmd = ending(own.into(), &passed, &serve());
+    let cmd = ending(own.into(), &passed, &serve(MEDIA.to_vec()));
     assert!(!cmd.iter().any(|a| a.to_string_lossy().contains("Marlo")));
     let (ok, text) = lines(&runner, &cmd);
     assert!(ok, "yt-dlp failed:\n{text}");

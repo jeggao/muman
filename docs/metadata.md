@@ -22,7 +22,9 @@ Each field describes either the recording or the release.
   spells otherwise, as `R&B`.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
-  album ranks best. So one release's IDs never mix with another's. Of
+  album ranks best, each from a field kept for it: a video's upload date
+  dates its release only as [an upload date](#values-that-say-nothing)
+  does any song. So one release's IDs never mix with another's. Of
   albums that rank alike, the source with more of the release's fields
   wins. With no album artist offered, muman fills in the first artist,
   less anyone it features: `Marlo Venn feat. Kiri Hoshino` fills in
@@ -50,6 +52,8 @@ fields come from that source too.
 
 muman reads a file's tags by their Vorbis names, or by the names Picard
 gives them in MP3 and MP4; a track written `3/12` offers its total too.
+It reads them twice, with its tag reader and with ffprobe, and takes a
+field from whichever found it, the tag reader's values where both did.
 In MP3, MP4 and WavPack it writes each field where Picard writes it, so
 muman and Picard agree on a library. A value its field cannot hold, as
 a date that is none, or a value over 4 KiB, counts as offered by no
@@ -229,10 +233,14 @@ against another source:
 
 - **Placeholders**, which stand for no value: MusicBrainz's `[unknown]`,
   `[no label]` and `[non-album tracks]`, a tagger's `Unknown Artist`, a
-  video site's category given as a genre, an artist that is a
-  soundtrack's short name, as `Night Ferry OST 2`, and a release country
-  that is no two-letter code. Each is told whatever its case, spacing,
-  quotes or hyphens, so typography never keeps one.
+  genre of `N/A` or ID3's number for none, a video site's category given
+  as a genre, an artist that is a soundtrack's short name, as `Night
+  Ferry OST 2`, and a release country that is no two-letter code. Each
+  is told whatever its case, width, spacing, quotes or hyphens, so
+  typography never keeps one, and in any brackets or quotes around it
+  all, every kind alike, as `{unknown}`, `「unknown」`, `[[unknown]]` or
+  `(Unknown Artist)`. One item of a list of genres may be one, as `N/A`
+  in `N/A; Jazz`, which leaves `Jazz`.
 - **Watermarks**, the name of whoever shared the files, written into
   the work, label, copyright, comment or grouping: a value that stands as
   a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
@@ -243,14 +251,20 @@ against another source:
   A label a discography's albums share stays.
 
 `muman status` names each value dropped, as `dropped  WORK “GRP” from
-torrent:…: a watermark of torrent:…`. `[tags.clean.packaging]
+torrent:…: a watermark of torrent:…`, and so each one cleaning leaves,
+as `Other` of the genres `Other/Rock`. `[tags.clean.packaging]
 placeholder` and `watermark` turn each off.
 
 A video's upload date is when it went up, so it dates a song only when
 the channel that uploaded it is the song's artist, as another source or
 a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
-out.
+out. That holds on every site, archive.org's uploads included, and
+whichever source the album comes from. A date the fetched file's own
+tags hold is no upload's, and dates it as any file's does. A file keeps
+no tags of its own where its site gave chapters, which yt-dlp writes in
+their place, or where an older muman had yt-dlp write the site's values
+over them.
 
 ## Titles read off a video
 
@@ -327,6 +341,13 @@ Lyrics are read alike from a file and a tag, whatever the switches say:
 a control character, as DOS's end-of-file mark or a terminal's colour
 code, is dropped. A lyrics file that reads as other data gives no
 lyrics, and is said when its song is measured.
+
+A lyrics file in no UTF is read in the older encoding that reads its
+bytes as text rather than as letters of mixed scripts or symbols, as
+Shift-JIS read as Windows-1251 does. A few short lines may read as well
+in two, as a few Hangul syllables' bytes read as Chinese too: `sync`
+then names the one it took, and an `[la:]` line naming their language, as
+`[la:ja]` or `[la:ko]`, settles it.
 
 Each rule is a switch under `[tags.clean.<tier>]`, or
 `[lyrics.clean.<tier>]` for lyrics; the song list lists every one.

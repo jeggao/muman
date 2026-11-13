@@ -38,6 +38,17 @@
 //! store's staging folder rather than copied, and from there to its
 //! key's place ([`crate::store::place`]).
 //!
+//! yt-dlp writes none of its info into a file's tags: it would write the
+//! upload date as the file's date, the uploader as its artist and the
+//! page's title as its title, over what the file held, as each file of an
+//! archive.org item holds its release's tags, and they would then read
+//! as the file's own. Chapters yt-dlp embeds take the place of the
+//! file's tags, so a file the site gives chapters keeps none of its
+//! own, which is no harm. Its info JSON says it was fetched so,
+//! [`info::VideoInfo::muman_own_tags`], so its tags are read as any
+//! file's are; a file fetched before holds yt-dlp's values, and only its
+//! info JSON is read.
+//!
 //! The info JSON yt-dlp embeds holds the cookies and headers its
 //! requests sent and the signed addresses of what it fetched
 //! ([`crate::info`]), and no yt-dlp option leaves them out of the formats
@@ -70,6 +81,11 @@ use crate::sites::Sites;
 use crate::source::SourceKey;
 use crate::units::serde_as;
 use crate::{ffmpeg, info, probe};
+
+/// The `--parse-metadata` that marks a file's tags as its own in its
+/// info JSON ([`info::VideoInfo::muman_own_tags`]), yt-dlp writing none
+/// over them.
+const OWN_TAGS: &str = "%(muman_own_tags|own)s:(?P<muman_own_tags>.+)";
 
 /// How yt-dlp fetches a source.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -262,7 +278,9 @@ pub fn ytdlp_command(
         "fragment:exp=1:30",
         "--retry-sleep",
         "extractor:exp=1:30",
-        "--embed-metadata",
+        // yt-dlp would write its upload date and uploader over the file's
+        // own date and artist; its info JSON says what the site says.
+        "--no-embed-metadata",
         "--embed-thumbnail",
         "--embed-chapters",
         "--embed-info-json",
@@ -285,6 +303,8 @@ pub fn ytdlp_command(
         // (source::page); a field of muman's own keeps it.
         "--parse-metadata",
         "original_url:(?P<muman_original_url>.+)",
+        "--parse-metadata",
+        OWN_TAGS,
         "--output",
     ]
     .into_iter()
@@ -776,12 +796,17 @@ mod tests {
     }
 
     #[test]
-    fn the_address_given_is_kept_in_the_info_json() {
+    fn the_address_given_and_the_file_s_own_tags_are_kept() {
         let cmd = ytdlp_command(&places(None), None, &[]);
         assert_eq!(
             value_after(&cmd, "--parse-metadata"),
-            vec![&OsString::from("original_url:(?P<muman_original_url>.+)")]
+            vec![
+                &OsString::from("original_url:(?P<muman_original_url>.+)"),
+                &OsString::from(OWN_TAGS)
+            ]
         );
+        assert!(cmd.iter().any(|a| a == "--no-embed-metadata"));
+        assert!(!cmd.iter().any(|a| a == "--embed-metadata"));
     }
 
     /// A fetch's streams: audio, its info JSON, a JPEG cover ffmpeg reads

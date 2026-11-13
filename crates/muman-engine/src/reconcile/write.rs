@@ -5,13 +5,25 @@
 //! A song tagged again is written no further than its parts reach: its
 //! file is tagged only where its tags or the lyrics inside changed, and
 //! of the files beside it only those whose part changed, or that are gone,
-//! are written; the rest keep the records they were written with.
+//! are written; the rest keep the records they were written with. A
+//! song's own file is gone only when it is: a file beside it gone, as a
+//! deleted `.lrc`, is written again beside it alone. Which files each
+//! song writes, keeps and clears is the intent's ([`Rewrite`]), decided
+//! with the moves before any is made; it is judged again here only where
+//! a move or a free failed. What is said, and kept for `undo` first, is
+//! those files, so a song whose `.lrc` alone was written is said by its
+//! `.lrc`.
 //!
 //! Every song due is saved as about to be written before any is, and
 //! each as written once it is, in a commit of its own that writes its
 //! row alone ([`crate::state::State::save_output`]): a run stopped
 //! partway writes again only the song it was writing, and the commit
-//! costs the same whatever the size of the state.
+//! costs the same whatever the size of the state. A song that fails once
+//! a file of it is in place ([`crate::library::HalfWritten`]) keeps the
+//! record saved before it was written, as a run stopped there leaves it:
+//! the files at its paths stay muman's, and the next sync writes it
+//! whole, where the record it had would take the files it wrote for the
+//! user's.
 //!
 //! A panic building a song, in muman or a crate it calls, fails that song
 //! alone, as an error does ([`crate::errors::caught`]), and clears the
@@ -40,10 +52,12 @@ use crate::source::SourceKey;
 use crate::state::{self, Sidecar, State, Written};
 use crate::store::{self, Located};
 
-use super::decide::{Doing, Intent, folder_there, kept, moved_to};
+use super::decide::{
+    Doing, Forced, Found, Intent, Rewrite, Rewrites, due, kept, moved_to, rewrites, shared,
+};
 use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
-use super::prune::prune;
+use super::prune::{free, prune};
 use super::{NAMED, Sub};
 
 /// What differs between two plans, in words.
@@ -123,7 +137,8 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
 /// makes them, rather than render them again. A file changed since it
 /// was written moves too, still changed: written again at the new path,
 /// it would be left at the old one, a second copy; but a folder's file
-/// the user changed stays in its folder ([`stays`](super::owned::stays)).
+/// the user changed stays in its folder ([`stays`](super::owned::stays)),
+/// unless a new template alone moves every song of its folder.
 /// The ledger records each move before it is made. Returns the paths
 /// moved to.
 pub(super) fn relocate<W: Write>(
@@ -140,18 +155,18 @@ pub(super) fn relocate<W: Write>(
                 out,
                 &format!(
                     "Could not move {}: {e:#}; it is written again",
-                    crate::relpath::show(&m.from)
+                    crate::relpath::show(m.from())
                 ),
             )?;
             continue;
         }
-        let Some(written) = state.outputs.remove(&m.from) else {
+        let Some(written) = state.outputs.remove(m.from()) else {
             continue;
         };
-        done.insert(m.to.clone());
+        done.insert(m.to().clone());
         state
             .outputs
-            .insert(m.to.clone(), moved_to(written, &m.beside));
+            .insert(m.to().clone(), moved_to(written, m.beside()));
     }
     Ok(done)
 }
@@ -200,8 +215,10 @@ pub(super) struct Applied {
 /// Carry out `intent` on `planned`: the moves, each song written or
 /// tagged again as decided, and the files no song makes pruned, leaving
 /// in the state the outputs as they are. A song whose move fails is
-/// written at its new path instead, and a song that fails keeps the file
-/// it had, so pruning is judged again by what was done.
+/// written at its new path instead, but one whose move lands where a
+/// file freed for it could not go stays where it is, and a song that
+/// fails keeps the file it had, so pruning is judged again by what was
+/// done.
 pub(super) fn apply<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     planned: &Planned,
@@ -211,50 +228,69 @@ pub(super) fn apply<R: Runner, W: Write>(
     out: &mut W,
 ) -> Result<Applied> {
     let library = &job.dirs.library;
-    let arrived = relocate(intent.moves, state, ledger, out)?;
+    let stuck = free(
+        ledger,
+        (&intent.freed, &intent.handed),
+        &mut state.outputs,
+        out,
+    )?;
+    // What could not be freed stays recorded as it is, for the next sync
+    // to free, and no song lands on it: a song meant to move there stays
+    // where it is, as its file is, rather than be written where it cannot be.
+    let mut unfreed: BTreeMap<PathBuf, Written> = BTreeMap::new();
+    for path in &intent.freed {
+        if let Some(written) = state.outputs.get_mut(path) {
+            let there = |s: &Sidecar| std::fs::symlink_metadata(library.join(&s.path)).is_ok();
+            written.sidecars.retain(there);
+            unfreed.insert(path.clone(), written.clone());
+        }
+    }
+    let lands_stuck = |m: &Relocation| m.files().any(|(_, to)| stuck.contains(to));
+    let staying: BTreeSet<PathBuf> = (intent.moves.iter())
+        .filter(|m| lands_stuck(m))
+        .map(|m| m.from().clone())
+        .collect();
+    let meant = intent.moves.len();
+    let moves: Vec<Relocation> = (intent.moves.into_iter())
+        .filter(|m| !lands_stuck(m))
+        .collect();
+    let arrived = relocate(moves, state, ledger, out)?;
+    let departed = !unfreed.is_empty() || arrived.len() != meant;
     if !arrived.is_empty() {
         // The files are already at their new paths; a failure before the
         // end of the run must not leave the state naming the old ones.
         state.save(&job.dirs.home)?;
         ledger.checkpoint()?;
     }
-    // A song moved is kept, or has its tags written, at its new path; one
-    // whose move failed is written there.
-    let doing: Vec<Doing> = planned
-        .iter()
-        .zip(intent.decided)
-        .map(|((_, r), d)| match d {
-            Doing::Move { retag, .. } if arrived.contains(&path_of(r)) => {
-                if retag {
-                    Doing::Retag
-                } else {
-                    Doing::Keep
-                }
-            }
-            Doing::Move { .. } if edited_since_written(library, &state.outputs, &path_of(r)) => {
-                Doing::Guard { file: path_of(r) }
-            }
-            Doing::Move { .. } => Doing::Write,
-            d => d,
-        })
-        .collect();
+    let doing = arrived_as(
+        planned,
+        intent.decided,
+        (&staying, &arrived),
+        library,
+        state,
+    );
     let old = state.outputs.clone();
-    // A folder's file one song hands another is stale to neither.
-    let shared: BTreeSet<PathBuf> = planned
-        .iter()
-        .flat_map(|(_, r)| crate::artifact::parts(&r.plan).folder_files(&path_of(r)))
-        .collect();
     let due = due(planned, &doing);
-    let anew = beside_anew(library, &old, &due);
+    // What each write does was decided with the moves; a move that failed
+    // or a file that could not be freed has it judged again by what is.
+    let anew = if departed {
+        let placed = job.placed.keys().copied().collect();
+        let found = Found::of(library, state);
+        rewrites(&found, &old, &due, (&shared(planned), &placed), force)
+    } else {
+        debug_assert_eq!(old, intent.moved, "the outputs as the intent left them");
+        intent.writes
+    };
     let (mut pending, claims) = before_writing(job, (&due, &anew), state, ledger, force, out)?;
-    say_left(&doing, job.manifest.settings.history.runs, out)?;
+    say_left(planned, &doing, job.manifest.settings.history.runs, out)?;
     let mut outputs = kept(planned, &doing, job.manifest, &old);
+    outputs.extend(unfreed);
     let wrote = render_due(
         job,
         (&due, &anew),
         &old,
         &state.facts,
-        (&claims, &shared),
+        &claims,
         pending.as_mut(),
         out,
     )?;
@@ -272,6 +308,10 @@ pub(super) fn apply<R: Runner, W: Write>(
         .collect();
     crate::library::remove_empty_folders(library, &emptied);
     let removed = prune(ledger, &old, &mut outputs, failed, force, out)?;
+    for (was, now) in crate::library::spell_as_recorded(library, &outputs) {
+        let (was, now) = (crate::relpath::show(&was), crate::relpath::show(&now));
+        crate::ui::info(out, &format!("Moved: {was} → {now}"))?;
+    }
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
@@ -287,16 +327,35 @@ pub(super) fn apply<R: Runner, W: Write>(
     })
 }
 
-/// The songs of `planned` that `doing` writes, each with whether only its
-/// tags are.
-pub(super) fn due<'a>(planned: &'a [PlannedSong], doing: &[Doing]) -> Vec<(&'a PlannedSong, bool)> {
+/// What is done with each of `planned` once the moves are made, by what
+/// was `decided`: a song moved is kept, or has its tags written, at its
+/// new path, one whose move failed is written there, and one whose move
+/// lands where a file could not be freed, `staying`, is kept where it is,
+/// as a song held as built is.
+fn arrived_as(
+    planned: &Planned,
+    decided: Vec<Doing>,
+    (staying, arrived): (&BTreeSet<PathBuf>, &BTreeSet<PathBuf>),
+    library: &Path,
+    state: &State,
+) -> Vec<Doing> {
     planned
         .iter()
-        .zip(doing)
-        .filter_map(|(song, d)| match d {
-            Doing::Write => Some((song, false)),
-            Doing::Retag => Some((song, true)),
-            _ => None,
+        .zip(decided)
+        .map(|((_, r), d)| match d {
+            Doing::Move { from, .. } if staying.contains(&from) => Doing::Held { file: Some(from) },
+            Doing::Move { retag, .. } if arrived.contains(&path_of(r)) => {
+                if retag {
+                    Doing::Retag
+                } else {
+                    Doing::Keep
+                }
+            }
+            Doing::Move { .. } if edited_since_written(library, &state.outputs, &path_of(r)) => {
+                Doing::Guard { file: path_of(r) }
+            }
+            Doing::Move { .. } => Doing::Write,
+            d => d,
         })
         .collect()
 }
@@ -325,7 +384,7 @@ type Claims = BTreeMap<usize, Vec<Owned>>;
 /// when `forced` the user's own, taken over.
 fn before_writing<R: Runner, W: Write>(
     job: &Writing<'_, R>,
-    (due, anew): (&[(&PlannedSong, bool)], &BTreeSet<usize>),
+    (due, anew): (&[(&PlannedSong, bool)], &Rewrites),
     state: &State,
     ledger: &mut Ledger<'_>,
     forced: bool,
@@ -344,18 +403,14 @@ fn before_writing<R: Runner, W: Write>(
         for ((n, r), retag) in due {
             let path = path_of(r);
             // A retag keeps vouched for the files beside the song it leaves as they are.
-            let kept = if *retag {
-                kept_beside(&job.dirs.library, old, r)
-            } else {
-                Vec::new()
-            };
+            let kept = &anew[n].kept;
             let was = |s: &PathBuf| {
                 old.get(&path)
                     .and_then(|w| w.sidecars.iter().find(|k| k.path == *s))
                     .filter(|_| kept.contains(s))
                     .cloned()
             };
-            let sidecars = match old.get(&path).filter(|_| *retag && !anew.contains(n)) {
+            let sidecars = match old.get(&path).filter(|_| *retag && !anew[n].beside) {
                 Some(w) => w.sidecars.clone(),
                 None => crate::artifact::parts(&r.plan)
                     .touched(&path, old.get(&path))
@@ -390,7 +445,10 @@ fn before_writing<R: Runner, W: Write>(
         ledger.checkpoint()?;
         pending.save(&job.dirs.home)?;
     }
-    let replaced: Vec<Owned> = claims.values().flatten().cloned().collect();
+    let replaced: Vec<Owned> = (claims.iter())
+        .flat_map(|(n, claim)| claim.iter().filter(|o| anew[n].replaces(o.path())))
+        .cloned()
+        .collect();
     ledger.replacing(&replaced)?;
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
@@ -401,14 +459,14 @@ fn before_writing<R: Runner, W: Write>(
 /// Write `r`'s song, at `job`, as a retag over the file `old` records
 /// there, with `recorded` beside it: its tags written again only where
 /// they or the lyrics inside changed, the lyrics inside made anew where
-/// their part did, and the files beside it that changed, where
-/// `beside_anew`.
+/// their part did, and the files beside it that changed, as `rewrite`
+/// judged them.
 fn retag_one<R: Runner>(
     runner: &R,
     job: &render::Job<'_>,
     (old, r): (&BTreeMap<PathBuf, Written>, &Resolved),
     recorded: &[PathBuf],
-    beside_anew: bool,
+    rewrite: &Rewrite,
 ) -> Result<render::Rendered> {
     let (library, parts) = (job.library, job.parts);
     let path = path_of(r);
@@ -417,21 +475,25 @@ fn retag_one<R: Runner>(
         .and_then(|w| w.plan.as_ref())
         .map(crate::artifact::parts);
     let anew = was.as_ref().is_none_or(|p| p.lyrics != parts.lyrics);
-    let tags = was.as_ref().is_none_or(|p| parts.redo_from(p).retag);
+    let tags = rewrite.audio;
     let bytes = |p: &Path| std::fs::metadata(library.join(p)).map_or(0, |m| m.len());
     // Staged first and put last, so the song's file is as its record says
     // until every file beside it is written.
     let staged = tags
         .then(|| render::retag(runner, job, (&path, recorded), anew))
         .transpose()?;
-    let beside = beside_anew
+    let beside = rewrite
+        .beside
         .then(|| {
-            let kept = kept_beside(library, old, r);
+            let kept = rewrite.kept.clone();
             render::beside(runner, job, &kept).map(|b| (kept, b))
         })
         .transpose()?;
+    let changed = beside.as_ref().is_some_and(|(_, b)| b.changed);
     let mut done = match staged {
-        Some(staged) => staged.put(library, job.claim)?,
+        Some(staged) => staged
+            .put(library, job.claim)
+            .map_err(|e| crate::library::half_written(e, changed))?,
         None => render::Rendered {
             audio_bytes: bytes(&path),
             audio: path.clone(),
@@ -453,56 +515,26 @@ fn retag_one<R: Runner>(
     Ok(done)
 }
 
-/// The songs of `due` only retagged that write the files beside them
-/// anew, by their place in the song list: judged once, before any song
-/// is written, so a folder's file another song writes meanwhile changes
-/// neither what a song writes nor what it records.
-fn beside_anew(
-    library: &Path,
-    old: &BTreeMap<PathBuf, Written>,
-    due: &[(&PlannedSong, bool)],
-) -> BTreeSet<usize> {
-    due.iter()
-        .filter(|((_, r), retag)| *retag && beside_changes(library, old, r))
-        .map(|((n, _), _)| *n)
-        .collect()
-}
-
-/// Whether the files `r`'s plan has beside the song differ from those
-/// `old` records at its path, or a file of its folder's is gone, so a
-/// song only retagged writes them anew.
-fn beside_changes(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> bool {
-    old.get(&path_of(r))
-        .and_then(|w| w.plan.as_ref())
-        .is_none_or(|p| crate::artifact::redo(p, &r.plan).beside)
-        || !folder_there(library, &path_of(r), &r.plan)
-}
-
-/// The files beside `r`'s song a retag leaves as they are: each its plan
-/// writes whose part is as in the plan the song's file was written from,
-/// recorded there as muman's, and there. A folder's file one song hands
-/// another is not its to keep.
-fn kept_beside(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> Vec<PathBuf> {
-    let path = path_of(r);
-    let Some((w, was)) = old.get(&path).and_then(|w| w.plan.as_ref().map(|p| (w, p))) else {
-        return Vec::new();
-    };
-    let before = crate::artifact::parts(was);
-    crate::artifact::parts(&r.plan)
-        .beside
-        .iter()
-        .filter(|b| before.beside.contains(b))
-        .filter_map(|b| b.path(&path))
-        .filter(|at| w.sidecar_paths().any(|s| s == at))
-        .filter(|at| std::fs::symlink_metadata(library.join(at)).is_ok())
-        .collect()
-}
-
 /// Say which songs' files a sync leaves alone, and why, `runs` kept to
-/// undo it by.
-fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
+/// undo it by, and what `sync --force` does with the file in the way: one
+/// a song's plan has is written over or again, and any other removed
+/// ([`Forced`]).
+fn say_left<W: Write>(
+    planned: &[PlannedSong],
+    doing: &[Doing],
+    runs: usize,
+    out: &mut W,
+) -> Result<()> {
+    let forced = Forced::of(planned);
     let mut unowned = Vec::new();
-    for d in doing {
+    for ((_, r), d) in planned.iter().zip(doing) {
+        let over = |from: &Path, by: &Path, over: &'static str| {
+            if forced.writes(r, from, by) {
+                over
+            } else {
+                "removes it"
+            }
+        };
         match d {
             Doing::Guard { file } => crate::ui::warning(
                 out,
@@ -514,22 +546,26 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
             Doing::Unowned { by, edited: true } => crate::ui::warning(
                 out,
                 &format!(
-                    "Left alone, {} changed since muman wrote it (`sync --force` writes it again)",
-                    crate::relpath::show(by)
+                    "Left alone, {} changed since muman wrote it (`sync --force` {})",
+                    crate::relpath::show(by),
+                    over(&path_of(r), by, "writes it again")
                 ),
             )?,
-            Doing::Unowned { by, .. } => unowned.push(by.clone()),
+            Doing::Unowned { by, .. } => {
+                unowned.push((by.clone(), over(&path_of(r), by, "writes over it")));
+            }
             Doing::Blocked { file, by, edited } => crate::ui::warning(
                 out,
                 &format!(
-                    "Left at {}: {} {} (`sync --force` writes over it)",
+                    "Left at {}: {} {} (`sync --force` {})",
                     crate::relpath::show(file),
                     crate::relpath::show(by),
                     if *edited {
                         "changed since muman wrote it"
                     } else {
                         "is not muman's"
-                    }
+                    },
+                    over(file, by, "writes over it")
                 ),
             )?,
             _ => {}
@@ -540,11 +576,11 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
     } else {
         ", and `undo` puts it back"
     };
-    for path in unowned.iter().take(NAMED) {
+    for (path, forced) in unowned.iter().take(NAMED) {
         crate::ui::warning(
             out,
             &format!(
-                "Left alone, not muman's: {} (`sync --force` writes over it{undo})",
+                "Left alone, not muman's: {} (`sync --force` {forced}{undo})",
                 crate::relpath::show(path)
             ),
         )?;
@@ -566,10 +602,10 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
 /// each; `pending` keeps each as it is vouched for.
 fn render_due<R: Runner, W: Write>(
     job: &Writing<'_, R>,
-    (due, anew): (&[(&PlannedSong, bool)], &BTreeSet<usize>),
+    (due, anew): (&[(&PlannedSong, bool)], &Rewrites),
     old: &BTreeMap<PathBuf, Written>,
     facts: &BTreeMap<SourceKey, Facts>,
-    (claims, shared): (&Claims, &BTreeSet<PathBuf>),
+    claims: &Claims,
     mut pending: Option<&mut State>,
     out: &mut W,
 ) -> Result<Wrote> {
@@ -598,15 +634,10 @@ fn render_due<R: Runner, W: Write>(
             .get(&path)
             .map_or_else(Vec::new, |w| w.sidecar_paths().cloned().collect());
         let parts = crate::artifact::parts(&r.plan);
-        let planned = parts.files(&path);
-        let stale: Vec<PathBuf> = recorded
-            .iter()
-            .filter(|s| !planned.contains(s) && !shared.contains(*s))
-            .cloned()
-            .collect();
+        let stale = &anew[n].stale;
         if let Some((folder, made)) = placed.get(n) {
             let shared = parts.folder_files(&path);
-            return render::place(folder, made, &dirs.library, (claim, &shared), &stale);
+            return render::place(folder, made, &dirs.library, (claim, &shared), stale);
         }
         let work = Sub::new(scratch, "render-")?;
         let render_job = render::Job {
@@ -616,28 +647,17 @@ fn render_due<R: Runner, W: Write>(
             sources: located,
             scratch: work.path(),
             claim,
-            stale: &stale,
+            stale,
         };
         if *retag {
-            return retag_one(*runner, &render_job, (old, r), &recorded, anew.contains(n));
+            return retag_one(*runner, &render_job, (old, r), &recorded, &anew[n]);
         }
         render::render(*runner, &render_job)
     };
     let render_one = |song: &(&PlannedSong, bool)| {
         let (_, r) = song.0;
         let _working = writing.working(&progress::label(&r.stem));
-        crate::errors::caught(|| build_one(song)).inspect_err(|e| {
-            if e.is::<crate::errors::Panicked>() {
-                let path = path_of(r);
-                let parts = crate::artifact::parts(&r.plan);
-                let shared = parts.folder_files(&path);
-                let own = parts
-                    .files(&path)
-                    .into_iter()
-                    .filter(|f| !shared.contains(f));
-                crate::library::clear_leftovers(&dirs.library, std::iter::once(path).chain(own));
-            }
-        })
+        crate::errors::caught(|| build_one(song))
     };
     parallel::chunked(due, parallel::builds(), render_one, |chunk, rendered| {
         for (((n, r), retag), result) in chunk.iter().zip(rendered) {
@@ -645,9 +665,8 @@ fn render_due<R: Runner, W: Write>(
             let name = name_of(song, Some(r), facts);
             match result {
                 Ok(done) => {
-                    let as_recorded = *retag && !anew.contains(n);
                     let (vouched, learned) =
-                        vouch(job, (song, r), (&done, *retag, as_recorded), old, out)?;
+                        vouch(job, (song, r), (&done, *retag, &anew[n]), old, out)?;
                     wrote.written += 1;
                     wrote.learned.extend(learned);
                     if let Some(pending) = pending.as_deref_mut() {
@@ -657,6 +676,13 @@ fn render_due<R: Runner, W: Write>(
                     wrote.outputs.insert(done.audio, vouched);
                 }
                 Err(e) => {
+                    let path = path_of(r);
+                    let unfinished = (e.downcast_ref::<crate::library::HalfWritten>())
+                        .and(pending.as_deref())
+                        .and_then(|p| p.outputs.get(&path));
+                    if let Some(unfinished) = unfinished {
+                        wrote.outputs.insert(path, unfinished.clone());
+                    }
                     // A picture or record other songs share keeps no file
                     // of theirs.
                     wrote.failed.extend(
@@ -675,18 +701,77 @@ fn render_due<R: Runner, W: Write>(
     Ok(wrote)
 }
 
-/// Say what writing `done` did to its song, and vouch for it and each
-/// file beside it as written, those of a song only `retag`ged as they
-/// were, and all of them as recorded where the retag wrote none of them
-/// (`as_recorded`); with what its plan rendered to, when fitting asks.
+/// Say which files writing a song wrote, `verb` saying what became of
+/// the song `before` recorded: its own file where it was written, else
+/// each file beside it written in its place, so a song whose `.lrc` alone
+/// was gone is said by its `.lrc`. A file beside it it had none of, not
+/// there before, is added, one there it takes over is said with the song,
+/// one gone is written again, and each its last build left that it
+/// has none of now is said removed, or left in place where the user
+/// changed it: a song whose lyrics were taken off is said by its `.lrc`
+/// removed. Its own file is named unwritten only where nothing else is.
+fn say_written<W: Write>(
+    (before, verb): (Option<&Written>, &str),
+    (done, rewrite): (&render::Rendered, &Rewrite),
+    as_recorded: bool,
+    library: &Path,
+    out: &mut W,
+) -> Result<()> {
+    let had = |path: &Path| before.is_some_and(|w| w.sidecars.iter().any(|s| s.path == path));
+    let wrote: Vec<&PathBuf> = (done.beside.iter())
+        .map(|(path, _)| path)
+        .filter(|path| !as_recorded && !rewrite.kept.contains(path))
+        .collect();
+    let own = rewrite.audio || (wrote.is_empty() && rewrite.stale.is_empty());
+    if own {
+        crate::ui::success(
+            out,
+            &format!("{verb}: {}", crate::relpath::show(&done.audio)),
+        )?;
+    }
+    for path in wrote {
+        // A folder's file another song held is there already: this one takes it over.
+        let said = if !had(path) && rewrite.gone.contains(path) {
+            "Added"
+        } else if !own {
+            verb
+        } else if rewrite.gone.contains(path) {
+            "Written again"
+        } else {
+            continue;
+        };
+        crate::ui::success(out, &format!("{said}: {}", crate::relpath::show(path)))?;
+    }
+    for path in &rewrite.stale {
+        if std::fs::symlink_metadata(library.join(path)).is_err() {
+            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(path)))?;
+        } else if !as_recorded {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "Left in place, changed since muman wrote it: {}; it is yours now",
+                    crate::relpath::show(path)
+                ),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Say what writing `done` did to its song, by the files it wrote and
+/// cleared as `rewrite` judged them, and vouch for it and each file
+/// beside it as written, those of a song only `retag`ged as they were,
+/// and all of them as recorded where the retag wrote none of them; with
+/// what its plan rendered to, when fitting asks.
 fn vouch<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     (song, r): (&Song, &Resolved),
-    (done, retag, as_recorded): (&render::Rendered, bool, bool),
+    (done, retag, rewrite): (&render::Rendered, bool, &Rewrite),
     old: &BTreeMap<PathBuf, Written>,
     out: &mut W,
 ) -> Result<(Written, Option<(String, state::Measured)>)> {
     let library = &job.dirs.library;
+    let as_recorded = retag && !rewrite.beside;
     // A new format writes the song beside its old file, under another
     // extension.
     let stem = done.audio.with_extension("");
@@ -705,15 +790,7 @@ fn vouch<R: Runner, W: Write>(
         (Some(_), _) => "Written again".to_string(),
         (None, _) => "Added".to_string(),
     };
-    crate::ui::success(
-        out,
-        &format!("{verb}: {}", crate::relpath::show(&done.audio)),
-    )?;
-    // A file beside the song it had none of before, as lyrics found since.
-    let had = |path: &Path| before.is_some_and(|w| w.sidecars.iter().any(|s| s.path == path));
-    for (path, _) in done.beside.iter().filter(|(path, _)| !had(path)) {
-        crate::ui::success(out, &format!("Added: {}", crate::relpath::show(path)))?;
-    }
+    say_written((before, &verb), (done, rewrite), as_recorded, library, out)?;
     for problem in done.problems.iter().chain(&r.why.chapters) {
         crate::ui::warning(out, &format!("  {problem}"))?;
     }
@@ -725,11 +802,7 @@ fn vouch<R: Runner, W: Write>(
         };
         (limit::plan_key(&f.tools, &r.plan), measured)
     });
-    let kept = if retag {
-        kept_beside(library, old, r)
-    } else {
-        Vec::new()
-    };
+    let kept = &rewrite.kept;
     let sidecars = match old.get(&done.audio).filter(|_| as_recorded) {
         Some(w) => w.sidecars.clone(),
         None => done

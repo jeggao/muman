@@ -16,7 +16,7 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
+| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; a copy over an Opus or AAC one that may be filled from it; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
@@ -56,11 +56,11 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
 - **Real stereo** tells stereo from mono copied into two channels, even
   at different levels or a few samples apart. Of more than two
   channels, it compares the first two.
-- **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
-  made from an MP3 measures as narrow as the MP3, under any fill 20 dB
-  down, while a recording whose treble fades on its own measures full.
-  A lossy copy, or one that clips more, counts no wider than a lossless
-  copy of its recording: what clipping or an encoder fills in is no sound.
+- **Bandwidth** is where a lowpass cuts the sound off. A FLAC made from
+  an MP3 measures as narrow as the MP3, while a recording whose treble
+  fades on its own measures full. A lossy copy, or one that clips more,
+  counts no wider than a lossless copy of its recording: what clipping or an encoder fills in is no sound.
+  Nor does a lossy copy count wider than any copy of its recording it may have been made from, one it tops by no more than its codec fills past a lowpass: Opus its whole top band, from 15.6 kHz; AAC 3.6 kHz; any other codec three bands (about 500 Hz), as an encoder's noise moves a lowpass. Of copies that then count alike, one narrowed to another by more than that noise ranks after it, so an Opus or AAC file made from an MP3 never beats the MP3. HE-AAC counts as wide as its core, a quarter of its sample rate.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
@@ -371,12 +371,12 @@ lookup alone.
 - **`info`** counts what the library holds, whether it is in step, the
   lookups due, and what could be better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
-  reads only what earlier runs recorded. `--verbose` names every song.
+  measures nothing: a song of a source changed since is "To read first".
 - **`check`** reports library files missing, empty, changed, left by a
   run that was cut short, or not muman's; sources missing, unreadable,
-  cut off or missing audio; and songs no sync can build or the last
-  could not write. `--decode` decodes every source in full again, to
-  find damage in a file changed since it was measured.
+  cut off or missing audio; songs no sync can build, `max_size` leaves
+  out or the last could not write; and, apart, warnings, as picks in
+  doubt. `--decode` decodes every source in full again.
 - **`check --upstream`** asks each site, downloading nothing, whether
   it still serves each fetched source in the format and at the size its
   song records, with the same tags. It names each source served
@@ -387,8 +387,8 @@ lookup alone.
 - **`purge`** deletes the fetched sources and lookup records no song
   uses, which `status` and `info` name: an upload a release replaced, a
   source taken out of its song; and a folder that leaves empty, as a
-  torrent's. A removed song's sources stay for `restore`, and files of
-  your own are never touched.
+  torrent's. A removed song's sources stay for `restore`; files of your
+  own never go, nor a copy `add` made once you change it.
 - **`duplicates`** lists songs listed apart that are one recording
   ([duplicates](songs.md#duplicates)).
 

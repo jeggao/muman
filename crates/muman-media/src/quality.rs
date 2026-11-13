@@ -17,15 +17,18 @@
 //!   excerpt's mean spectrum, its channels' powers summed, taken low across
 //!   the excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz,
 //!   and an Opus made from an MP3 its MP3's lowpass, under the noise Opus
-//!   fills past it, where that stands 20 dB down; a recording whose treble
-//!   fades into its noise floor shows no wall and measures full, and so
-//!   does one whose notes' partials end low over a noise floor that runs
-//!   on to the top. Where the audio clips, only frames holding no sample
-//!   at its clip level count, while any excerpt holds one: clipping
-//!   splatters harmonics past the lowpass the audio was made with. Of 10
-//!   pieces cut 40 s long as FLAC, copies raised by 3 to 20 dB into
-//!   clipping measured a 500 Hz step or more wider than their source in
-//!   39 of 50 copies counting every frame, and in 20 counting those, the
+//!   fills past it, where that stands 20 dB down; where it stands higher,
+//!   as at 128 kbit/s and under it does, Opus's own lowpass, and ranking
+//!   counts the copy no wider than one it may have been made from
+//!   ([`fill_hz`]). A recording whose treble fades into its noise floor
+//!   shows no wall and measures full, and so does one whose notes'
+//!   partials end low over a noise floor that runs on to the top. Where
+//!   the audio clips, only frames holding no sample at its clip level
+//!   count, while any excerpt holds one: clipping splatters harmonics
+//!   past the lowpass the audio was made with. Of 10 pieces cut 40 s long
+//!   as FLAC, copies raised by 3 to 20 dB into clipping measured a 500 Hz
+//!   step or more wider than their source in 39 of 50 copies counting
+//!   every frame, and in 20 counting those, the
 //!   loudest frames left out; a copy that clips in nearly every frame
 //!   still measures its splatter, which ranking sources does not count
 //!   against a lossless copy of its recording that clips less.
@@ -304,6 +307,82 @@ pub const UPSAMPLED_HZ: f64 = 24_500.0;
 /// made from lossy audio: past the 16 to 17.4 kHz MP3 and AAC at 128
 /// kbit/s reach, under the 20 kHz a converter's own filter stops at.
 pub const BAND_LIMITED_HZ: f64 = 19_000.0;
+
+/// The most bands a lossy encoder moves up the wall of a lowpass already
+/// in what it encodes: its noise fills the bands where the lowpass falls,
+/// and it drops or adds the floor past it the wall is held against. Of 40
+/// MP3 pieces cut 40 s long, copies made from them as Vorbis at quality 2
+/// to 8, MP3 at V0 and 320 kbit/s, AAC at 256 kbit/s and Opus at 96 and
+/// 192 kbit/s measured wider than their MP3 in 92 of 360, 67 of them by 3
+/// bands or less; of the 25 wider still, 23 were Opus and AAC filling the
+/// band past the lowpass, as [`fill_hz`] allows for, and two Vorbis copies
+/// of a piece one of whose excerpts the MP3 had starved of bits.
+pub const SMEAR_BANDS: u32 = 3;
+
+/// The Hz of [`SMEAR_BANDS`] at `sample_rate`.
+#[must_use]
+pub fn smear_hz(sample_rate: u32) -> f64 {
+    f64::from(SMEAR_BANDS) * real(BAND_BINS) * f64::from(sample_rate) / real(FFT)
+}
+
+/// How far above the lowpass of the audio it was made from an Opus copy
+/// may measure: from the foot of its top band, 15.6 kHz, to past its own
+/// lowpass, which its decode measures at 20.25 to 20.625 kHz. Opus codes
+/// 15.6 to 20 kHz as one band, and at 128 kbit/s or less by little more
+/// than its energy, the rest lower bands' spectrum folded up: a source
+/// that stops anywhere in it has its energy spread up to 20 kHz, about
+/// 7 dB under the sound below, and no wall stands where it stopped. A
+/// source stopping inside a lower band is filled to that band's top.
+///
+/// Measured on 51 tracks, 40 MP3 at 2.2 to 22.05 kHz and 11 FLAC at 16.9
+/// to 22.05 kHz, each made Opus at 64, 96, 128, 160 and 192 kbit/s. Of the
+/// 31 that stop at 16 to 20.5 kHz, the copies measured 20.25 to
+/// 20.625 kHz at 64 and 96 kbit/s for all 31, at 128 for 30, at 160 for
+/// 19 and at 192 for 12, up to 4.6 kHz above an MP3 stopping at 16 kHz;
+/// the copies of three MP3s stopping at 14.8 kHz, inside the band from 12
+/// to 15.6 kHz, measured 15.75 kHz at 64 and 96 kbit/s. Against four FLACs
+/// sounding to 22.05 kHz, the copies' spectra past 15.6 kHz kept a
+/// coherence with their sources' of 0.00 at 64 and 96 kbit/s, 0.01 to 0.19
+/// at 128, 0.12 to 0.69 at 160 and 0.31 to 0.81 at 192; at 64 kbit/s the
+/// fill stood up to 10 dB above the treble it took the place of.
+pub const OPUS_FILL_HZ: f64 = 5_100.0;
+
+/// How far above the lowpass of the audio it was made from an AAC copy
+/// may measure. Of the same 51 tracks made AAC at 128 and 256 kbit/s by
+/// ffmpeg's encoder, the copy of an MP3 stopping at 16 kHz measured
+/// 17.4 kHz, the encoder's own lowpass at 128 kbit/s, and copies at
+/// 256 kbit/s of six MP3s stopping at 18.6 to 20.5 kHz measured no wall
+/// at all, at 21.5 or 22.05 kHz: 3.45 kHz at the most.
+pub const AAC_FILL_HZ: f64 = 3_600.0;
+
+/// How far above the lowpass of the audio it was made from a copy in
+/// `codec` at `sample_rate` may measure: Opus and AAC fill the bands past
+/// a lowpass they were given ([`OPUS_FILL_HZ`], [`AAC_FILL_HZ`]); any
+/// other codec moves its wall by [`SMEAR_BANDS`] at most.
+#[must_use]
+pub fn fill_hz(codec: &str, sample_rate: u32) -> f64 {
+    match codec {
+        "opus" => OPUS_FILL_HZ,
+        "aac" => AAC_FILL_HZ,
+        _ => smear_hz(sample_rate),
+    }
+}
+
+/// The bandwidth a copy in `codec` of `profile` at `sample_rate` that
+/// measures `bandwidth_hz` carries: HE-AAC codes its core at half its
+/// rate, and above the core's band copies the core's own spectrum up,
+/// shaped to the band's energy (spectral band replication), which is no
+/// sound of the recording; so it carries a quarter of its rate at the
+/// most. Every other codec carries what it measures.
+#[must_use]
+pub fn carried_hz(bandwidth_hz: f64, codec: &str, profile: Option<&str>, sample_rate: u32) -> f64 {
+    let replicated = codec == "aac" && profile.is_some_and(|p| p.starts_with("HE-AAC"));
+    if replicated {
+        bandwidth_hz.min(f64::from(sample_rate) / 4.0)
+    } else {
+        bandwidth_hz
+    }
+}
 
 /// What lossless audio's measures show it holds less of than it declares.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

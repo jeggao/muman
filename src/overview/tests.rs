@@ -38,7 +38,13 @@ fn fake() -> Fake {
 
 fn info_text(dirs: &Dirs, verbose: bool) -> String {
     let mut out = Vec::new();
-    info(dirs, verbose, &mut out).unwrap();
+    info(
+        &Fake::default(),
+        (dirs, std::time::Duration::ZERO),
+        verbose,
+        &mut out,
+    )
+    .unwrap();
     crate::ui::plain(&String::from_utf8(out).unwrap())
 }
 
@@ -207,7 +213,11 @@ fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
     );
     songs(&dirs, &["bbbbbbbbbbb", "ccccccccccc"]);
     let text = info_text(&dirs, true);
-    assert_eq!(value(&text, "To remove"), "1");
+    assert_eq!(
+        value(&text, "To remove"),
+        "2",
+        "the song's file and its lyrics: {text}"
+    );
     assert_eq!(value(&text, "Sources missing"), "1");
     assert!(text.contains("youtube.com:ccccccccccc"), "{text}");
     assert_eq!(value(&text, "Sources to measure"), "1");
@@ -221,4 +231,39 @@ fn sizes_and_times_read_plainly() {
     assert_eq!(duration(59.0), "1 min");
     assert_eq!(duration(3.0 * 3600.0 + 120.0), "3 h 2 min");
     assert_eq!(duration(50.0 * 3600.0), "2 d 2 h");
+}
+
+#[test]
+fn songs_naming_no_album_are_each_an_album_of_their_own_as_loudness_takes_them() {
+    let (_dir, dirs) = home();
+    let tagged = |album: &str| {
+        let body = ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+            .map(|id| {
+                format!(
+                    "[[song]]\nsources = [\"youtube.com:{id}\"]\ntags.album = \"{album}\"\n\
+                     tags.albumartist = \"Marlo Venn\"\n"
+                )
+            })
+            .concat();
+        std::fs::write(dirs.manifest(), format!("version = 1\n{body}")).unwrap();
+        let recording = crate::history::Recording::Test;
+        let synced = reconcile(
+            &fake(),
+            &dirs,
+            Options::default(),
+            recording,
+            &mut Vec::new(),
+        );
+        assert!(synced.unwrap().ok);
+        let text = info_text(&dirs, false);
+        (value(&text, "Songs"), value(&text, "Album artists"))
+    };
+    assert_eq!(
+        tagged(""),
+        ("2 (0 on 0 album(s), 2 single(s))".into(), "1".into())
+    );
+    assert_eq!(
+        tagged("Lantern Weather"),
+        ("2 (2 on 1 album(s), 0 single(s))".into(), "1".into())
+    );
 }

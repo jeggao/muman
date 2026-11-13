@@ -185,6 +185,7 @@ pub(super) fn plan_awaiting<W: Write>(
     for line in crate::settings::stale_warnings(&manifest.stale_defaults)
         .into_iter()
         .chain(manifest.misspelled())
+        .chain(manifest.left_out.iter().cloned())
     {
         crate::ui::warning(out, &line)?;
     }

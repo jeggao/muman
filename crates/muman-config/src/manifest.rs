@@ -16,7 +16,9 @@
 //! as an album's songs share its cover. A key that does not parse, a
 //! file two songs list, and a pin outside the song's sources stop the
 //! run before anything is written, rather than a song being silently
-//! dropped and its file deleted.
+//! dropped and its file deleted; so does a tag set under two spellings
+//! of its name, as `tags.title` and `tags.Title`, rather than one value
+//! silently winning.
 //!
 //! A list in which songs share a picture of the user's is format version
 //! 3, and one in which they share only records a lookup keeps version 2:
@@ -47,9 +49,12 @@
 //!
 //! Every write puts the usage comment atop the file, replacing one an
 //! earlier version wrote, while the user's own comments below it stay;
-//! and it gives each song the common `tags.<name>` keys it lacks, added
-//! empty, so the file shows what can be set. Tags are dotted keys last
-//! in their song, not a `[song.tags]` table, so each song reads as one
+//! and it gives each song the common `tags.<name>` keys it lacks, under
+//! any spelling, added empty, so the file shows what can be set. A tag
+//! muman sets is written under the one name the song list gives it
+//! ([`tags::song_list_name`]), over its other spellings. Tags are
+//! dotted keys last in their song, not a `[song.tags]` table, so each
+//! song reads as one
 //! block between blank lines; a `[song.tags]` written by hand is read
 //! the same and written back dotted. Anything a song gains later takes
 //! a dotted prefix of its own in the same block, never a table. A key under
@@ -278,6 +283,80 @@ pub struct Removed {
     pub tags: Tags,
     /// What each source held when the song was last built.
     pub held: BTreeMap<SourceKey, crate::held::Held>,
+    /// The files of the user's own `remove --purge` moved to the trash,
+    /// each by its key in the manual folder, its `.lrc` and pictures
+    /// with it: `restore` waits for each to be back.
+    pub trashed: Vec<SourceKey>,
+}
+
+/// `moved`, with each of a removed song's `trashed` files that went to
+/// the trash beside a song file `moved` follows following it: an `.lrc`
+/// or picture named as the song file is, renamed as the file it is
+/// named after is, and a picture named as none, the folder's, by its own
+/// name, into the folder that file went to. A sidecar serves its song
+/// only beside it, so beside it is where `restore` and `undo` wait for
+/// it. One named as more than one song file, or a folder's picture whose
+/// song files did not all go to one folder, is left where it was.
+#[must_use]
+pub fn moved_with(
+    sources: &[SourceKey],
+    trashed: &[SourceKey],
+    moved: &BTreeMap<SourceKey, SourceKey>,
+) -> BTreeMap<SourceKey, SourceKey> {
+    let manual = |k: &SourceKey| match k {
+        SourceKey::Manual(m) => Some(m.path().to_path_buf()),
+        _ => None,
+    };
+    let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
+    let to_of = |k: &SourceKey| moved.get(k).and_then(manual);
+    let mut out = moved.clone();
+    for key in trashed.iter().filter(|k| !moved.contains_key(k)) {
+        let Some(file) = manual(key) else { continue };
+        let (Some(name), Some(folder)) = (file.file_name(), file.parent()) else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        let lower = name.to_lowercase();
+        let beside: Vec<(&SourceKey, PathBuf)> = (sources.iter())
+            .filter(|k| *k != key)
+            .filter_map(|k| Some((k, manual(k)?)))
+            .filter(|(_, p)| p.parent() == Some(folder))
+            .collect();
+        let named_as: BTreeSet<&SourceKey> = (beside.iter())
+            .filter(|(_, p)| stem(p).is_some_and(|s| lower.starts_with(&format!("{s}."))))
+            .map(|(k, _)| *k)
+            .collect();
+        let to = if named_as.is_empty() {
+            if crate::store::kind_of(&file) != Some(crate::store::Kind::Image) {
+                continue;
+            }
+            // A folder's picture, which every song file there must go with.
+            let gone: BTreeSet<Option<PathBuf>> = (beside.iter())
+                .map(|(k, _)| to_of(k).and_then(|t| t.parent().map(Path::to_path_buf)))
+                .collect();
+            match gone.into_iter().collect::<Vec<_>>().as_slice() {
+                [Some(to)] => to.join(name.as_ref()),
+                _ => continue,
+            }
+        } else {
+            let [one] = named_as.into_iter().collect::<Vec<_>>()[..] else {
+                continue;
+            };
+            let (Some(old), Some(to)) = (manual(one), to_of(one)) else {
+                continue;
+            };
+            let (Some(old), Some(new)) = (old.file_stem(), to.file_stem()) else {
+                continue;
+            };
+            let rest: String = name
+                .chars()
+                .skip(old.to_string_lossy().chars().count())
+                .collect();
+            to.with_file_name(format!("{}{rest}", new.to_string_lossy()))
+        };
+        out.insert(key.clone(), SourceKey::Manual(to.into()));
+    }
+    out
 }
 
 /// `held` with each key `moved` names under the key it names.
@@ -347,9 +426,20 @@ pub enum Edit {
     },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: Note },
+    /// The files of the user's own `remove --purge` moves to the trash
+    /// noted in the removed song listing `key`, each by its key in the
+    /// manual folder.
+    Trashed {
+        key: SourceKey,
+        files: Vec<SourceKey>,
+    },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
     /// `note`, as a song taken out by hand.
     Tombstone { key: SourceKey, note: String },
+    /// `key`, a file no song lists that holds what the removed song
+    /// listing `with` held, added to its sources: kept out with it, and
+    /// listed with it again by `restore`.
+    KeptOut { with: SourceKey, key: SourceKey },
     /// The removed song listing `key` listed again, without any file a
     /// song lists meanwhile.
     Restore(SourceKey),
@@ -457,6 +547,9 @@ pub struct Manifest {
     /// Each source key the file names by yt-dlp's extractor, as
     /// `youtube:<id>`, by the key the next write names by its site.
     pub respelled: BTreeMap<String, String>,
+    /// What the file holds that is read as nothing, each said: a value an
+    /// earlier muman took that this one refuses.
+    pub left_out: Vec<String>,
     edits: Vec<Edit>,
     stale: bool,
     /// The file's text as this was read from it or last wrote it, with
@@ -666,6 +759,7 @@ impl Manifest {
             stale_defaults: parsed.stale_defaults,
             renamed: parsed.renamed,
             respelled: parsed.respelled,
+            left_out: parsed.left_out,
             edits: Vec::new(),
             stale,
             text,
@@ -711,6 +805,11 @@ impl Manifest {
     /// wherever a song, an album or a removed song names it, here alone;
     /// [`Edit::Moved`] writes it in the file.
     pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
+        let mut with = moved.clone();
+        for removed in &self.removed {
+            with.extend(moved_with(&removed.sources, &removed.trashed, moved));
+        }
+        let moved = &with;
         for song in &mut self.songs {
             song.rekey(moved);
         }
@@ -720,7 +819,7 @@ impl Manifest {
             }
         }
         for removed in &mut self.removed {
-            for k in &mut removed.sources {
+            for k in removed.sources.iter_mut().chain(&mut removed.trashed) {
                 if let Some(to) = moved.get(k) {
                     k.clone_from(to);
                 }
@@ -850,6 +949,7 @@ impl Manifest {
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
         self.torrents = parsed.torrents;
         (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
+        self.left_out = parsed.left_out;
         self.stale = false;
         run.saved(self)?;
         Ok(Vec::new())
@@ -883,7 +983,13 @@ impl Manifest {
             apply(&mut doc, edit)?;
         }
         normalize(&mut doc);
-        parse(&doc).map(drop)
+        let parsed = parse(&doc)?;
+        // What the file held before is left out as it reads; a value the
+        // edits bring is refused as `set` refuses it.
+        match parsed.left_out.iter().find(|l| !self.left_out.contains(l)) {
+            Some(line) => bail!("{line}"),
+            None => Ok(()),
+        }
     }
 
     /// Drop what was recorded and not saved.
@@ -1025,6 +1131,7 @@ struct Parsed {
     stale_defaults: Vec<crate::settings::Stale>,
     renamed: Vec<crate::migrate::Renamed>,
     respelled: BTreeMap<String, String>,
+    left_out: Vec<String>,
 }
 
 /// The keys a table lists, each parsed.
@@ -1193,6 +1300,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let respelled = respell(&mut current, &spelled_now);
     let doc = no_misspelled_list(&current)?;
     let mut songs = Vec::new();
+    let mut left_out = Vec::new();
     let mut owner: BTreeMap<SourceKey, usize> = BTreeMap::new();
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
@@ -1213,7 +1321,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             cover: key_at(t, "cover", &what)?,
             lyrics,
             lyrics_offset_ms: lyrics_offset(t, &what)?,
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, &mut left_out)?,
             held: crate::held::read(t, &sources, &what)?,
             lookups_off: lookups_off(t, &what)?,
             release: match t.get("release") {
@@ -1251,11 +1359,11 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         albums.push(Album {
             source,
             tracks: numbered(t, "tracks", &what)?,
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, &mut left_out)?,
         });
     }
     refuse_albumless(&songs, &albums)?;
-    let removed = removed_of(doc)?;
+    let removed = removed_of(doc, &mut left_out)?;
     let settings = crate::settings::read(doc)?;
     let providers = providers::read(doc)?;
     // A song's tags are those muman knows and those the song list gives
@@ -1279,6 +1387,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,
         respelled,
+        left_out,
     })
 }
 
@@ -1349,7 +1458,7 @@ fn named_by(t: &Table, key: &str) -> Option<String> {
 }
 
 /// The songs `[[removed]]` lists, each kept to be restored.
-fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
+fn removed_of(doc: &DocumentMut, left_out: &mut Vec<String>) -> Result<Vec<Removed>> {
     let mut removed = Vec::new();
     for (n, t) in tables(doc, "removed").enumerate() {
         let what = format!("removed song {}", n + 1);
@@ -1362,11 +1471,30 @@ fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
                 .to_string(),
             title: named_by(t, "title"),
             artist: named_by(t, "artist"),
-            tags: tags_of(t.get("tags"), &what)?,
+            tags: tags_of(t.get("tags"), &what, left_out)?,
             held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
+            trashed: trashed_of(t, &what)?,
         });
     }
     Ok(removed)
+}
+
+/// The files a removed song's `trashed` names, each a manual key.
+fn trashed_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
+    let Some(item) = t.get("trashed") else {
+        return Ok(Vec::new());
+    };
+    let list = item
+        .as_array()
+        .with_context(|| format!("{what}: `trashed` must be a list of manual keys"))?;
+    list.iter()
+        .map(|v| {
+            v.as_str()
+                .and_then(|text| SourceKey::parse(text).ok())
+                .filter(|k| matches!(k, SourceKey::Manual(_)))
+                .with_context(|| format!("{what}: `trashed` must be a list of manual keys"))
+        })
+        .collect()
 }
 
 /// Refuse a key whose ID its site's `[sites]` table takes in no kind.
@@ -1400,6 +1528,15 @@ fn spelled_now(text: &str) -> Option<String> {
     Some(key.to_string()).filter(|now| now != text)
 }
 
+/// Every field of a song, an album or a removed song that names sources,
+/// a key or a list of keys; with the `held` record, by key, every place a
+/// key stands. A file followed where it moved, as a key spelled anew, is
+/// followed in each, in the file ([`respell`]) as in memory
+/// ([`Manifest::rekey`]), which a test holds to the same.
+const KEYED: [&str; 9] = [
+    "sources", "trashed", "source", "album", "audio", "cover", "lyrics", "next", "prev",
+];
+
 /// Write each source key in `doc` as `now` spells it, where it does:
 /// in each song's, album's and removed song's keys, and its records.
 /// Returns each key written otherwise, by the key written.
@@ -1425,14 +1562,13 @@ fn respell(
             continue;
         };
         for t in tables.iter_mut() {
-            if let Some(keys) = t.get_mut("sources").and_then(Item::as_array_mut) {
-                keys.iter_mut().for_each(|v| string(v, &mut written));
-            }
-            for name in [
-                "source", "album", "audio", "cover", "lyrics", "next", "prev",
-            ] {
-                if let Some(v) = t.get_mut(name).and_then(Item::as_value_mut) {
-                    string(v, &mut written);
+            for name in KEYED {
+                match t.get_mut(name).and_then(Item::as_value_mut) {
+                    Some(Value::Array(keys)) => {
+                        keys.iter_mut().for_each(|v| string(v, &mut written));
+                    }
+                    Some(v) => string(v, &mut written),
+                    None => {}
                 }
             }
             let Some(held) = t.get_mut("held").and_then(Item::as_table_like_mut) else {
@@ -1714,6 +1850,30 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             };
             tables_mut(doc, "removed")?.push(tombstone(song, note, near));
         }
+        Edit::Trashed { key, files } => {
+            let text = key.to_string();
+            if let Some(gone) = doc
+                .get_mut("removed")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&text)))
+                .filter(|_| !files.is_empty())
+            {
+                gone.insert("trashed", key_array(files));
+            }
+        }
+        Edit::KeptOut { with, key } => {
+            let (with, key) = (with.to_string(), key.to_string());
+            let sources = doc
+                .get_mut("removed")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&with)))
+                .and_then(|t| t.get_mut("sources"))
+                .and_then(Item::as_array_mut)
+                .with_context(|| format!("no removed song lists {with}"))?;
+            if !sources.iter().any(|v| v.as_str() == Some(key.as_str())) {
+                sources.push(key.as_str());
+            }
+        }
         Edit::Tombstone { key, note } => {
             let mut song = Table::new();
             song.insert("sources", key_array(std::slice::from_ref(key)));
@@ -1728,6 +1888,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             for key in NAMING {
                 song.remove(key);
             }
+            song.remove("trashed");
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
             let taken =
@@ -1818,7 +1979,15 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             respell(doc, &|k| (k == from).then(|| to.clone()));
         }
         Edit::Moved(moved) => {
-            let moved: BTreeMap<String, String> = (moved.iter())
+            let mut with = moved.clone();
+            for t in tables(doc, "removed") {
+                let sources: Vec<SourceKey> = (listed_keys(t).iter())
+                    .filter_map(|k| SourceKey::parse(k).ok())
+                    .collect();
+                let trashed = trashed_of(t, "").unwrap_or_default();
+                with.extend(moved_with(&sources, &trashed, moved));
+            }
+            let moved: BTreeMap<String, String> = (with.iter())
                 .map(|(from, to)| (from.to_string(), to.to_string()))
                 .collect();
             respell(doc, &|k| moved.get(k).cloned());
@@ -2012,8 +2181,6 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
     }
 }
 
-/// Set `tags` in a song table's `tags`, over any it sets under
-/// another spelling of their names; a tag with no values is cleared.
 /// `drop` added to the `[[tags.from]]` naming `torrent` or `channel`, or
 /// to a new one after the others.
 fn tags_from(
@@ -2063,6 +2230,8 @@ fn tags_from(
     Ok(())
 }
 
+// allow-no-comments-on-unchanged-code: moved off the function above, which it never described
+/// Set `tags` under the names the song list gives them, over any other spelling; none clears.
 pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     let table = song
         .entry("tags")
@@ -2073,7 +2242,8 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
         return;
     };
     for (name, values) in tags {
-        let field = tags::vorbis_key(name);
+        let name = tags::song_list_name(name);
+        let field = tags::vorbis_key(&name);
         let spellings: Vec<String> = table
             .iter()
             .map(|(k, _)| k.to_string())
@@ -2100,7 +2270,7 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
         for k in &spellings {
             table.remove(k);
         }
-        table.insert(name, item);
+        table.insert(&name, item);
     }
 }
 
@@ -2237,7 +2407,8 @@ fn dot_tags(table: &mut Table, template: bool) -> bool {
     }
     if template {
         for name in TAG_TEMPLATE {
-            if !tags.contains_key(name) {
+            let field = tags::vorbis_key(name);
+            if !tags.iter().any(|(k, _)| tags::vorbis_key(k) == field) {
                 tags.insert(name, value(""));
                 changed = true;
             }
@@ -2485,8 +2656,12 @@ fn switches_template(
 /// them, each read as its field's kind reads it; an empty value sets
 /// nothing. A value its field cannot hold, as a date that is none, or of
 /// any other type, as a table, refuses the song list, naming the song as
-/// `what`.
-fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
+/// `what`; but a language no ISO 639 table names, which an earlier muman
+/// set, is left out and said in `left_out`, so the list still reads. Two
+/// spellings of one tag's name both setting it, as `tags.title` and
+/// `tags.Title`, refuse it too, as neither is the one meant; an empty one
+/// beside another, which an earlier `set` wrote, sets nothing.
+fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Result<Tags> {
     let Some(t) = item.and_then(Item::as_table_like) else {
         return Ok(Vec::new());
     };
@@ -2500,7 +2675,7 @@ fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
             "{what}: tags.{key} is no text, number, yes or no, date or list of them"
         )),
     };
-    let mut tags = Vec::new();
+    let mut tags: Tags = Vec::new();
     for (key, item) in t.iter() {
         let Some(value) = item.as_value() else {
             bail!("{what}: tags.{key} is no text, number, yes or no, date or list of them");
@@ -2513,15 +2688,39 @@ fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
                 .collect::<Result<_>>()?,
             v => scalar(key, v)?.into_iter().collect(),
         };
-        let values = raw
-            .iter()
-            .map(|v| tags::by_hand(key, v).map_err(|why| anyhow::anyhow!("{what}: tags.{why}")))
-            // A value read as nothing, as one of marks alone, sets nothing.
-            .filter(|v| !matches!(v, Ok(v) if v.is_empty()))
-            .collect::<Result<Vec<String>>>()?;
-        if !values.is_empty() {
-            tags.push((key.to_string(), values));
+        let mut values = Vec::new();
+        for v in &raw {
+            match tags::by_hand(key, v) {
+                // A value read as nothing, as one of marks alone, sets nothing.
+                Ok(v) if v.is_empty() => {}
+                Ok(v) => values.push(v),
+                Err(_) if tags::unnamed_language(key, v) => left_out.push(format!(
+                    "{what}: tags.{key} = {v:?} names no language ISO 639 has a code for, so \
+                     it is left out; set the language by its code, as jpn or ja"
+                )),
+                Err(why) => bail!("{what}: tags.{why}"),
+            }
         }
+        if values.is_empty() {
+            continue;
+        }
+        let field = tags::vorbis_key(key);
+        if let Some((twin, _)) = tags.iter().find(|(k, _)| tags::vorbis_key(k) == field) {
+            let name = tags::song_list_name(key);
+            let why = if twin.eq_ignore_ascii_case(key) {
+                "as a tag's name is read whatever its case".to_string()
+            } else {
+                format!("{twin} and {key} being two names of one tag")
+            };
+            let text = tags::Field::named(key).is_none_or(|f| f.spec().kind == tags::Kind::Text);
+            let both = if text {
+                ", listing both values there to set both"
+            } else {
+                ""
+            };
+            bail!("{what}: tags.{twin} and tags.{key} both set {name}, {why}; keep one{both}");
+        }
+        tags.push((key.to_string(), values));
     }
     Ok(tags)
 }

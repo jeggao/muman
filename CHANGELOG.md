@@ -9,6 +9,246 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A run stopped in its moves after the library's times changed, or
+  after the library folder moved, is followed by the next**: a sync
+  saves the library as it found it, copies with new times vouched for
+  and a folder named anew taken, before it moves any file, where the
+  next sync took the song it moved for a file of yours, left it
+  unwritten for good and deleted its `.lrc`, while `check` found no
+  problems.
+- **`undo` goes through after a song holding its folder's cover moves
+  within the folder**: the cover stays where it is, and no run records,
+  and neither `status` nor `sync` says, a move of `cover.jpg` onto
+  itself, which `undo` refused until you moved muman's own cover aside;
+  such a move a run recorded before is none to `undo`.
+- **Short lyrics in Shift-JIS and other legacy encodings read as
+  written**: of the encodings that read a `.lrc`'s bytes, muman takes
+  the one that reads them as text rather than letters of mixed scripts,
+  an `[la:]` line naming the language first, where some short
+  Shift-JIS lyrics were written to the library as Windows-1251 mojibake;
+  where two encodings read a file alike, `sync` names the one it took.
+  Every song's lyrics are written again once.
+- **Every bracket and quote around a placeholder is read alike**:
+  `「unknown」`, `"unknown"` and `[[unknown]]` are dropped as an album as
+  `(unknown)` is, and `status` names each value dropped, one cleaning
+  left too, where `「unknown」` was kept and `[[unknown]]` dropped
+  unnamed.
+- **A genre list is parted between its items only**: `N/A; Jazz` is the
+  genre `Jazz`, where it was written as `N`, `A` and `Jazz`.
+- **A tag set under two of its names is refused naming them as such**:
+  `tags.year` and `tags.date` are "two names of one tag", where the
+  message said the names differ only in case and asked for a date of
+  two values.
+- **`duplicates` places a group of singles on no album**, and counts it
+  among the groups no album holds twice, where it headed it "on one
+  album" named for its title and counted it "across albums".
+- **A lossy copy never beats the file it may have been made from**: it
+  counts no wider than a copy of its recording narrower by no more than
+  its codec fills past a lowpass, Opus its whole top band and AAC up to
+  3.6 kHz, and of copies that then count alike, one so narrowed past an
+  encoder's noise ranks after the other, where a 64 kb/s Opus made
+  from a 128 kb/s MP3 or a 17 kHz FLAC replaced it on the noise Opus
+  fills up to 20 kHz. HE-AAC counts as wide as its core alone.
+- **Copies in any codec align with their recording**: loudness is
+  compared in five octave bands, each 10 ms frame about its own mean,
+  so Opus copies of a recording whose DC offset wanders, or of noise
+  under a held tone, are the same recording, where they "did not align"
+  and became songs of their own, and merged, outvoted the original. A
+  new source joins a song when its audio aligns with any of the song's
+  sources, so the verdict no longer depends on which copies came first.
+- **A song written at a path another song just moved away from stays
+  its own after a stopped run**: the next run follows a move only while
+  the state holds the moved song's record where it left, where it gave
+  the moved song's file the new song's record, failed the new song on
+  its own `.part`, then deleted the moved song's file for good while
+  `check` found no problems.
+- **A library folder that is there but empty while away keeps its
+  records**: a share's mount point while the share is not mounted is no
+  sign its files are gone, where pointed back at it, its untouched
+  files read as yours and a changed song was never written.
+- **`undo` of a `remove --purge` finds your files put back in another
+  folder**, as `restore` does, its song's `.lrc` and pictures looked for
+  beside them, where it refused and named the old paths until a sync
+  followed them.
+- **A copy of a removed song's file dropped in stays out with it**: it
+  joins the removed song's `sources`, as a copy of a listed song joins
+  that song, and `restore` lists the song once with it, where the next
+  sync listed the copy as a new song, and `restore` the song twice.
+- **`info` counts no removed song's file as dropped in**, nor a file
+  moved or copied that the next sync follows or keeps out, where it
+  counted each under "Dropped in, not listed".
+- **A cue sheet given alone goes to the disc it states**: its `REM
+  DISCNUMBER`, album, performer and track count weigh in the match, so a
+  disc 2 sheet naming `01.flac` retags disc 2's `01.flac`, where it
+  retitled disc 1's songs as disc 2's tracks; and where a track is as
+  near another song, the answer a terminal offers first is to choose
+  song by song, not "Set all".
+- **`check --upstream` compares what a site lists with what it listed**:
+  a fetched file that keeps its own tags records the site's tag fields
+  apart, where every such source, archive.org's among them, was said to
+  serve other tags right after it was fetched.
+- **`max_size` lowers songs as far as `min_bitrate` lets**, down to the
+  least each encoder writes, as Opus to 6 kbit/s and MP3 to 32, where
+  songs stopped at Opus 32 and MP3 96 kbit/s and were left out; a library
+  the codec cannot fit is told so, not to lower `min_bitrate`.
+- **A source joins a song only when its audio aligns with the song's**:
+  two drone or noise recordings whose prints agree by chance are kept
+  apart, or asked about on a terminal, where the second was joined and
+  then held as another recording, missing from the library.
+- **`add` of an address that names nothing to fetch fails and says so**,
+  where it said every video named was a source already and exited 0.
+
+- **`status`, `check`, `info` and `remove` say what the sync does with
+  each file**: all of them, and the sync, decide by one intent made from
+  the same song list, state, sources and stopped run, every file's fate
+  in it, and the sync's writes carry it out, where each built its own and
+  said otherwise of a folder's cover, a song's files or a stopped move.
+- **`check`, `info` and `remove` fit the library into `max_size` as the
+  sync does**: a song it leaves out is a problem `check` names, `info`
+  counts it and its file to remove, and `remove` lists every file its
+  sync deletes, where they said such a song was up to date; a size not
+  yet measured is estimated, and they say the sync renders it first.
+- **`check`, `info` and `remove` follow a moved source by its audio, as
+  the sync does**: a file of yours moved and retagged is said to be
+  followed, where it was missing and its song could not be made, `status`
+  counting that as a problem; a source changed since it was read is said
+  to be read first, rather than its song given a fate.
+- **A song a sync leaves as built or as yours shows what its file
+  holds**: `list`, a `path:` query, `status` and `info` show the values
+  and the path its file was made with, and `info --changes` names no
+  change the sync does not make, where they showed what the sync would
+  have written.
+- **`status` foretells a song only retagged under `max_size` as the sync
+  does it**: the songs it renders to measure are not counted as written
+  whole, as the sync after, which takes their sizes, writes them as any.
+- **`check` ends with the warnings it gave**: "No problems found; 1
+  warning(s) above" after a pick in doubt, as a song holding another
+  recording, which it tells but does not count as a problem.
+- **A song moving into a folder whose cover holder leaves writes the
+  folder's cover there** when you changed the cover of the folder it
+  leaves, which stays yours, where the sync deleted the new folder's
+  `cover.jpg`, wrote none, and the next sync wrote it back.
+- **`remove` lists the folder cover its sync deletes** while another
+  song of the folder fails for a missing source, where it planned that
+  song from what was measured and said the cover stayed.
+- **A song a stopped run left halfway through a rename of case is not
+  missing**: `status` and `check` count it where the next sync finishes
+  the move, where they said it was missing and written again.
+- **Two folders' songs moved into one say the cover one of them leaves**:
+  `status` names the folder cover removed and the song's folder cover
+  change, as the sync makes them.
+- **`status` leaves the next sync as it was**: after two files of yours
+  traded names, what `status` measured of each was kept under the
+  other's name, and the sync wrote both songs again from their sources
+  where it would only have moved their lyrics.
+- **`undo` of a stopped run lists only the moves it made**, where it
+  named every move the run had recorded ahead of making it.
+- **`info` counts each file to remove**, beside a song or a folder's, as
+  the sync removes it, where it counted the songs' own files no song
+  makes, those of a song that fails among them.
+- **A rename of case a stopped run left halfway is finished, whatever
+  failed before it**: the next sync follows every move the run made, not
+  only those before the first that failed, as over a file held open, and
+  never deletes a `.moving`, which holds the song's only copy, where it
+  deleted the file and your edits to it with it.
+- **A library folder away at a switch is still muman's when pointed back
+  at**: what muman wrote in a folder not there, as a drive unplugged, is
+  kept until the folder holds other files and none of those, or is not
+  one of the few folders it wrote into last, where it was forgotten at
+  the next switch and the folder's untouched files read as yours.
+- **A library put back without its times is judged once it is vouched
+  for**: every command, `remove`'s listing and the sync's plan among
+  them, takes the library as found before it judges any file, where
+  `remove` said a file stayed that the sync then deleted, and one sync
+  deleted a folder's `cover.jpg` the next wrote back.
+- **A `.part` of yours fails only a write that stages at its name**: a
+  change that writes no `.lrc`, as a new genre, goes ahead beside a
+  `<song>.lrc.part` of yours, where it failed with exit 4, `--force` too.
+- **"The library moved" counts files**, a song's and those beside it,
+  where it counted songs as files.
+- **A song moving into a folder whose cover holder leaves is moved**,
+  carrying its own folder cover, as `status` says, where the sync found
+  the cover's place taken, said "Could not move" and wrote the song
+  again from its source.
+- **`remove` lists what its sync does with a folder cover**: one the
+  next song of its folder takes is neither said deleted nor counted, and
+  that song's sync no longer says it added a cover that was there. A
+  file you changed of a song that leaves is listed alone, not with the
+  untouched files beside it.
+- **`sync --force` keeps a changed file of a removed song that shared
+  only a picture with a listed one**: it stays yours, as it does without
+  the picture, where the forced sync deleted it, its `.lrc` too.
+- **`check` and the sync say `sync --force` removes a file you changed
+  that the song no longer has**, as a `.lrc` of a song set to take no
+  lyrics, where they said it writes it again or over it.
+- **A failed move, write or undo names library files from the library
+  folder, with `/`**, as every other message does, where it gave their
+  full paths in the system's form.
+- **A song half written stays muman's**: when its file cannot be
+  replaced after its `.lrc` was, as a file a player holds open on
+  Windows, the song is said half written and the next sync writes it
+  whole, where muman took its own `.lrc` for yours, held the song back
+  until `sync --force` and refused `undo`.
+- **A song moving where a removed song's file cannot go stays where it
+  is** until a later sync, where it was written at that path, which
+  failed, and "Could not remove" was said twice.
+- **Only a `.part` or `.moving` a stopped run was writing is muman's**:
+  a file of yours named after a song's file and `.part` is left alone
+  and named, where `sync` deleted it unsaid, and a song it would be
+  written through fails, naming it. A `.moving` a run stopped halfway
+  through a rename of case left is called the run's by `check`, and the
+  next sync finishes the rename, where `check` called it not muman's and
+  the sync deleted it.
+- **A second `undo` keeps a file muman wrote since muman's**: a file the
+  undone run left as it was keeps its record as written by the sync of
+  an undo before, where muman took it for yours and held the song back.
+- **Pointed back at a library folder it used before, muman takes its
+  files there as its own again** while they are as it wrote them, as
+  the configuration guide says, where it left them as not muman's.
+- **`undo` names each file once**: a file moved and then written over is
+  said by its move back, and a run stopped and finished by the next
+  lists only the moves made, and keeps every file it removes.
+- **A size is bytes however its unit is cased**: `max_size = "240Mb"`,
+  `"2 Gb"` or `--max-size 1kb` read as megabytes, gigabytes and
+  kilobytes, where they read as bits; a unit of bits is refused.
+- **A unit spelled out is read in any case**: `"2 Bytes"`, `"1 Kilobyte"`
+  or `"14 Days"` read as their small letters do, where they were refused.
+- **`purge` deletes only the copies `add` made, as it made them**: a
+  lyrics file or picture you put in `sources/manual/added/`, or a copy
+  there you changed, is yours and stays, where it was deleted outright.
+  A copy an earlier muman made is kept as yours too.
+- **A purged file you put back in another folder is followed by
+  `restore` and `undo`**: once a sync follows it there, neither asks for
+  it at its old place any more.
+- **`add` refuses lyrics that sing no line**, as an `.lrc` of ID tags
+  alone, as it refuses an empty one: they were listed and gave the song
+  nothing.
+- **`add` names a pipe, a device or a socket inside a folder it is
+  given** as left out, as it names a `.pdf` beside it.
+- **An MP4 whose tags ffmpeg wrote with `use_metadata_tags` is named by
+  them**, where it was "Untitled": a field ffprobe reads and the tag
+  reader does not is taken from ffprobe.
+- **`add` refuses a pipe, a device or a socket named on its command
+  line** before reading it, where one named as a song or lyrics held the
+  run up for ever.
+- **`check` calls only muman's own `.part` an interrupted run's**, one
+  beside a file muman wrote, named below the library as every other
+  line; a `.part` of yours is not muman's, and no longer fails `check`.
+- **`info` counts a song naming no album as a single**, an album of its
+  own as loudness takes it, and counts no missing album artist as one.
+- **The `list | fzf | xargs` example in the songs guide takes any key**,
+  spaces and quotes too, on every system.
+- **A `language` no ISO 639 code names is refused**, as `xx`; one an
+  earlier muman wrote into the song list is left out with a warning, so
+  the list still reads.
+- **`add` fetches a `.torrent` file given by its `https://` address**,
+  then adds it as one on disk, where it said "no such file".
+- **`list --removed` writes each removed song's artist and album** beside
+  its key and title, as `list` writes a song.
+- **`check` says a damaged copy not yet fetched again is damaged**, where
+  it said a fetch had failed after runs that fetched nothing.
+- **The README's exit code 5 matches `--help`**: a query matching no song
+  is a refusal only for a change.
 - **`purge` never deletes a source in use**: a stray file beside a listed
   fetched source goes alone; a kept record in any case of extension, and
   a record's `.json` left without its `.lrc`, are purged; the folders
@@ -377,6 +617,112 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   has a client read, not only the one it has servers send. A date of a
   day there is not, or with the wrong weekday, is no date, and the
   request waits as after any refusal.
+- **The tags of a CAF, an RF64 WAVE or a QuickTime `.mov` are read**,
+  where they were dropped and the song named "Untitled": a file's own
+  tags, lyrics and pictures are read as ffprobe reads them wherever the
+  tag reader took it for another format.
+- **A PCM WAVE, CAF or WMA file cut off is found so**, as an AIFF or a
+  FLAC is: its length is read from its header, where ffmpeg gave the
+  length of what was left.
+- **A lossy copy made from another no longer wins by its encoder's
+  noise**: a Vorbis file made from an MP3 counts as wide as the MP3,
+  where it measured a step wider and replaced it.
+- **A deleted `.lrc` or folder cover is written again alone**: the song
+  beside it is no longer encoded again, the sync names the file it
+  writes, and `undo` no longer offers to put back the song's own file.
+- **Every file a sync or `remove` deletes is named**: a song's `.lrc`
+  and covers go said with it, and lyrics taken off a song, as by
+  `set lyrics=false`, are said removed.
+- **A song moves into the name a removed song leaves**: two songs of one
+  title, one removed, no longer encode the other again; the removed
+  song's file goes first, and `undo` puts both back.
+- **A folder cover you changed stays when its whole album moves**, as by
+  `set album=…`, as it does when one song of it moves; one a new path
+  template carries is named as it moves.
+- **`status` shows the gains a song left as built holds**: its track
+  gain is no longer measured from audio damaged or fetched again since.
+- **`restore` names every file `remove --purge` trashed**: a song's
+  `.lrc` and pictures too, and waits for each, rather than restore the
+  song without its lyrics once its audio alone is back.
+- **A `.lrc` or folder cover you changed beside a song that goes is
+  said kept everywhere**: `status` says it would leave it, `remove`
+  lists it as left and counts it with no file deleted, and the sync says
+  it left it yours, where the first two said it was deleted and the sync
+  said nothing.
+- **A folder cover the next song takes over is no longer removed and
+  written again** when its song is freed for another song to move into
+  its name: the new holder writes over it, as `status` says.
+- **`sync --force` writes again a folder cover muman wrote that you
+  changed**, as `check` says and as it writes a song's own cover file,
+  where it called the cover "not muman's" and stopped counting it.
+- **`check` says what the sync does with a file no listed song has**: one
+  missing is let go of, not "written again", and one you changed stays
+  yours; neither is a problem.
+- **`set lyrics=false` names only the `.lrc` it removes**, where it said
+  the song's own file, left untouched, was updated.
+- **`remove` lists library files with `/` on every system**, relative to
+  the library as every other message names them, as does a sync's
+  "Could not remove" warning.
+- **Each disc's cue sheet tags its own disc's songs**: a cue sheet's
+  `FILE "01.flac"`, and a loose file named as a song file, name the
+  file in their own folder first, so `CD1/disc.cue` and `CD2/disc.cue`
+  go to their own discs, where both went to the first disc's songs and
+  disc 2's titles were written over disc 1's. `--to` keeps the matching
+  among the songs it names.
+- **`restore` and `undo` find a purged song's `.lrc` and pictures beside
+  its file put back in another folder**, as the sync follows them with
+  it, where they kept asking for them at their old path.
+- **A stopped export's or sync's scratch folder goes with the next run
+  there**: the next export clears one it left beside its zip or inside
+  its `--folder`, where it refused that folder as not empty, and a run
+  clears a stopped run's scratch folder at once rather than after a
+  minute, while a folder so named that holds no lock of muman's stays.
+- **A placeholder is dropped however it is written**: in any brackets,
+  as `{unknown}`, which an ID3 genre `(12){unknown}` leaves, `(Unknown
+  Artist)` or `{Other}`; in quotes, as `“[unknown]”`; and whatever its
+  width, inner spaces or hyphens, as `[ no label ]` or `[non album
+  tracks]`, where it was written as the song's value, filed the song in
+  a folder `(Unknown Artist)`, and joined songs with differently quoted
+  placeholders into one album.
+- **A change refused because another run changed its song meanwhile
+  exits 5**, as every refusal does, where `set`, `remove`, `restore`,
+  `duplicates --merge` and stepping through `set` exited 4.
+- **`max_size` and `export --max-size` raise every song the room
+  holds**: whether a lowered song fits a step higher is judged on that
+  rung rendered and measured, and estimates are corrected by what each
+  song measured, where an estimate above the real size kept songs a
+  step low with over a megabyte unused.
+- **An upload's date never dates a song its uploader is not the artist
+  of**, on any site: an archive.org file uploaded by another was dated
+  by its upload, as the release's date, though no release gave one.
+- **A fetched file keeps its own tags**, read as any file's, before what
+  the site says, where yt-dlp wrote the upload date, uploader and page
+  title over them and muman read none: an archive.org file is dated and
+  titled as its tags say.
+- **Genres split only where a list is**: `[Rock/Pop]` is `Rock` and
+  `Pop`, and a slash inside a bracket or in `N/A` parts nothing, where
+  the split wrote `[Rock` and `Pop]`, or `N` and `A`. `N/A` is dropped
+  as a placeholder, and an MP3's ID3 genre `(255)`, which means none, or
+  any number no ID3 genre has, gives no genre, where it was written as
+  the genre `255`.
+- **A tag set under two spellings of its name stops the run**, as
+  `tags.title` and `tags.Title` on one song, naming both, where one
+  value was dropped without a word. `set` writes a tag under one name,
+  as `tags.title` for `set TITLE=…`, where it wrote `tags.TITLE` beside
+  an empty `tags.title`.
+- **A quoted query reads alike on the command line and in `skip`**:
+  `'"paper comets"'` passed as one argument finds what `paper comets`
+  finds, as in a provider's `skip`, where it found nothing; and a tag no
+  song has after `has:` is refused, as any misspelled field is, where
+  `^has:<typo>` matched every song.
+- **`until = ["has:genre"]` is taken by `acoustid` and `musicbrainz`**,
+  whose records give the genres MusicBrainz's users voted for, where the
+  song list was refused.
+- **A song renamed in case alone is spelled anew on macOS and Windows**:
+  a song retitled `Lantern` from `lantern` could keep its folder's or its
+  `.lrc`'s old spelling there, as a filesystem blind to case finds the
+  old name for the new one, and `check` then took the song's own file
+  for another's.
 
 ## [0.11.0] - 2026-11-10
 

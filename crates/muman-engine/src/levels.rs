@@ -18,7 +18,10 @@
 //! loudness of the audio every library file was made from
 //! ([`keep_built`]), and that is read where the source's facts no longer
 //! hold it. So the songs of an album agree on its gain while one of them
-//! waits for `sync --accept`, and none is written again for it.
+//! waits for `sync --accept`, and none is written again for it; a song
+//! joining the album meanwhile is levelled over the album with that
+//! file's audio, and the file, left as it was, keeps the album gain it was
+//! written with until it is written again.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -155,7 +158,10 @@ fn level_of(
 /// Level every song planned as `[loudness]` says: each its gains, its
 /// album's pooled over the album's songs, applied as the mode says and
 /// its tags derived from them. A song of `held`, at the plan its file was
-/// made from, is pooled so in place of any plan of it in `planned`.
+/// made from, is pooled so in place of any plan of it in `planned`, and
+/// that plan is levelled by the audio its file was made from too, so its
+/// own gains are those its file holds, not those of what its source holds
+/// now, as damaged audio.
 /// Reads what was measured, measuring nothing, so every view of the
 /// plans levels alike.
 pub fn settle(
@@ -199,8 +205,9 @@ pub fn settle(
             (key.clone(), (level, of_album.len()))
         })
         .collect();
+    let as_built: BTreeMap<usize, &Plan> = held.iter().map(|(n, r)| (*n, &r.plan)).collect();
     for (n, r) in planned.iter_mut() {
-        let measure = measure_of(&r.plan, state);
+        let measure = measure_of(as_built.get(n).copied().unwrap_or(&r.plan), state);
         let own =
             measure.and_then(|m| Level::to(loudness.target, m.lufs()?, m.peak(loudness.true_peak)));
         let Some((track, track_measured)) = level_of(r, Field::TrackGain, Field::TrackPeak, own)

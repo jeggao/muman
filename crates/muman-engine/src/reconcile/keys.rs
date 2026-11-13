@@ -89,7 +89,13 @@
 //! file the user put at that name, listed as any dropped in
 //! ([`Moves::anew`]); one retagged in place holds the same audio and
 //! stays out. Its audio unknown, as to `check`, which hears nothing, it
-//! stays out too.
+//! stays out too. A copy of such a file dropped in under another name,
+//! the file still at its own, holds what the removed song held, its bytes
+//! or its audio, and joins that removed song's sources, kept out with it
+//! as a copy of a listed song joins that song ([`Moves::copies`]), and
+//! listed with it again by `restore`; other audio, another encoding of
+//! the recording among it, is a new file, as at its name. Only the sync
+//! that lists the files dropped in keeps it out.
 //!
 //! A song file of the user's that is followed nowhere, while another
 //! song file of the user's its song lists is still there and nothing is
@@ -182,6 +188,10 @@ pub struct Moves {
     /// Keys moved whose record the state already keeps where the file
     /// is, as after an undo: the state follows none of them.
     pub drifted: BTreeSet<SourceKey>,
+    /// Files no song names that hold what a song file only a removed song
+    /// names, still at its name, holds, each by that file's key: kept out
+    /// with its removed song.
+    pub copies: BTreeMap<SourceKey, SourceKey>,
 }
 
 impl Moves {
@@ -204,6 +214,21 @@ impl Moves {
         };
         (self.anew.iter()).map(move |key| {
             format!("Other audio than its removed song held, {what} as a new file: {key}")
+        })
+    }
+
+    /// What is said of each file of [`Moves::copies`]; `ahead` of the
+    /// sync that keeps it out.
+    pub fn copy_lines(&self, ahead: bool) -> impl Iterator<Item = String> + '_ {
+        (self.copies.iter()).map(move |(copy, of)| {
+            if ahead {
+                format!("Holds what removed {of} held, kept out with it by the next sync: {copy}")
+            } else {
+                format!(
+                    "Holds what removed {of} held, so kept out with it: {copy}; `muman restore` \
+                     lists it again"
+                )
+            }
         })
     }
 
@@ -513,7 +538,10 @@ pub fn moved(
     // With none gone, a file changed alone was changed in place: no other
     // named file can be the one moved over it.
     if gone.is_empty() && changed.len() < 2 && unlisted.tombed.is_empty() {
-        return Moves::default();
+        return Moves {
+            copies: copies(manifest, state, store, unlisted, &mut hear),
+            ..Moves::default()
+        };
     }
     let named: BTreeSet<&SourceKey> = named.iter().map(|(k, _)| k).collect();
     let mut files: Vec<File> = (unlisted.ready.iter())
@@ -579,7 +607,48 @@ pub fn moved(
     unlisted
         .settling
         .retain(|rel| !out.contains(&SourceKey::Manual(rel.into())));
+    moves.copies = copies(manifest, state, store, unlisted, &mut hear);
     moves
+}
+
+/// Each settled file of `unlisted` holding what a song file only a
+/// removed song names, still at its name, holds, its bytes or its audio,
+/// by that file's key, taken out of `unlisted`, as the module says.
+fn copies(
+    manifest: &Manifest,
+    state: &State,
+    store: &Store,
+    unlisted: &mut Unlisted,
+    hear: &mut impl FnMut(&Located) -> Option<String>,
+) -> BTreeMap<SourceKey, SourceKey> {
+    if manifest.removed.is_empty() || unlisted.ready.is_empty() {
+        return BTreeMap::new();
+    }
+    let kept: Vec<(SourceKey, Was)> = (manifest.removed_keys().into_iter())
+        .filter(|k| !unlisted.ready.contains(k))
+        .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
+        .map(|k| {
+            let was = Was::of(manifest, state, &k, Kind::Media, false);
+            (k, was)
+        })
+        .collect();
+    if kept.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut copies = BTreeMap::new();
+    for key in &unlisted.ready {
+        let file = File::new(store, key.clone(), Kind::Media, false);
+        let of = [By::Bytes, By::Audio].into_iter().find_map(|by| {
+            (kept.iter())
+                .find(|(_, was)| file.is(was, by, state, hear))
+                .map(|(k, _)| k.clone())
+        });
+        if let Some(of) = of {
+            copies.insert(key.clone(), of);
+        }
+    }
+    unlisted.ready.retain(|k| !copies.contains_key(k));
+    copies
 }
 
 /// Each changed seeker whose file another took, not matched itself, put
@@ -734,6 +803,48 @@ fn interchangeable(
     Some(by_seeker.into_iter().zip(by_file).collect())
 }
 
+/// The named manual files the next sync follows to where they moved, as
+/// [`moved`] finds them among the files no song names, those arrived
+/// within `settling` still being copied in.
+pub fn found_moves(
+    manifest: &Manifest,
+    state: &State,
+    store: &Store,
+    settling: Duration,
+    hear: impl FnMut(&Located) -> Option<String>,
+) -> Moves {
+    let mut unlisted = Unlisted::of(manifest, state, store, settling);
+    moved(manifest, state, store, &mut unlisted, hear)
+}
+
+/// Each manual file of `sources`, a removed song's, and of `trashed`, the
+/// files of the user's own `remove --purge` moved to the trash, that is
+/// not back, by the key it is waited for at: where it was, or where
+/// `moved` follows it, and a file beside a song file, its `.lrc` or a
+/// picture, beside where that went ([`crate::manifest::moved_with`]).
+/// `restore` and the `undo` of the purge wait for the same files, found
+/// the same way ([`found_moves`]), as the sync after either lists them.
+#[must_use]
+pub fn not_back(
+    manual: &Path,
+    store: &Store,
+    moved: &BTreeMap<SourceKey, SourceKey>,
+    (sources, trashed): (&[SourceKey], &[SourceKey]),
+) -> Vec<SourceKey> {
+    let with = crate::manifest::moved_with(sources, trashed, moved);
+    let on_disk = |k: &SourceKey| match k {
+        SourceKey::Manual(m) => crate::relpath::on_disk(manual, m.path()).is_some(),
+        _ => false,
+    };
+    let gone: BTreeSet<SourceKey> = (sources.iter().chain(trashed))
+        .filter(|k| matches!(k, SourceKey::Manual(_)))
+        .filter(|k| store.locate(k).is_none() && !on_disk(k))
+        .filter(|k| !with.get(*k).is_some_and(on_disk))
+        .map(|k| with.get(k).unwrap_or(k).clone())
+        .collect();
+    gone.into_iter().collect()
+}
+
 /// [`moved`]'s `hear`: the audio a song file holds, read by `runner`,
 /// its files written below `scratch`.
 pub fn hearing<'a, R: Runner>(
@@ -750,7 +861,9 @@ pub fn hearing<'a, R: Runner>(
 #[derive(Debug)]
 pub struct Following<'a> {
     pub home: &'a Path,
-    pub lock: &'a crate::atomic::Lock,
+    /// The home's lock, which a run that saves what it follows holds; a
+    /// dry run, as a command that changes nothing, holds none.
+    pub lock: Option<&'a crate::atomic::Lock>,
     pub rec: crate::history::Recording<'a>,
     pub dry_run: bool,
     pub settling: Duration,
@@ -762,12 +875,14 @@ pub struct Following<'a> {
 
 impl Following<'_> {
     /// Follow each named manual file to where it moved ([`moved`]), and
-    /// when listing take each file deleted by hand out of its song, in the
-    /// song list and the state, saved, the list noted in `rec` and the
-    /// moves in its run; a dry run follows them in memory alone, so it
-    /// reports on the songs as the next sync will find them. Returns the
-    /// moves, with what it cannot tell ([`Moves::unsure`]), and the files
-    /// no song names that are none of those followed.
+    /// when listing take each file deleted by hand out of its song and
+    /// keep each copy of a removed song's file out with it
+    /// ([`Moves::copies`]), in the song list and the state, saved, the
+    /// list noted in `rec` and the moves in its run; a dry run does so in
+    /// memory alone, so it reports on the songs as the next sync will
+    /// find them. Returns the moves, with what it cannot tell
+    /// ([`Moves::unsure`]), and the files no song names that are none of
+    /// those followed.
     pub fn follow<W: Write>(
         mut self,
         manifest: &mut Manifest,
@@ -789,7 +904,20 @@ impl Following<'_> {
         for line in moves.anew_lines(!self.listing) {
             crate::ui::info(out, &line)?;
         }
-        if moves.moved.is_empty() && deleted.is_empty() {
+        for line in moves.copy_lines(!self.listing || self.dry_run) {
+            crate::ui::info(out, &line)?;
+        }
+        if self.dry_run {
+            for (copy, of) in &moves.copies {
+                if let Some(removed) =
+                    (manifest.removed.iter_mut()).find(|r| r.sources.contains(of))
+                {
+                    removed.sources.push(copy.clone());
+                }
+            }
+        }
+        let keep_out = self.listing && !self.dry_run && !moves.copies.is_empty();
+        if moves.moved.is_empty() && deleted.is_empty() && !keep_out {
             return Ok((moves, unlisted));
         }
         for line in moves
@@ -809,6 +937,14 @@ impl Following<'_> {
             )?;
             manifest.edit(Edit::Drop(key));
         }
+        if keep_out {
+            for (copy, of) in &moves.copies {
+                manifest.edit(Edit::KeptOut {
+                    with: of.clone(),
+                    key: copy.clone(),
+                });
+            }
+        }
         if self.dry_run {
             manifest.rekey(&moves.moved);
         } else {
@@ -824,7 +960,10 @@ impl Following<'_> {
             // The list before the state: stopped between, the next run
             // measures the file again, where the other way it would find
             // no record of the file gone to follow it by.
-            manifest.save_locked(self.lock, &mut self.rec)?;
+            let Some(lock) = self.lock else {
+                anyhow::bail!("following moved files: the home is not locked");
+            };
+            manifest.save_locked(lock, &mut self.rec)?;
         }
         state.rekey(&moves.of_state())?;
         if !self.dry_run && !moves.moved.is_empty() {

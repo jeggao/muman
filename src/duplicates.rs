@@ -33,7 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use unicode_width::UnicodeWidthStr;
 
 use crate::album::Album;
@@ -82,7 +82,7 @@ struct Found {
 /// saying what is left unknown to `out`.
 fn find<W: Write>(dirs: &Dirs, terms: &[String], out: &mut W) -> Result<Found> {
     let manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
+    let state = crate::reconcile::found(dirs)?;
     let (views, resolved): (Vec<_>, Vec<_>) =
         query::resolved_views(&manifest, &state, &dirs.library)?
             .into_iter()
@@ -196,12 +196,7 @@ pub fn report<W: Write, D: Write>(
     let album = |n: usize| views[n].first("album");
     for group in found.twice.iter().chain(&found.across) {
         let ids: Vec<_> = group.iter().map(|n| found.albums[*n].as_ref()).collect();
-        let albums = ids.iter().collect::<BTreeSet<_>>().len();
-        let on = match (albums, twice(&ids)) {
-            (1, _) => format!("on one album, {}", album(group[0])),
-            (n, Some(at)) => format!("on {n} albums, twice on {}", album(group[at])),
-            (n, None) => format!("on {n} albums"),
-        };
+        let on = placed(&ids, |at| album(group[at]));
         crate::ui::line(
             report,
             &format!("{} songs, one recording, {on}:", group.len()),
@@ -274,7 +269,7 @@ pub fn resolve<R: Runner, W: Write>(
         if !twice && i > 0 && groups[i - 1].0 {
             let more = change::counted(found.across.len(), "group");
             if !p.ask(&format!(
-                "Go on to {more} across albums, which a library of whole albums keeps?"
+                "Go on to {more} no album holds twice, which a library of whole albums keeps?"
             ))? {
                 break;
             }
@@ -411,7 +406,10 @@ impl Asking<'_> {
         let on = if self.twice {
             format!("twice on {}", found.views[twins[0]].first("album"))
         } else {
-            "across albums".to_string()
+            let ids: Vec<_> = (self.group.iter())
+                .map(|n| found.albums[*n].as_ref())
+                .collect();
+            placed(&ids, |at| found.views[self.group[at]].first("album"))
         };
         let (at, of) = self.at;
         crate::ui::info(out, &format!("Group {at} of {of} · {on} · one recording"))?;
@@ -675,7 +673,8 @@ fn apply<W: Write>(
         .save_if_unchanged(&expected, later.begin()?)?;
     if !changed.is_empty() {
         found.manifest.discard();
-        bail!("the song list changed while this ran; nothing was changed, run it again");
+        let why = "the song list changed while this ran; nothing was changed, run it again";
+        return Err(Refused(why.into()).into());
     }
     Ok(true)
 }
@@ -690,8 +689,30 @@ fn twice<T: PartialEq>(albums: &[Option<T>]) -> Option<usize> {
         .map(|(n, _)| n)
 }
 
+/// Where a group's songs are, by the album each is on, `name` naming
+/// the album of the song at a place: `on one album, A`, `on 3 albums,
+/// twice on A`, `on 2 albums, and 1 on none`, or `on no album` for
+/// singles and songs on none.
+fn placed<T: Ord>(ids: &[Option<T>], name: impl Fn(usize) -> String) -> String {
+    let albums = ids.iter().flatten().collect::<BTreeSet<_>>().len();
+    let none = ids.iter().filter(|id| id.is_none()).count();
+    let Some(first) = ids.iter().position(Option::is_some) else {
+        return "on no album".to_string();
+    };
+    let on = match (albums, twice(ids)) {
+        (1, _) => format!("on one album, {}", name(first)),
+        (n, Some(at)) => format!("on {n} albums, twice on {}", name(at)),
+        (n, None) => format!("on {n} albums"),
+    };
+    if none == 0 {
+        on
+    } else {
+        format!("{on}, and {none} on none")
+    }
+}
+
 /// The line after the groups shown, `alone` with an album holding it
-/// twice and `across` albums, of `found` in all.
+/// twice and `across` with none holding it twice, of `found` in all.
 fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usize) -> Result<()> {
     if found == 0 {
         crate::ui::success(report, "No two songs are one recording")?;
@@ -704,8 +725,8 @@ fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usi
         crate::ui::info(
             report,
             &format!(
-                "{alone} group(s) an album holds twice, {across} across albums. To keep one song of a \
-                 group, move the others' sources into its [[song]] with `muman edit`, or \
+                "{alone} group(s) an album holds twice, {across} no album holds twice. To keep one \
+                 song of a group, move the others' sources into its [[song]] with `muman edit`, or \
                  remove them"
             ),
         )?;
@@ -767,6 +788,26 @@ mod tests {
             None
         );
         assert_eq!(twice::<Album>(&[None, None]), None);
+    }
+
+    #[test]
+    fn a_group_is_placed_on_the_albums_its_songs_are_on_and_singles_on_none() {
+        let albums = ["Lantern Weather", "Best Of", "Lantern Weather"];
+        let named = |at: usize| albums[at].to_string();
+        assert_eq!(placed::<&str>(&[None, None], named), "on no album");
+        assert_eq!(
+            placed(&[Some(1), Some(1)], named),
+            "on one album, Lantern Weather"
+        );
+        assert_eq!(
+            placed(&[None, Some(2), None], named),
+            "on one album, Best Of, and 2 on none"
+        );
+        assert_eq!(
+            placed(&[Some(1), Some(2), Some(1)], named),
+            "on 2 albums, twice on Lantern Weather"
+        );
+        assert_eq!(placed(&[Some(1), Some(2)], named), "on 2 albums");
     }
 
     #[test]

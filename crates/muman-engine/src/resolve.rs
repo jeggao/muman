@@ -15,7 +15,8 @@
 //!   then decides; then least that is not the song (a video's intro or
 //!   skit) or is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
-//!   lossless, then the most bits used, then the lowest rate, then
+//!   a copy another may have been filled from before that copy ([`bounded`]),
+//!   then lossless, then the most bits used, then the lowest rate, then
 //!   from the folder most of its album's audio comes from, which never
 //!   puts an album's lossy rip ahead of a lossless copy of it.
 //!   Lossless audio cut off as lossy audio is counts as lossy, padded
@@ -67,10 +68,14 @@
 //!   that says nothing of the song, a placeholder or a watermark, is
 //!   dropped before any offer is ranked ([`crate::detect`]), watermarks
 //!   found across the sources the song list names ([`Known`]): as the
-//!   source wrote it, before cleaning, so `status` drops what it names,
-//!   and again as cleaned, where splitting a value made one. An
+//!   source wrote it, before cleaning, and again as cleaned, where
+//!   splitting or tidying a value made one, as `Other` of `Other/Jazz`
+//!   or `[unknown]` of `[[unknown]]`; `status` names each alike. An
 //!   upload's date, the day it went up, dates the song only where the
-//!   upload's channel is the song's artist, set by hand or offered.
+//!   upload's channel is the song's artist, set by hand or offered, on
+//!   any site and whichever source the album comes from: the release's
+//!   fields are taken from fields kept for them alone, never one read
+//!   off a title or a channel.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -88,7 +93,24 @@
 //! quality 5 in 1, and AAC at 192 kbit/s in none. A lossless copy made
 //! from lossy audio, as the other 22 were, bounds nothing: a lossy copy
 //! wider than it may come from a better source, though of these the Opus
-//! copies at 96 kbit/s measured wider in 17. Mono
+//! copies at 96 kbit/s measured wider in 17. A lossy copy counts no wider
+//! either than any copy of its recording, lossy or lossless, it may have
+//! been made from: one narrower by no more than its codec fills past a
+//! lowpass it was given ([`crate::quality::fill_hz`]), up to its top band
+//! for Opus, past its own lowpass for AAC, and
+//! [`crate::quality::SMEAR_BANDS`] for any other, whose noise moves the
+//! wall of a lowpass by as much; and of two copies that count alike, one
+//! narrowed to the other by more than that noise ranks after it, so an
+//! Opus or AAC transcode never wins over the file it may have been made
+//! from by a tie-break. Which was made from which no measure says: of a 64 kbit/s
+//! Opus copy measuring 20.6 kHz and its 128 kbit/s MP3 at 16.9, the MP3
+//! wins whichever came first, while an MP3 at 14.8 kHz, from which an
+//! Opus copy would have measured 15.75, bounds nothing. Whole steps alone
+//! do not absorb an encoder's noise, two near-equals straddling a step's
+//! edge a step apart: a Vorbis copy of an MP3 measured 19.12 kHz to its
+//! 18.95, a step wider, though above 19 kHz both held the same. HE-AAC
+//! counts no wider than its core codes ([`crate::quality::carried_hz`]).
+//! Mono
 //! comes before bandwidth because it is the larger loss to a listener:
 //! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
 //! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
@@ -1080,19 +1102,31 @@ fn says_nothing(input: &Input<'_>, key: &SourceKey, field: Field, value: &str) -
 
 /// Each value of the song's sources that says nothing of it, as
 /// `<FIELD> “<value>” from <key>: <why>`, but in a field set by hand,
-/// which no source's value fills.
+/// which no source's value fills: as the source wrote it, or as cleaning
+/// left it, as `Other` of the genres `Other/Jazz`, each dropped where
+/// [`candidates`] drops it.
 fn dropped(input: &Input<'_>) -> Vec<String> {
     let by_hand: BTreeSet<Field> = (input.song.tags.iter())
         .chain(input.album.iter().flat_map(|a| &a.tags))
         .filter_map(|(name, _)| Field::named(name))
         .collect();
+    let names = credited(input);
     let mut out = Vec::new();
     for (_, key, facts) in input.present() {
+        let ctx = clean::Context {
+            names: &names,
+            albums: &input.known.albums,
+            offers: &facts.tags,
+            typography: input.typography,
+        };
         for (field, offer) in &facts.tags {
             if (*field == Field::Comment && !input.source_comments) || by_hand.contains(field) {
                 continue;
             }
-            for value in &offer.values {
+            let heard = heard(input, key, *field, offer);
+            let cleaned = clean::clean(*field, &heard, &ctx, input.clean).values;
+            let left = cleaned.iter().filter(|v| !offer.values.contains(v));
+            for value in offer.values.iter().chain(left) {
                 if let Some(why) = says_nothing(input, key, *field, value) {
                     out.push(format!("{} “{value}” from {key}: {why}", field.vorbis()));
                 }
@@ -1205,17 +1239,8 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         .flat_map(|(_, v)| v)
         .filter_map(|code| Lang::parse(code))
         .collect();
-    if sung.is_empty()
-        && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
-        && let Some(own) = own_lyrics_language(facts)
-    {
-        insert_comment(&mut tags, Field::Language, vec![own.iso639_2()]);
-        tag_why.push(TagWhy {
-            key: Field::Language.vorbis().to_string(),
-            from: "the language of the audio file's own lyrics".to_string(),
-            cleaned: Vec::new(),
-        });
-        sung.push(own);
+    if sung.is_empty() {
+        sung.extend(sung_as_own_lyrics(facts, &mut tags, &mut tag_why));
     }
     let instrumental = instrumental(&tags);
     let lyrics = pick_lyrics(input, &audio_key, &sung, instrumental, &vets);
@@ -1372,7 +1397,7 @@ type Rank = Vec<i64>;
 /// Where a [`Rank`] holds whether a source came from its album's folder,
 /// which sways the audio a song plays but not the audio a lookup was
 /// asked with.
-const FROM_ALBUM: usize = 5;
+const FROM_ALBUM: usize = 6;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
@@ -1455,34 +1480,14 @@ fn pick_audio(
             let unmatched = beyond
                 .map(|ms| ms + lacks.max(missing))
                 .or_else(|| any_missing.then_some(missing));
-            let q = bounded(facts, &compared, &audible);
+            let (q, made_from) = bounded(facts, &compared, &audible).unzip();
             let w = &input.audio.pick;
-            let [unknown, sum] = score(&[
-                (
-                    w.purity.weight(),
-                    unmatched.map(|ms| ms / i64::from(w.purity.step_ms)),
-                ),
-                (
-                    w.bandwidth.weight(),
-                    q.map(|q| -q.bandwidth_bucket(f64::from(w.bandwidth.step_hz))),
-                ),
-                (
-                    w.stereo.weight(),
-                    q.map(|q| i64::from(!q.is_stereo(w.stereo.incoherence))),
-                ),
-                (
-                    w.clipping.weight(),
-                    q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
-                ),
-                (
-                    w.dynamics.weight(),
-                    dynamics_of(facts).map(|cdb| -cdb.div_euclid(i64::from(w.dynamics.step_cdb))),
-                ),
-            ]);
+            let [unknown, sum] = audio_score(w, unmatched, q, facts);
             let rank: Rank = vec![
                 i64::from(facts.damage().is_some()),
                 unknown,
                 sum,
+                i64::from(made_from == Some(true) && w.bandwidth.weight() != 0),
                 -tie_break(facts.audio.as_ref()),
                 facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
                 i64::from(!from_album(input, key)),
@@ -1524,6 +1529,38 @@ fn pick_audio(
     };
     let why = audio_why(input, chosen, &recordings);
     Ok((chosen.key.clone(), why, recordings.others(chosen.key)))
+}
+
+/// A source's audio [`score`] under `w`: `unmatched` its purity in ms,
+/// `q` its quality as [`bounded`] counts it.
+fn audio_score(
+    w: &crate::settings::AudioPick,
+    unmatched: Option<i64>,
+    q: Option<AudioQuality>,
+    facts: &Facts,
+) -> [i64; 2] {
+    score(&[
+        (
+            w.purity.weight(),
+            unmatched.map(|ms| ms / i64::from(w.purity.step_ms)),
+        ),
+        (
+            w.bandwidth.weight(),
+            q.map(|q| -q.bandwidth_bucket(f64::from(w.bandwidth.step_hz))),
+        ),
+        (
+            w.stereo.weight(),
+            q.map(|q| i64::from(!q.is_stereo(w.stereo.incoherence))),
+        ),
+        (
+            w.clipping.weight(),
+            q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
+        ),
+        (
+            w.dynamics.weight(),
+            dynamics_of(facts).map(|cdb| -cdb.div_euclid(i64::from(w.dynamics.step_cdb))),
+        ),
+    ])
 }
 
 /// Whether `key`'s file came from the folder most of the song's album's
@@ -1667,33 +1704,61 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
     }
 }
 
-/// The quality `facts` measured, its bandwidth no wider than that of any
+/// The quality `facts` measured, its bandwidth what its codec carries
+/// ([`crate::quality::carried_hz`]) and no wider than that of any
 /// lossless copy of its recording, among `compared`, not made from lossy
 /// audio, that clips less than it does or of which it is a lossy copy:
 /// what clipping adds above a lowpass is no sound of the recording, nor
 /// what an encoder fills in above it, and a step of bandwidth outweighs
-/// all of clipping and every tie-break.
+/// all of clipping and every tie-break. Lossy, it counts no wider either
+/// than any copy it may have been made from, one narrower by no more
+/// than its codec fills ([`crate::quality::fill_hz`]); and with it,
+/// whether such a copy narrowed it by more than an encoder's noise moves
+/// a lowpass, a fill that copy then ranks ahead of.
 fn bounded(
     facts: &Facts,
     compared: &[&Aligned],
     audible: &[(usize, &SourceKey, &Facts)],
-) -> Option<AudioQuality> {
+) -> Option<(AudioQuality, bool)> {
     let audio = facts.audio.as_ref()?;
     let q = audio.quality?;
     let lossy = !audio.is_lossless();
-    let cleaner = compared
-        .iter()
-        .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
-        .filter_map(|(_, _, facts)| facts.audio.as_ref())
-        .filter(|audio| audio.is_lossless() && !audio.flags().band_limited)
-        .filter_map(|audio| audio.quality)
-        .filter(|other| lossy || other.clipping < q.clipping)
-        .map(|other| other.bandwidth_hz)
+    let carried = |audio: &crate::facts::AudioFacts, q: &AudioQuality| {
+        crate::quality::carried_hz(
+            q.bandwidth_hz,
+            &audio.codec,
+            audio.profile.as_deref(),
+            audio.sample_rate,
+        )
+    };
+    let measured = carried(audio, &q);
+    let others = || {
+        compared
+            .iter()
+            .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
+            .filter_map(|(_, _, facts)| {
+                Some((facts.audio.as_ref()?, facts.audio.as_ref()?.quality?))
+            })
+    };
+    let cleaner = others()
+        .filter(|(audio, _)| audio.is_lossless() && !audio.flags().band_limited)
+        .filter(|(_, other)| lossy || other.clipping < q.clipping)
+        .map(|(_, other)| other.bandwidth_hz)
         .reduce(f64::max);
-    Some(AudioQuality {
-        bandwidth_hz: cleaner.map_or(q.bandwidth_hz, |hz| q.bandwidth_hz.min(hz)),
-        ..q
-    })
+    let floor = measured - crate::quality::fill_hz(&audio.codec, audio.sample_rate);
+    let made_from = others()
+        .filter(|_| lossy)
+        .map(|(audio, other)| carried(audio, &other))
+        .filter(|hz| *hz >= floor)
+        .reduce(f64::min)
+        .filter(|hz| *hz < measured);
+    let bandwidth_hz = [cleaner, made_from]
+        .into_iter()
+        .flatten()
+        .fold(measured, f64::min);
+    let filled =
+        made_from.is_some_and(|hz| measured - hz > crate::quality::smear_hz(audio.sample_rate));
+    Some((AudioQuality { bandwidth_hz, ..q }, filled))
 }
 
 /// How far `facts`' peak ([`crate::dynamics`]) stands above its
@@ -1781,6 +1846,29 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
 /// The language the lyrics tag of the audio's own file names, as a
 /// `USLT` frame does: a file's own lyrics are the song's as someone kept
 /// it, so most likely in the language it is sung in.
+/// The language a song whose tags name none is sung in, by its audio
+/// file's own lyrics: written as its `LANGUAGE` where an ISO 639 code
+/// names it.
+fn sung_as_own_lyrics(
+    facts: &Facts,
+    tags: &mut Comments,
+    tag_why: &mut Vec<TagWhy>,
+) -> Option<Lang> {
+    if tags.iter().any(|(k, _)| k == Field::Language.vorbis()) {
+        return None;
+    }
+    let own = own_lyrics_language(facts)?;
+    if let Some(code) = own.iso639() {
+        insert_comment(tags, Field::Language, vec![code]);
+        tag_why.push(TagWhy {
+            key: Field::Language.vorbis().to_string(),
+            from: "the language of the audio file's own lyrics".to_string(),
+            cleaned: Vec::new(),
+        });
+    }
+    Some(own)
+}
+
 fn own_lyrics_language(facts: &Facts) -> Option<Lang> {
     facts
         .lyrics
@@ -2389,10 +2477,10 @@ fn groups(offers: &[&Candidate<'_>], field: Field) -> Vec<usize> {
     (0..offers.len()).map(|i| root(&mut parent, i)).collect()
 }
 
-/// Every source's offer for every field, cleaned against the names the
-/// song's sources and its hand-set tags credit.
-fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
-    let credited = |name: &str| {
+/// The names the song's sources and its hand-set tags credit, which
+/// cleaning reads values against.
+fn credited(input: &Input<'_>) -> Vec<clean::Name> {
+    let credit = |name: &str| {
         matches!(
             Field::named(name),
             Some(Field::Artist | Field::Artists | Field::AlbumArtist)
@@ -2403,7 +2491,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         .tags
         .iter()
         .chain(input.album.iter().flat_map(|a| &a.tags))
-        .filter(|(k, _)| credited(k))
+        .filter(|(k, _)| credit(k))
         .flat_map(|(_, v)| v);
     let offered = input
         .present()
@@ -2412,7 +2500,13 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         })
         .flatten()
         .flat_map(|o| &o.values);
-    let names = clean::names(offered.chain(hand_set).map(String::as_str));
+    clean::names(offered.chain(hand_set).map(String::as_str))
+}
+
+/// Every source's offer for every field, cleaned against the names the
+/// song's sources and its hand-set tags credit.
+fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
+    let names = credited(input);
     let mut all: BTreeMap<Field, Vec<Candidate<'a>>> = BTreeMap::new();
     for (n, key, facts) in input.present() {
         let ctx = clean::Context {
@@ -3170,7 +3264,9 @@ fn resolve_tags(
     let release = release_of(input, candidates);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
-            if let Some(c) = best_offer(candidates, field, &|k| k == album.key) {
+            if let Some(c) =
+                best_offer(candidates, field, &|k| k == album.key).filter(|c| c.offer.structured)
+            {
                 fields.insert(field, Slot::of(c));
             }
         }

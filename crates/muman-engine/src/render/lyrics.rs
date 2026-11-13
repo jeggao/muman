@@ -96,7 +96,8 @@ pub(super) fn cleaned(text: &str, lyrics: &LyricText<'_>, problems: &mut Vec<Str
 }
 
 /// Plan the lyrics: a file's text now, or a subtitle stream the run
-/// converts to `raw`, read once it ran (`None`).
+/// converts to `raw`, read once it ran (`None`). A file two legacy
+/// encodings read alike is named in `problems` ([`crate::lyrics::Doubt`]).
 pub(super) fn planned(
     lyrics: &LyricText<'_>,
     source: &Located,
@@ -119,9 +120,12 @@ pub(super) fn planned(
     } else {
         let file = lyrics_file(lyrics.at, source)
             .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
-        crate::lyrics::decode(
-            &fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
-        )
+        let bytes = fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+        let (text, doubt) = crate::lyrics::decode_doubting(&bytes);
+        if let Some(doubt) = doubt {
+            problems.push(format!("lyrics of {}: {doubt}", lyrics.key));
+        }
+        text
     };
     Ok(Some(cleaned(&text, lyrics, problems)))
 }

@@ -41,6 +41,9 @@ impl Runner for Net {
         let url = cmd.last().and_then(|u| u.to_str()).unwrap_or_default();
         let json = match (url, one) {
             ("https://p", false) => PLAYLIST,
+            ("https://empty", false) => {
+                r#"{"_type": "playlist", "title": "Derived files", "entries": []}"#
+            }
             ("https://album", false) => ALBUM,
             ("https://mix", false) => {
                 r#"{"_type": "playlist", "webpage_url_basename": "watch",
@@ -363,6 +366,56 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
     let (keys, text) = fetch(&["https://v"]);
     assert_eq!(keys, std::slice::from_ref(&gone), "{text}");
     assert!(text.contains("removed before"), "{text}");
+}
+
+#[test]
+fn an_address_naming_no_video_adds_nothing_and_fails() {
+    let s = setup();
+    let fetch = |urls: &[&str], known: BTreeSet<SourceKey>| {
+        let store = Store::scan(&s.dirs).unwrap();
+        let ytdlp = s.dirs.ytdlp();
+        let temp = s.dir.path().join("temp");
+        let fetcher = Fetcher {
+            store: &ytdlp,
+            temp: &temp,
+            partial: &temp,
+            plugins: None,
+            sites: &crate::sites::Sites::default(),
+            options: &crate::settings::Ytdlp::default(),
+            passed: &crate::download::Passed::default(),
+            live: false,
+            runs: Cell::new(0),
+        };
+        let mut out = Vec::new();
+        let urls: Vec<String> = urls.iter().map(|u| (*u).to_string()).collect();
+        let (ok, add) = Acquire {
+            runner: &Net::default(),
+            fetcher: &fetcher,
+            out: &mut out,
+            known,
+            removed: BTreeSet::new(),
+            store: &store,
+        }
+        .urls(&urls, false)
+        .unwrap();
+        assert_eq!(add.proposals, Vec::<Proposal>::new());
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let (ok, text) = fetch(&["https://empty"], BTreeSet::new());
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("no address given named a video to fetch") && !text.contains("Nothing new"),
+        "{text}"
+    );
+    let (ok, text) = fetch(
+        &["https://v"],
+        BTreeSet::from([SourceKey::youtube("vid00000009")]),
+    );
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("every video named is a source already"),
+        "{text}"
+    );
 }
 
 #[test]

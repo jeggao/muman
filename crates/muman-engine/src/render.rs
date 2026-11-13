@@ -7,16 +7,23 @@
 //!
 //! Every file is written as `<name>.part` and renamed into place, the
 //! audio last, so a player scanning the library never sees half a track.
-//! A `.part` is made anew, whatever was at its name removed first and the
-//! file created only if nothing took its place: a link left there by
-//! someone who may write the library folder would send the write
-//! elsewhere. ffmpeg, which opens its output itself, writes into a `.part`
-//! made so just before it runs. A song's files go into place through
-//! [`crate::library::put`] and [`crate::library::clear`], over or in
-//! place of only the files the sync claimed as muman's or took over,
-//! every one checked before any is changed ([`crate::library::claimed`]):
+//! A `.part` is made only where nothing is: the sync clears what its
+//! stopped runs left first ([`crate::library::Leftovers`]), so a file at
+//! the name is someone else's, a link that would send the write elsewhere
+//! among them, and the write that stages there fails, naming it. A write
+//! removes the `.part` files it staged, and only those, when it fails or
+//! a panic unwinds it, so a `.part` of the user's at a name it does not
+//! stage is nothing to it. ffmpeg, which opens its output itself, writes
+//! into a `.part` made so just before it runs. A song's files go into
+//! place through [`crate::library::put`] and [`crate::library::clear`],
+//! over or in place of only the files the sync claimed as muman's or
+//! took over, every one checked before any is changed
+//! ([`crate::library::claimed`]):
 //! a song one file refuses changes none, and keeps its file as its record
-//! says, never one written but recorded as it was.
+//! says, never one written but recorded as it was. A rename that fails
+//! all the same once another file of the song is in place, as over a file
+//! Windows holds open, says the song [`crate::library::HalfWritten`], for
+//! the sync to record it as about to be written, as a run stopped there.
 //! A cover or lyrics that fail are reported and the song is written
 //! without them. A song that fails leaves the folders made for it, since
 //! another song rendered at the same time may be writing into one; the
@@ -203,21 +210,49 @@ fn part(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// A new, empty file at `part`, whatever was there removed first.
-// Makes a song's staged file anew.
-#[expect(clippy::disallowed_methods)]
-fn stage(part: &Path) -> Result<fs::File> {
-    match fs::remove_file(part) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).with_context(|| format!("removing {}", part.display()));
+/// The `.part` files one write staged, each removed unless put in place:
+/// a write that fails, or a build that panics and unwinds, leaves none of
+/// them, and removes no file it did not make.
+#[derive(Debug, Default)]
+struct Staged(Vec<PathBuf>);
+
+impl Staged {
+    /// A new, empty file at `part`, in `library`, staged. A file already
+    /// there is refused, named: the sync cleared what its stopped runs
+    /// left first, so it is someone else's.
+    // Makes a song's staged file anew.
+    #[expect(clippy::disallowed_methods)]
+    fn stage(&mut self, library: &Path, part: &Path) -> Result<fs::File> {
+        let made = OpenOptions::new().write(true).create_new(true).open(part);
+        match made {
+            Ok(file) => {
+                self.0.push(part.to_path_buf());
+                Ok(file)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(anyhow!(
+                "{} is not muman's, and is in the way of writing it; move it aside",
+                crate::library::shown(library, part)
+            )),
+            Err(e) => {
+                Err(e).with_context(|| format!("creating {}", crate::library::shown(library, part)))
+            }
         }
-        _ => {}
     }
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(part)
-        .with_context(|| format!("creating {}", part.display()))
+
+    /// Every file staged is put in place, none left to remove.
+    fn placed(mut self) {
+        self.0.clear();
+    }
+}
+
+impl Drop for Staged {
+    // Removes the staged files of a write that did not put them in place.
+    #[expect(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        for part in &self.0 {
+            let _ = fs::remove_file(part);
+        }
+    }
 }
 
 /// The inputs of one ffmpeg run, each file once.
@@ -278,8 +313,6 @@ fn audio_output(
 
 // The steps read in the order they run; split up, the order would be in the call sites.
 #[expect(clippy::too_many_lines)]
-// Removes a song's staged files when it fails.
-#[expect(clippy::disallowed_methods)]
 pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let made = job.parts;
     let locate = |key: &SourceKey| {
@@ -298,7 +331,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         .collect();
     let audio_path = job.library.join(&audio_rel);
     let dir = audio_path.parent().unwrap_or(job.library);
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating {}", crate::library::shown(job.library, dir)))?;
     let audio_part = part(&audio_path);
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
     fs::create_dir_all(job.scratch)?;
@@ -374,7 +408,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
 
     let input_paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
-    stage(&audio_part)?;
+    let mut staging = Staged::default();
+    staging.stage(job.library, &audio_part)?;
     let results = ffmpeg::run_outputs(runner, &input_paths, &outputs);
     let failed = |path: &Path| failure(&outputs, &results, path);
     let staged = (|| -> Result<Vec<PathBuf>> {
@@ -382,7 +417,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             return Err(anyhow!("{e}"));
         }
         if made.audio.format.codec().container() == Container::Flac {
-            state_samples(&audio_part, &mut problems)?;
+            state_samples(job.library, &audio_part, &mut problems)?;
         }
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
@@ -419,7 +454,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         // A cover the tags cannot hold costs the song only its cover.
         let write = |picture| {
             write_tags(
-                &audio_part,
+                (job.library, &audio_part),
                 made.audio.format,
                 &tags,
                 made.tags.language,
@@ -434,7 +469,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             problems.push(format!("no cover: {e:#}"));
             write(None)?;
         }
-        set_opus_header(&audio_part, made.tags.opus_header)?;
+        set_opus_header(job.library, &audio_part, made.tags.opus_header)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
         let mut held = match text {
             Some(text) => lyrics::contents(made, &text),
@@ -453,27 +488,22 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             failed,
             &mut problems,
         ));
-        stage_beside(job, (&rels, &parts), &held, &mut problems)
+        stage_beside(job, (&rels, &parts), &held, (&mut staging, &mut problems))
     })();
     let placed = staged.and_then(|written| {
-        let beside = put_beside(job, &parts, &rels, &written)?;
-        crate::library::put(job.library, &audio_part, &audio_rel, job.claim)?;
+        let (beside, changed) = put_beside(job, &parts, &rels, &written)?;
+        crate::library::put(job.library, &audio_part, &audio_rel, job.claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
         Ok(beside)
     });
-    match placed {
-        Ok(beside) => Ok(Rendered {
-            audio_bytes: size_of(&audio_path),
-            audio: audio_rel,
-            beside,
-            problems,
-        }),
-        Err(e) => {
-            for staged in std::iter::once(&audio_part).chain(&parts) {
-                let _ = fs::remove_file(staged);
-            }
-            Err(e)
-        }
-    }
+    let beside = placed?;
+    staging.placed();
+    Ok(Rendered {
+        audio_bytes: size_of(&audio_path),
+        audio: audio_rel,
+        beside,
+        problems,
+    })
 }
 
 /// Why the output of `outputs` writing `path` failed, by `results`.
@@ -485,14 +515,14 @@ fn failure(outputs: &[Output], results: &[Result<()>], path: &Path) -> Option<St
         .and_then(|(_, r)| r.as_ref().err().map(|e| format!("{e:#}")))
 }
 
-/// Each of `contents` staged at its file's `.part`, made anew: the files
-/// of `rels` staged. A folder's file at a name a file not muman's holds
-/// is left alone, said in `problems`.
+/// Each of `contents` staged at its file's `.part`, made anew into
+/// `staging`: the files of `rels` staged. A folder's file at a name a
+/// file not muman's holds is left alone, said in `problems`.
 fn stage_beside(
     job: &Job<'_>,
     (rels, parts): (&[PathBuf], &[PathBuf]),
     contents: &[Option<Vec<u8>>],
-    problems: &mut Vec<String>,
+    (staging, problems): (&mut Staged, &mut Vec<String>),
 ) -> Result<Vec<PathBuf>> {
     let mut staged = Vec::new();
     for ((rel, part), content) in rels.iter().zip(parts).zip(contents) {
@@ -506,8 +536,8 @@ fn stage_beside(
             ));
             continue;
         }
-        std::io::Write::write_all(&mut stage(part)?, content)
-            .with_context(|| format!("writing {}", part.display()))?;
+        std::io::Write::write_all(&mut staging.stage(job.library, part)?, content)
+            .with_context(|| format!("writing {}", crate::library::shown(job.library, part)))?;
         staged.push(rel.clone());
     }
     Ok(staged)
@@ -516,15 +546,17 @@ fn stage_beside(
 /// Put each of `rels` staged at `parts` that `written` names in its
 /// place, and clear the files the song's last build left beside it that
 /// are not written again, its lyrics that are none now among them; each
-/// put with what it takes. Each of them, and the song's audio file, is
-/// first checked to be the song's to change, so a file not muman's among
-/// them leaves every one as it was.
+/// put with what it takes, and whether any file was changed. Each of
+/// them, and the song's audio file, is first checked to be the song's to
+/// change, so a file not muman's among them leaves every one as it was;
+/// one that fails once another is changed leaves the song
+/// [`HalfWritten`](crate::library::HalfWritten).
 fn put_beside(
     job: &Job<'_>,
     parts: &[PathBuf],
     rels: &[PathBuf],
     written: &[PathBuf],
-) -> Result<Vec<(PathBuf, u64)>> {
+) -> Result<(Vec<(PathBuf, u64)>, bool)> {
     let audio = with_extension(job.stem, job.parts.audio.format.extension());
     // A file the last build left that is not written again, changed by
     // the user since, is theirs now: left where it is, not cleared.
@@ -542,16 +574,22 @@ fn put_beside(
         job.claim,
     )?;
     let mut beside = Vec::new();
+    let mut changed = false;
     for (staged, rel) in parts.iter().zip(rels) {
         if written.contains(rel) {
-            crate::library::put(job.library, staged, rel, job.claim)?;
+            crate::library::put(job.library, staged, rel, job.claim)
+                .map_err(|e| crate::library::half_written(e, changed))?;
+            changed = true;
             beside.push((rel.clone(), size_of(&job.library.join(rel))));
         }
     }
     for gone in cleared {
-        crate::library::clear(job.library, gone, job.claim)?;
+        let there = fs::symlink_metadata(job.library.join(gone)).is_ok();
+        crate::library::clear(job.library, gone, job.claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
+        changed |= there;
     }
-    Ok(beside)
+    Ok((beside, changed))
 }
 
 /// Whether `rel` is a file of the song's folder, of `job`'s plan, that a
@@ -612,8 +650,6 @@ fn embeddable(made: &Parts<'_>, text: &str, problems: &mut Vec<String>) -> Optio
 /// over the file `job`'s claim holds by [`Retagged::put`], once the files
 /// beside it are, so a song whose other files fail keeps its file as it
 /// was, and as its record says.
-// Removes a song's staged file when its tags fail.
-#[expect(clippy::disallowed_methods)]
 pub(crate) fn retag<R: Runner>(
     runner: &R,
     job: &Job<'_>,
@@ -638,17 +674,19 @@ pub(crate) fn retag<R: Runner>(
     let staged = part(&path);
     // Into a new file, as a song written anew is: a copy would carry over
     // a read-only mode and refuse the tags.
-    let mut into = stage(&staged)?;
+    let shown = crate::relpath::show(audio);
+    let mut staging = Staged::default();
+    let mut into = staging.stage(library, &staged)?;
     std::io::copy(
-        &mut fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?,
+        &mut fs::File::open(&path).with_context(|| format!("opening {shown}"))?,
         &mut into,
     )
-    .with_context(|| format!("copying {}", path.display()))?;
+    .with_context(|| format!("copying {shown}"))?;
     drop(into);
     let result = (|| -> Result<Vec<String>> {
         // The copy is the file byte for byte, and a `.part` names no format.
         let held = crate::tags::read_tagged(&path)
-            .with_context(|| format!("reading the tags of {}", path.display()))?;
+            .with_context(|| format!("reading the tags of {shown}"))?;
         let tag = held.primary_tag();
         let picture = tag
             .and_then(|t| {
@@ -673,28 +711,24 @@ pub(crate) fn retag<R: Runner>(
         }
         let covered = picture.is_some();
         write_tags(
-            &staged,
+            (library, &staged),
             made.audio.format,
             &tags,
             made.tags.language,
             picture,
             made.tags.chapters,
         )?;
-        set_opus_header(&staged, made.tags.opus_header)?;
+        set_opus_header(library, &staged, made.tags.opus_header)?;
         Ok(verify(&staged, &tags, covered))
     })();
-    match result {
-        Ok(verified) => Ok(Retagged {
-            staged: Some(staged),
-            audio: audio.to_path_buf(),
-            beside: beside.to_vec(),
-            problems: problems.into_iter().chain(verified).collect(),
-        }),
-        Err(e) => {
-            let _ = fs::remove_file(&staged);
-            Err(e)
-        }
-    }
+    let verified = result?;
+    staging.placed();
+    Ok(Retagged {
+        staged: Some(staged),
+        audio: audio.to_path_buf(),
+        beside: beside.to_vec(),
+        problems: problems.into_iter().chain(verified).collect(),
+    })
 }
 
 /// A song's file [`retag`] staged with its new tags, not yet in place:
@@ -795,34 +829,36 @@ fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<Str
     problems
 }
 
-/// The `gain` an Opus header holds, set in `path` once its tags are
-/// written, as [`crate::ogg`] sets it.
+/// The `gain` an Opus header holds, set in `path`, in the library `root`,
+/// once its tags are written, as [`crate::ogg`] sets it.
 // Sets the gain of a staged file's Opus header in place.
 #[expect(clippy::disallowed_methods)]
-fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
+fn set_opus_header(root: &Path, path: &Path, gain: Option<i16>) -> Result<()> {
     let Some(gain) = gain else {
         return Ok(());
     };
+    let shown = || crate::library::shown(root, path);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {}", shown()))?;
     crate::ogg::set_output_gain(&mut file, gain)
-        .with_context(|| format!("setting the gain of {}", path.display()))
+        .with_context(|| format!("setting the gain of {}", shown()))
 }
 
-/// The sample count of the FLAC at `path` stated where its STREAMINFO
-/// states none, as a stream copied from a pipe's FLAC or an Ogg FLAC
-/// does ([`crate::flac`]); one that cannot be counted is said.
+/// The sample count of the FLAC at `path`, in the library `root`, stated
+/// where its STREAMINFO states none, as a stream copied from a pipe's
+/// FLAC or an Ogg FLAC does ([`crate::flac`]); one that cannot be counted
+/// is said.
 // Sets the count in a staged file's STREAMINFO in place.
 #[expect(clippy::disallowed_methods)]
-fn state_samples(path: &Path, problems: &mut Vec<String>) -> Result<()> {
+fn state_samples(root: &Path, path: &Path, problems: &mut Vec<String>) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {}", crate::library::shown(root, path)))?;
     if let Err(e) = crate::flac::state_samples(&mut file) {
         problems.push(format!("no length stated in the file: {e:#}"));
     }
@@ -839,8 +875,6 @@ fn size_of(path: &Path) -> u64 {
 /// last build left that it has none of now gone: over or in place of only
 /// the files `claim` holds, all checked before any is changed, a file of
 /// its `folder` at a name a file not muman's holds left alone, said.
-// Removes a song's staged files when they cannot be put in place.
-#[expect(clippy::disallowed_methods)]
 pub fn place(
     from: &Path,
     rendered: &Rendered,
@@ -853,20 +887,22 @@ pub fn place(
     let copy_in = |rel: &Path| -> Result<()> {
         let to = library.join(rel);
         if let Some(dir) = to.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            fs::create_dir_all(dir)
+                .with_context(|| format!("creating {}", crate::library::shown(library, dir)))?;
         }
         let staged = part(&to);
-        let copied = stage(&staged).and_then(|mut into| {
-            let mut made = fs::File::open(from.join(rel))?;
-            std::io::copy(&mut made, &mut into)?;
-            Ok(())
-        });
-        copied
-            .and_then(|()| crate::library::put(library, &staged, rel, claim))
-            .inspect_err(|_| {
-                let _ = fs::remove_file(&staged);
+        let mut staging = Staged::default();
+        staging
+            .stage(library, &staged)
+            .and_then(|mut into| {
+                let mut made = fs::File::open(from.join(rel))?;
+                std::io::copy(&mut made, &mut into)?;
+                Ok(())
             })
-            .with_context(|| format!("copying {} into the library", rel.display()))
+            .and_then(|()| crate::library::put(library, &staged, rel, claim))
+            .with_context(|| format!("copying {} into the library", crate::relpath::show(rel)))?;
+        staging.placed();
+        Ok(())
     };
     let (left, beside): (Vec<_>, Vec<_>) = rendered
         .beside
@@ -885,13 +921,18 @@ pub fn place(
             .chain([&rendered.audio]),
         claim,
     )?;
+    let mut changed = false;
     for (file, _) in &beside {
-        copy_in(file)?;
+        copy_in(file).map_err(|e| crate::library::half_written(e, changed))?;
+        changed = true;
     }
     for gone in cleared {
-        crate::library::clear(library, gone, claim)?;
+        let there = fs::symlink_metadata(library.join(gone)).is_ok();
+        crate::library::clear(library, gone, claim)
+            .map_err(|e| crate::library::half_written(e, changed))?;
+        changed |= there;
     }
-    copy_in(&rendered.audio)?;
+    copy_in(&rendered.audio).map_err(|e| crate::library::half_written(e, changed))?;
     let mut problems = rendered.problems.clone();
     problems.extend(
         left.iter()
@@ -905,11 +946,14 @@ pub fn place(
 }
 
 /// What [`beside`] wrote: each file beside the song, with what it takes
-/// in bytes, and what could not be written, each said once.
+/// in bytes, and what could not be written, each said once; and whether
+/// it changed a file of the song, written or cleared, so the song's file
+/// that fails to be put after is [`HalfWritten`](crate::library::HalfWritten).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Beside {
     pub files: Vec<(PathBuf, u64)>,
     pub problems: Vec<String>,
+    pub changed: bool,
 }
 
 /// Write the files `job`'s plan has beside the song, its lyrics and its
@@ -920,8 +964,6 @@ pub struct Beside {
 /// nothing is written. Those of `keep`, as they would be written already,
 /// are left as they are, and nothing is made for them. A file the last build left beside it that
 /// the plan has none of goes, as [`render`] clears it.
-// Removes the staged files beside a song when they cannot be put in place.
-#[expect(clippy::disallowed_methods)]
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<Beside> {
     let made = job.parts;
     let mut problems = Vec::new();
@@ -982,17 +1024,15 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<
         .filter(|(rel, _)| !keep.contains(rel))
         .unzip();
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
-    let placed = stage_beside(job, (&rels, &parts), &held, &mut problems)
-        .and_then(|written| put_beside(job, &parts, &rels, &written));
-    match placed {
-        Ok(files) => Ok(Beside { files, problems }),
-        Err(e) => {
-            for staged in &parts {
-                let _ = fs::remove_file(staged);
-            }
-            Err(e)
-        }
-    }
+    let mut staging = Staged::default();
+    let written = stage_beside(job, (&rels, &parts), &held, (&mut staging, &mut problems))?;
+    let (files, changed) = put_beside(job, &parts, &rels, &written)?;
+    staging.placed();
+    Ok(Beside {
+        files,
+        problems,
+        changed,
+    })
 }
 
 /// The vendor string ffmpeg names its Vorbis comments with, bit-exact.
@@ -1002,41 +1042,43 @@ const FFMPEG_VENDOR: &str = "ffmpeg";
 /// cover and the chapters, keeping the encoder's vendor string and a
 /// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
 /// `lyrics` is the ISO 639-2 code of the language the `LYRICS` tag is in.
+/// The file is at `path` in the library `root`.
 // Writes a staged file's tags in place.
 #[expect(clippy::disallowed_methods)]
 fn write_tags(
-    path: &Path,
+    (root, path): (&Path, &Path),
     format: Format,
     tags: &[(String, Vec<String>)],
     lyrics: Option<&str>,
     picture: Option<Picture>,
     chapters: &[Chapter],
 ) -> Result<()> {
+    let shown = crate::library::shown(root, path);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .with_context(|| format!("opening {shown}"))?;
     let codec = format.codec();
     if codec.container() == Container::Mp4 {
         drop_meta_atoms(&mut file, &[*b"ilst", *b"free"])
             .and_then(|()| file.rewind())
-            .with_context(|| format!("writing tags to {}", path.display()))?;
+            .with_context(|| format!("writing tags to {shown}"))?;
     }
-    crate::errors::caught(|| save_tags(&mut file, path, codec, tags, lyrics, picture, chapters))
-        .with_context(|| format!("writing tags to {}", path.display()))?;
+    crate::errors::caught(|| save_tags(&mut file, &shown, codec, tags, lyrics, picture, chapters))
+        .with_context(|| format!("writing tags to {shown}"))?;
     if codec.container() == Container::Mp4 {
         drop_meta_atoms(&mut file, &[*b"free"])
-            .with_context(|| format!("writing tags to {}", path.display()))?;
+            .with_context(|| format!("writing tags to {shown}"))?;
     }
     Ok(())
 }
 
-/// [`write_tags`]'s tags written into `file` at `path` by the container's
-/// own writer.
+/// [`write_tags`]'s tags written into `file`, named `shown`, by the
+/// container's own writer.
 fn save_tags(
     file: &mut fs::File,
-    path: &Path,
+    shown: &str,
     codec: Codec,
     tags: &[(String, Vec<String>)],
     lyrics: Option<&str>,
@@ -1045,9 +1087,9 @@ fn save_tags(
 ) -> Result<()> {
     let written = match codec.container() {
         Container::Flac => {
-            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            let comments = vorbis_comments(file, shown, codec, tags, picture, chapters)?;
             if write_flac_blocks(file, &comments)
-                .with_context(|| format!("writing tags to {}", path.display()))?
+                .with_context(|| format!("writing tags to {shown}"))?
             {
                 return Ok(());
             }
@@ -1055,7 +1097,7 @@ fn save_tags(
             comments.save_to(file, WriteOptions::default())
         }
         Container::Ogg => {
-            let comments = vorbis_comments(file, path, codec, tags, picture, chapters)?;
+            let comments = vorbis_comments(file, shown, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(file, WriteOptions::default().preferred_padding(0))
         }
@@ -1065,7 +1107,7 @@ fn save_tags(
         Container::Mp4 => ilst_of(tags, picture).save_to(file, WriteOptions::default()),
         Container::WavPack => ape_tag(tags, picture).save_to(file, WriteOptions::default()),
     };
-    written.with_context(|| format!("writing tags to {}", path.display()))
+    written.with_context(|| format!("writing tags to {shown}"))
 }
 
 /// Remove the atoms of each of `kinds` in an MP4's `moov.udta.meta`.
@@ -1303,7 +1345,7 @@ const CHANNEL_MASK: &str = "WAVEFORMATEXTENSIBLE_CHANNEL_MASK";
 
 fn vorbis_comments(
     file: &mut fs::File,
-    path: &Path,
+    shown: &str,
     codec: Codec,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
@@ -1312,7 +1354,7 @@ fn vorbis_comments(
     // The vendor string is all that is read: the audio's properties are
     // not, as lofty refuses an Opus stream of mapping family 255 for them.
     let options = ParseOptions::new().read_properties(false);
-    let reading = || format!("reading {} as {codec}", path.display());
+    let reading = || format!("reading {shown} as {codec}");
     let (vendor, mask) = match codec {
         Codec::Opus => (
             OpusFile::read_from(file, options)

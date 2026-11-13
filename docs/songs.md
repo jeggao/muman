@@ -27,7 +27,8 @@ matches "Café":
 Words quoted together, as `"paper comets"`, are still each a word of
 its own, so a script passing a query as one argument finds what the
 words typed apart find; all of them together may also name a file
-whole, as `"02 Tide.flac"`. A field's text is one phrase:
+whole, as `"02 Tide.flac"`. Quotes read alike on the command line, where
+a script may pass them in one argument, and in a provider's `skip`. A field's text is one phrase:
 `title:"paper comets"` finds that title, not "Comets of Paper". A
 regular expression is matched against the field lower-cased and with
 its accents taken off, and its own accents are taken off too, so
@@ -48,9 +49,14 @@ A field is any tag, or one of these:
 `lyrics`, `cover`, `from` and `has` compare their value whole, so
 `lyrics:timed` never matches "untimed". An album artist muman takes
 from the artist, or an album named after a single's title, is no tag
-for `has`. muman refuses a field, here or in a provider's `skip`, that
-is no tag it knows and that no song has, so a misspelled field never
-quietly matches nothing, or every song when negated.
+for `has`. muman refuses a field, or a tag after `has:`, here or in a
+provider's `skip`, that is no tag it knows and that no song has, so a
+misspelled field never quietly matches nothing, or every song when
+negated.
+
+A song whose file a sync leaves as it is, as built until `sync
+--accept` or changed by you, is read as that file was written: its
+tags and `path` are its file's, not what the sync would write.
 
 ## Changing songs
 
@@ -82,9 +88,11 @@ quietly matches nothing, or every song when negated.
   over, choose among or clear. You choose a pin among the song's
   sources, each shown with what was measured of it, and type the lyrics
   offset as a time; "Another tag…" names any other field. For songs all
-  on one album, you can set an album field, such as the genre or date,
+  on one album added whole, an [`[[album]]`](guide.md#the-song-list) in
+  the song list, you can set an album field, such as the genre or date,
   on the album itself, for its songs and any added later, which clears
-  each song's own. Nothing is saved until "Review and save", which says
+  each song's own; songs that only share an album name have no table to
+  hold it, so the field is set on each. Nothing is saved until "Review and save", which says
   each change and asks. A choice that leaves the songs as they are, as
   an empty offset left empty, is no change: it is neither marked nor
   counted, and a field set on the album counts once.
@@ -106,18 +114,28 @@ quietly matches nothing, or every song when negated.
   tag it writes, where that came from and what other sources offer;
   they never reach the song list.
 - **`remove`** moves songs to `[[removed]]` and deletes their library
-  files. `--purge` also deletes their fetched sources, and moves your
-  own files to the trash.
+  files, but a file you changed since muman wrote it, which it lists as
+  left in place, and a folder's cover the next song of its folder takes.
+  `--purge` also deletes their fetched sources, and moves your own files
+  to the trash.
 - **`restore`** lists removed songs again, fetching any source purged.
   It refuses until you take back from the trash the files of yours that
-  `--purge` moved there, and names each.
+  `--purge` moved there, a song's `.lrc` and pictures with it, and
+  names each, as its `[[removed]]` entry keeps them. A song file put
+  back in another folder of `sources/manual` is followed there, and its
+  `.lrc` and pictures are looked for beside it, where they serve it;
+  `undo` of the purge looks for them alike.
 - **`undo`** puts the song list and the library back as before the last
   run that changed them, one run further back each time.
 
 ```bash
-muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y
+muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 --print0 | xargs -0 muman remove -y
 muman set artist:="Marlo Venn" album="Lantern Weather"
 ```
+
+A key may hold spaces and quotes, as `manual:Marlo Venn/Paper Comets.flac`
+does, so the keys picked pass to `xargs` ended by a NUL, which `-0`
+reads on every system.
 
 ### What undo puts back
 
@@ -167,7 +185,7 @@ can put back, and asks by name, as "Remove 2 songs?":
 every song it names. `edit` needs a terminal for its editor and takes
 no `-y`. A question waiting for your answer holds no other run back,
 and a song changed meanwhile, by hand or by another run, refuses
-the save of `remove`, `restore` or `set NAME=VALUE`. `edit` opens again
+the save of `remove`, `restore` or `set NAME=VALUE`, with exit code 5. `edit` opens again
 on the songs as they are now, naming each field the change set, with
 your edits over them: a field you changed stays as you made it, any
 other shows the change. Save again to apply your edits, or quit
@@ -201,10 +219,17 @@ muman matches each file by the strongest evidence it shows:
 
 1. An ID it shares with the song: a video ID in its name, an ISRC or a
    MusicBrainz recording ID.
-1. Its name, as the song's file is named.
+1. Its name, as the song's file is named. A name names the song file
+   in its own folder first, and a cue sheet's `FILE "01.flac"` the
+   `01.flac` beside the cue sheet, so the cue sheets of `CD1` and `CD2`
+   each go to their own disc's songs. Where two discs' files share the
+   name, a disc number the file states names its disc's song, as a cue
+   sheet's `REM DISCNUMBER 2` names disc 2's `01.flac` wherever the
+   sheet is.
 1. Its fields: an `.lrc`'s `[ti:]`, `[ar:]`, `[al:]` and `[length:]`,
-   a tag file's, or its own name read as `03 - Artist - Title`,
-   `Artist - Title` or `Title`.
+   a tag file's or a cue sheet's, its disc and track count among them,
+   or its own name read as `03 - Artist - Title`, `Artist - Title` or
+   `Title`.
 1. What it holds: lyrics against the words the song's lyrics sing,
    from any source, a song file's own lyrics tag too, and a picture against the song's covers by how they look, whatever its
    size, compression or bars.
@@ -231,14 +256,16 @@ Lantern Weather — Marlo Venn · The Glass Orchards · 3:20   close name, lengt
 `same name`, `close name` or `other name` says how the names compare,
 and the rest what else agrees or not. You may also search the song
 list with a query, or leave the file out. `-y` takes the likeliest song
-when it is clearly the nearest.
+when it is clearly the nearest. A cue sheet is asked about whole first;
+where a track is as near another song, the answer offered first is to
+choose song by song.
 
 Without a terminal, a file not surely a song's is left out, and `add`
 exits with code 5 once the rest is done. A file that cannot be used is
 not added, and `add` exits with code 4 after writing the songs given
-with it: a `.pdf`, an empty `.lrc`, a picture that does not decode
-whole, a song file with no audio, or a cue sheet that splits one song's
-file into tracks.
+with it: a `.pdf`, an `.lrc` that sings no line, as one of ID tags or
+cues alone, a picture that does not decode whole, a song file with no
+audio, or a cue sheet that splits one song's file into tracks.
 
 `--to` names the songs with a query instead of matching; quote the
 query as one word. For a picture it names every song to give it to,
@@ -264,8 +291,8 @@ within `sources/manual` is followed, as a song file is.
 
 `muman duplicates` lists songs listed apart that are one recording, by
 their audio fingerprints. First come files an album holds twice, then
-tracks with copies on other albums, which a library of whole albums
-keeps on purpose. An album is told as its songs' tags [agree on
+tracks with copies on other albums or on none, which a library of whole
+albums keeps on purpose; each group is headed by the albums it is on. An album is told as its songs' tags [agree on
 one](metadata.md#tags), and a single is on none. A query picks the
 groups shown. Listing changes nothing.
 

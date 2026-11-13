@@ -38,7 +38,9 @@
 //!
 //! - artists are split at `;` only, since a comma belongs to names such
 //!   as `Venn, Hale & Orchard`; genres split at `,`, `;` and `/`, never at
-//!   `&`, as in `Rock & Roll`;
+//!   `&`, as in `Rock & Roll`, inside a bracket but one around them all,
+//!   or inside an item standing for none, as `N/A` in `N/A; Jazz`: a list
+//!   is parted into its items first, and an item at `/` only after;
 //! - a remaster note goes from a title, never from an album, whose
 //!   remaster is another release;
 //! - a bracket naming the video stays when it also says live, demo, mix,
@@ -1279,12 +1281,70 @@ fn disc_in_album(v: &str, _: &At<'_>) -> Option<Vec<String>> {
     disc_in(v).map(|(at, _)| vec![v[..at].to_string()])
 }
 
+/// The brackets a genre's separator inside stays in: `Rock (Hard/Soft)`
+/// is one genre.
+const GENRE_BRACKETS: [(char, char); 7] = [
+    ('(', ')'),
+    ('[', ']'),
+    ('{', '}'),
+    ('（', '）'),
+    ('［', '］'),
+    ('【', '】'),
+    ('〔', '〕'),
+];
+
+/// Genres joined in one value ([`genres_in`]), or in a bracket around
+/// them all, which it drops: `[Rock/Pop]` is `Rock` and `Pop`. A value
+/// whose brackets do not pair is no list.
 fn joined_genres(v: &str, _: &At<'_>) -> Option<Vec<String>> {
-    let parts: Vec<String> = v
-        .split([',', ';', '/', '；', '、'])
-        .map(str::to_string)
-        .collect();
-    (parts.len() > 1).then_some(parts)
+    let trimmed = v.trim();
+    let mut parts = genres_in(trimmed)?;
+    if parts.len() < 2 {
+        let mut chars = trimmed.chars();
+        let (first, last) = (chars.next()?, chars.next_back()?);
+        if !GENRE_BRACKETS.contains(&(first, last)) {
+            return None;
+        }
+        parts = genres_in(chars.as_str())?;
+    }
+    (parts.len() > 1).then(|| parts.into_iter().map(str::to_string).collect())
+}
+
+/// The genres `s` joins outside every bracket: its items, parted at `,`,
+/// `;`, `；` or `、`, and each item that stands for a genre parted again at `/`,
+/// but one that stands for none, as `N/A` ([`crate::detect::placeholder`]),
+/// which stays whole; none where its brackets do not pair.
+fn genres_in(s: &str) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    for item in parted(s, &[',', ';', '；', '、'])? {
+        if crate::detect::placeholder(Field::Genre, item) {
+            parts.push(item);
+        } else {
+            parts.extend(parted(item, &['/'])?);
+        }
+    }
+    Some(parts)
+}
+
+/// `s` parted at each of `seps` outside every bracket; none where its
+/// brackets do not pair.
+fn parted<'s>(s: &'s str, seps: &[char]) -> Option<Vec<&'s str>> {
+    let mut open: Vec<char> = Vec::new();
+    let (mut parts, mut from) = (Vec::new(), 0);
+    for (i, c) in s.char_indices() {
+        if let Some((_, close)) = GENRE_BRACKETS.iter().find(|(o, _)| *o == c) {
+            open.push(*close);
+        } else if GENRE_BRACKETS.iter().any(|(_, close)| *close == c) {
+            if open.pop() != Some(c) {
+                return None;
+            }
+        } else if open.is_empty() && seps.contains(&c) {
+            parts.push(&s[from..i]);
+            from = i + c.len_utf8();
+        }
+    }
+    parts.push(&s[from..]);
+    open.is_empty().then_some(parts)
 }
 
 /// Words a `'` opening them shortens, lower-case: `'til`, `rock 'n' roll`.

@@ -8,12 +8,16 @@
 //! them, and a file in the manual folder is never touched, one no song
 //! lists being added by the next sync, but for the lyrics and pictures
 //! `add` copied into its `added/`, muman's copies of files the user
-//! keeps where they were. A folder a purge leaves empty, as a torrent's,
+//! keeps where they were. A copy is muman's only while it holds the
+//! bytes the state recorded as `add` made it, so it is deleted as made
+//! or not at all: one the user changed since, or any file the user put
+//! in `added/`, is the user's, which nothing here could give back. A
+//! copy deleted is forgotten. A folder a purge leaves empty, as a torrent's,
 //! goes with it, up to the folder of its kind of source, which stays.
 //! Nothing here can be undone, but nothing is lost either: a fetched
 //! source a song lists again is fetched again by the next sync.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +27,8 @@ use crate::atomic::Lock;
 use crate::cli::Confirm;
 use crate::dirs::{ADDED, Dirs};
 use crate::manifest::Manifest;
+use crate::source::SourceKey;
+use crate::state::State;
 use crate::store::Store;
 use crate::ui::Prompter;
 
@@ -75,6 +81,11 @@ pub fn purge<W: Write>(
         }
     }
     remove_emptied(dirs, &doomed);
+    let copies: BTreeSet<SourceKey> = (doomed.iter())
+        .filter_map(|f| f.strip_prefix(dirs.manual()).ok())
+        .map(|rel| SourceKey::Manual(rel.into()))
+        .collect();
+    State::keep_copies(&dirs.home, &BTreeMap::new(), &copies)?;
     crate::ui::success(out, &format!("Freed {}", crate::ui::bytes(total)))?;
     Ok(true)
 }
@@ -108,24 +119,18 @@ fn remove_emptied(dirs: &Dirs, files: &[PathBuf]) {
 
 /// What no listed or removed song uses now, by the song list read whole.
 fn unused_now(dirs: &Dirs) -> Result<BTreeSet<PathBuf>> {
-    let manifest = {
+    let (manifest, state) = {
         let _lock = Lock::folder(&dirs.home)?;
-        Manifest::load(&dirs.home)?
+        (Manifest::load(&dirs.home)?, State::load(&dirs.home)?)
     };
     let store = Store::scan(dirs)?;
     let mut known = manifest.keys();
     known.extend(manifest.removed_keys());
-    Ok(unused_files(dirs, &store, &known).into_iter().collect())
-}
-
-/// Every file of a fetched source, a kept record or a copy `add` made in
-/// `added/` no key of `known` names, with the files that come with it.
-fn unused_files(
-    dirs: &Dirs,
-    store: &Store,
-    known: &BTreeSet<crate::source::SourceKey>,
-) -> Vec<PathBuf> {
-    store.with_their_files(dirs, known, &store.purgeable(dirs, known))
+    let named = store.purgeable(dirs, &known, &state.copies);
+    Ok(store
+        .with_their_files(dirs, &known, &named)
+        .into_iter()
+        .collect())
 }
 
 #[cfg(test)]

@@ -339,6 +339,110 @@ fn a_source_listed_twice_is_refused() {
 }
 
 #[test]
+fn a_tag_set_under_two_spellings_of_its_name_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let song = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
+    for tags in [
+        "tags.title = \"Alpha\"\ntags.Title = \"Beta\"\n",
+        "tags.album_artist = \"Marlo Venn\"\ntags.ALBUMARTIST = \"Ada Quill\"\n",
+        "tags.mood = \"calm\"\ntags.MOOD = \"calm\"\n",
+    ] {
+        write(dir.path(), &format!("{song}{tags}"));
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains("both set"), "{tags}: {e:#}");
+    }
+    write(
+        dir.path(),
+        &format!("{song}tags.title = \"A\"\ntags.Title = \"B\"\n"),
+    );
+    let e = format!("{:#}", Manifest::load(dir.path()).unwrap_err());
+    assert!(
+        e.contains("whatever its case") && e.contains("listing both"),
+        "{e}"
+    );
+    write(
+        dir.path(),
+        &format!("{song}tags.year = \"2001\"\ntags.date = \"2001-05-01\"\n"),
+    );
+    let e = format!("{:#}", Manifest::load(dir.path()).unwrap_err());
+    assert!(
+        e.contains("year and date being two names of one tag"),
+        "{e}"
+    );
+    assert!(!e.contains("case") && !e.contains("listing both"), "{e}");
+    write(
+        dir.path(),
+        &format!("{song}tags.title = \"\"\ntags.TITLE = \"Upper\"\n"),
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].tags, [("TITLE".into(), vec!["Upper".into()])]);
+}
+
+#[test]
+fn a_tag_set_is_written_under_its_song_list_name_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![yt("aaaaaaaaaaa")],
+        album: None,
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: yt("aaaaaaaaaaa"),
+        tags: vec![
+            ("TITLE".into(), vec!["Upper".into()]),
+            ("AlbumArtist".into(), vec!["Marlo Venn".into()]),
+            ("MOOD".into(), vec!["calm".into()]),
+        ],
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    for line in [
+        "tags.title = \"Upper\"\n",
+        "tags.album_artist = \"Marlo Venn\"\n",
+        "tags.mood = \"calm\"\n",
+    ] {
+        assert_eq!(t.matches(line).count(), 1, "{line}: {t}");
+    }
+    assert!(
+        !t.contains("tags.TITLE") && !t.contains("tags.title = \"\""),
+        "{t}"
+    );
+    assert!(!t.contains("tags.album_artist = \"\""), "{t}");
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: yt("aaaaaaaaaaa"),
+        tags: vec![("Title".into(), Vec::new())],
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    assert_eq!(t.matches("tags.title = \"\"\n").count(), 1, "{t}");
+}
+
+#[test]
+fn a_tag_written_under_another_spelling_gains_no_empty_twin() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.TITLE = \"Upper\"\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![yt("bbbbbbbbbbb")],
+        album: None,
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    assert!(t.contains("tags.TITLE = \"Upper\"\n"), "{t}");
+    assert_eq!(
+        t.matches("tags.title = \"\"\n").count(),
+        1,
+        "the new song's: {t}"
+    );
+}
+
+#[test]
 fn a_bad_key_is_refused_rather_than_dropping_its_song() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "[[song]]\nsources = [\"youtube:short\"]\n");
@@ -1444,4 +1548,122 @@ fn a_list_removed_while_muman_runs_is_not_written_again() {
         "{error:#}"
     );
     assert!(!dir.path().join(MANIFEST).exists());
+}
+
+#[test]
+fn a_language_no_iso_639_table_names_is_left_out_of_a_list_and_refused_anew() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.language = \"xx\"\n\
+         tags.genre = \"Folk\"\n\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n\
+         tags.language = \"ja\"\n",
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    let tag = |name: &str, value: &str| vec![(name.to_string(), vec![value.to_string()])];
+    assert_eq!(m.songs[0].tags, tag("genre", "Folk"));
+    assert_eq!(m.songs[1].tags, tag("language", "jpn"));
+    assert_eq!(m.left_out.len(), 1, "{:?}", m.left_out);
+    assert!(m.left_out[0].contains("\"xx\""), "{:?}", m.left_out);
+
+    let again = Edit::Tag {
+        key: yt("bbbbbbbbbbb"),
+        tags: tag("language", "zz"),
+    };
+    let e = m.trial(&[again]).unwrap_err();
+    assert!(format!("{e:#}").contains("\"zz\""), "{e:#}");
+    let other = Edit::Tag {
+        key: yt("bbbbbbbbbbb"),
+        tags: tag("genre", "Folk"),
+    };
+    m.trial(&[other]).unwrap();
+}
+
+#[test]
+fn a_file_moved_is_followed_alike_in_the_file_and_in_memory_wherever_a_key_names_it() {
+    let manual = |rel: &str| SourceKey::Manual(rel.into());
+    let body = "[[album]]\nsource = \"manual:in/a.flac\"\n\n\
+         [[song]]\nsources = [\"manual:in/a.flac\", \"manual:in/a.lrc\"]\n\
+         album = \"manual:in/a.flac\"\ntrack = 1\naudio = \"manual:in/a.flac\"\n\
+         cover = \"manual:in/a.flac\"\nlyrics = \"manual:in/a.lrc\"\n\
+         held.\"manual:in/a.flac\" = { audio = \"0123456789abcdef\" }\n\n\
+         [[removed]]\nnote = \"Lantern Weather\"\nsources = [\"manual:in/b.flac\"]\n\
+         trashed = [\"manual:in/b.flac\", \"manual:in/b.lrc\"]\n\
+         held.\"manual:in/b.flac\" = { audio = \"fedcba9876543210\" }\n";
+    let moved: BTreeMap<SourceKey, SourceKey> = ["a.flac", "a.lrc", "b.flac", "b.lrc"]
+        .into_iter()
+        .map(|f| (manual(&format!("in/{f}")), manual(&format!("back/{f}"))))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), body);
+    let mut in_memory = Manifest::load(dir.path()).unwrap();
+    in_memory.rekey(&moved);
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        moved_in(&text(dir.path()), &moved),
+    )
+    .unwrap();
+    assert!(
+        !text(dir.path()).contains("manual:in/"),
+        "{}",
+        text(dir.path())
+    );
+    let in_file = Manifest::load(dir.path()).unwrap();
+    assert_eq!(in_file.songs, in_memory.songs);
+    assert_eq!(in_file.albums, in_memory.albums);
+    assert_eq!(in_file.removed, in_memory.removed);
+    assert_eq!(
+        in_memory.removed[0].trashed,
+        [manual("back/b.flac"), manual("back/b.lrc")]
+    );
+}
+
+#[test]
+fn a_trashed_sidecar_follows_the_song_file_it_went_to_the_trash_beside() {
+    let manual = |rel: &str| SourceKey::Manual(rel.into());
+    let body = "[[removed]]\nnote = \"Lantern Weather\"\nsources = [\"manual:in/01.flac\"]\n\
+         trashed = [\"manual:in/01.flac\", \"manual:in/01.en.LRC\", \"manual:in/cover.jpg\", \
+         \"manual:in/02.lrc\"]\n\n\
+         [[removed]]\nnote = \"Copper Moth\"\n\
+         sources = [\"manual:two/a.flac\", \"manual:two/b.flac\"]\n\
+         trashed = [\"manual:two/a.flac\", \"manual:two/b.flac\", \"manual:two/folder.png\", \
+         \"manual:two/b.lrc\"]\n";
+    let moved: BTreeMap<SourceKey, SourceKey> = [
+        (manual("in/01.flac"), manual("back/Lantern.flac")),
+        (manual("two/a.flac"), manual("else/a.flac")),
+    ]
+    .into_iter()
+    .collect();
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), body);
+    let mut in_memory = Manifest::load(dir.path()).unwrap();
+    in_memory.rekey(&moved);
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        moved_in(&text(dir.path()), &moved),
+    )
+    .unwrap();
+    let in_file = Manifest::load(dir.path()).unwrap();
+    assert_eq!(in_file.removed, in_memory.removed);
+    assert_eq!(
+        in_memory.removed[0].trashed,
+        [
+            manual("back/Lantern.flac"),
+            manual("back/Lantern.en.LRC"),
+            manual("back/cover.jpg"),
+            manual("in/02.lrc"),
+        ],
+        "named as its song file, renamed with it; the folder's picture by its name; \
+         one named as no song file of it stays"
+    );
+    assert_eq!(
+        in_memory.removed[1].trashed,
+        [
+            manual("else/a.flac"),
+            manual("two/b.flac"),
+            manual("two/folder.png"),
+            manual("two/b.lrc"),
+        ],
+        "a song file still in the folder keeps its picture and its own .lrc there"
+    );
 }

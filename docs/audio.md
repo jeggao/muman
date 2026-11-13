@@ -108,8 +108,10 @@ tags [agree on one](metadata.md#tags); a single, named for its title,
 is an album of its own. A song whose file stays as it was made, as one
 `sync` leaves as built until `--accept` (see
 [the guide](guide.md#a-source-that-changes)), counts in its album's
-loudness as that file's audio measured, so its album's songs keep one
-album gain.
+loudness as that file's audio measured, so its album's other songs are
+not written again for it. That file keeps the album gain it was written
+with until it is written again, so a song that joins its album meanwhile
+may carry another.
 
 `[loudness] mode` says where the gain goes:
 
@@ -161,7 +163,8 @@ full. Later syncs measure only new sources.
 `[library] max_size` caps what the files muman writes may take, as
 `"32 GiB"` for a card. Each `sync` fits the library under it: a song
 that does not fit at its best is written at a lower bitrate of `[audio]
-lossy`, never below `[audio] min_bitrate`.
+lossy`, never below `[audio] min_bitrate`, nor below the least its
+encoder writes, which Opus sets far lower than MP3 or Vorbis.
 
 muman lowers first the songs that lose the least audible quality for
 each byte saved. Lossless songs go first, since an encoder at a high
@@ -183,11 +186,14 @@ fits by a few bytes.
 That exactness costs time:
 
 - Adding a song can lower others, and removing one or raising the limit
-  raises them again.
+  raises them again, though a higher limit may give one song's room to
+  another that loses more without it.
 - muman renders a song to learn exactly what it takes before it counts
-  toward the limit. It keeps what it learns in its state, so a sync
-  that changes nothing renders nothing, and a song rendered to be
-  measured moves into the library rather than being rendered twice.
+  toward the limit, and a lowered song one step higher too, to learn
+  whether that fits, unless that step copies its source as it is. It
+  keeps what it learns in its state, so a sync that changes nothing
+  renders nothing, and a song rendered to be measured moves into the
+  library rather than being rendered twice.
 - A song lowered into a codec that holds fewer of its channels, as 5.1
   into MP3, is mixed, and levelled on that mix as any mixed song is,
   with its album pooled on it. muman measures that mix for each such
@@ -200,10 +206,14 @@ copied to: `"32 KiB"` on a FAT32 card counts every small `.lrc` as 32
 KiB, as the card does.
 
 When even the lowest bitrates cannot fit, `sync` says how much room the
-library needs and leaves songs out, the last listed first, until the
-rest fit. muman removes their files, and the run exits with code 4.
+library needs and whether `min_bitrate` or the codec stops it, and
+leaves songs out, the last listed first, until the rest fit. muman
+removes their files, and the run exits with code 4.
 `status` shows each lowered song's format and why, and what the library
-would take; `info` shows what it takes against `max_size`.
+would take; `info` shows what it takes against `max_size`. `check`,
+`info` and `remove` fit the songs as the next sync does, from the sizes
+earlier runs measured, and measure nothing: a size not measured yet is
+estimated, and they say so, as the sync renders that song first.
 
 A song you changed since muman wrote it counts as it is and is never
 encoded again, unless `sync --force` writes it again, which fits it as

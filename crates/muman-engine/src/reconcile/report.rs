@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 
@@ -39,10 +38,21 @@ pub(super) fn left_out<W: Write>(
         .map(|n| name_of(&manifest.songs[*n], None, &state.facts))
         .collect();
     let more = fitted.left_out.len().saturating_sub(NAMED);
+    let audio = &manifest.settings.audio;
+    let remedy = match (audio.min_kbps, crate::fit::lowest(audio.lossy)) {
+        (Some(min), Some(least)) if min > least => {
+            "raise [library] max_size or lower [audio] min_bitrate".to_string()
+        }
+        (_, Some(least)) => format!(
+            "raise [library] max_size; {} goes no lower than {least} kbit/s",
+            audio.lossy.label()
+        ),
+        (_, None) => "raise [library] max_size".to_string(),
+    };
     crate::ui::error(
         out,
         &format!(
-            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} (raise [library] max_size or lower [audio] min_bitrate)",
+            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} ({remedy})",
             crate::ui::bytes(fitted.max),
             crate::ui::bytes(fitted.floor.unwrap_or(0)),
             names.join(", "),
@@ -165,6 +175,10 @@ pub(super) struct Shown<'a> {
     pub(super) state: &'a State,
     /// What a sync would fetch before it plans.
     pub(super) to_fetch: &'a BTreeSet<SourceKey>,
+    /// What following the moved files found, and the files no song names
+    /// that are none of them ([`super::Ground`]).
+    pub(super) moves: &'a super::Moves,
+    pub(super) unlisted: &'a super::Unlisted,
 }
 
 /// Say each move `decided` makes of a song `showing` matches.
@@ -175,17 +189,20 @@ pub(super) fn say_moves<W: Write>(
     out: &mut W,
 ) -> Result<()> {
     for ((n, r), d) in planned.iter().zip(decided) {
-        if let Doing::Move { from, .. } = d
+        if let Doing::Move { from, beside, .. } = d
             && showing.matches(*n)
         {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Would move: {} → {}",
-                    crate::relpath::show(from),
-                    crate::relpath::show(&path_of(r))
-                ),
-            )?;
+            let moving = crate::library::Relocation::new(from.clone(), path_of(r), beside.clone());
+            for (a, b) in moving.said() {
+                crate::ui::info(
+                    out,
+                    &format!(
+                        "Would move: {} → {}",
+                        crate::relpath::show(a),
+                        crate::relpath::show(b)
+                    ),
+                )?;
+            }
         }
     }
     Ok(())
@@ -250,7 +267,15 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
     match d {
         Doing::Keep => (Fate::Kept, "up to date".to_string()),
         Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),
-        Doing::Move { retag: true, .. } => (Fate::Moved, "moved, changes: tags".to_string()),
+        Doing::Move { retag: true, .. } => match before.map(|p| changes(p, plan)) {
+            Some(what) if !what.is_empty() => {
+                (Fate::Moved, format!("moved, changes: {}", what.join(", ")))
+            }
+            _ => (
+                Fate::Moved,
+                "moved, a file beside it written anew".to_string(),
+            ),
+        },
         Doing::Guard { .. } => (
             Fate::Alone,
             "left alone, changed since muman wrote it".to_string(),
@@ -280,6 +305,10 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
             "not written, its source damaged since it was built".to_string(),
         ),
         Doing::Retag | Doing::Write => match before {
+            // Its file as it would be written, a file beside it is gone.
+            Some(p) if p == plan && *d == Doing::Retag => {
+                (Fate::Again, "a file beside it written again".to_string())
+            }
             Some(p) if p == plan => (Fate::Again, "written again".to_string()),
             Some(p) => (
                 Fate::Changed,
@@ -342,7 +371,6 @@ pub(super) fn status<W: Write>(
     store: &Store,
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
-    settling: Duration,
     out: &mut W,
 ) -> Result<()> {
     let Shown {
@@ -353,6 +381,8 @@ pub(super) fn status<W: Write>(
         old,
         state,
         to_fetch,
+        moves,
+        unlisted,
         ..
     } = shown;
     say_moves(planned, &intent.decided, showing, out)?;
@@ -417,19 +447,26 @@ pub(super) fn status<W: Write>(
     if showing.matched.is_some() {
         return Ok(());
     }
-    for (path, fate) in &intent.pruned {
+    for (path, fate) in intent.removals() {
+        let leaving = |file: &PathBuf| {
+            format!(
+                "Would leave in place, changed since muman wrote it: {}",
+                crate::relpath::show(file)
+            )
+        };
         match fate {
-            Pruned::Removed(_) => crate::ui::warning(
-                out,
-                &format!("Would remove: {}", crate::relpath::show(path)),
-            )?,
-            Pruned::LeftChanged => crate::ui::warning(
-                out,
-                &format!(
-                    "Would leave in place, changed since muman wrote it: {}",
-                    crate::relpath::show(path)
-                ),
-            )?,
+            Pruned::Removed { gone, left } => {
+                for file in gone {
+                    crate::ui::warning(
+                        out,
+                        &format!("Would remove: {}", crate::relpath::show(file)),
+                    )?;
+                }
+                for file in left {
+                    crate::ui::warning(out, &leaving(file))?;
+                }
+            }
+            Pruned::LeftChanged => crate::ui::warning(out, &leaving(path))?,
             Pruned::KeptForFailed => {}
         }
     }
@@ -443,9 +480,7 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    let mut found = super::Unlisted::of(manifest, state, store, settling);
-    let followed = super::moved(manifest, state, store, &mut found, |_| None);
-    for key in super::deleted(manifest, store, &followed, &found) {
+    for key in super::deleted(manifest, store, moves, unlisted) {
         crate::ui::info(
             out,
             &format!(
@@ -458,9 +493,9 @@ pub(super) fn status<W: Write>(
         ready: unlisted,
         settling,
         ..
-    } = found;
+    } = unlisted;
     for key in unlisted {
-        let line = if state.listed.contains(&key) {
+        let line = if state.listed.contains(key) {
             format!("Taken out of the song list by hand, kept out by the next sync: {key}")
         } else {
             format!("Not listed yet, added by the next sync: {key}")
@@ -472,15 +507,15 @@ pub(super) fn status<W: Write>(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                SourceKey::Manual(path.into())
+                SourceKey::Manual(path.clone().into())
             ),
         )?;
     }
     // As `purge` deletes them: a removed song's sources stay for `restore`.
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    for path in store.purgeable(dirs, &known) {
-        crate::ui::info(out, &format!("Unused: {}", path.display()))?;
+    for unused in store.purgeable(dirs, &known, &state.copies) {
+        crate::ui::info(out, &format!("Unused: {}", unused.display()))?;
     }
     Ok(())
 }

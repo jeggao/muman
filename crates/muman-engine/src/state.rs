@@ -21,6 +21,7 @@
 //! | `song_failures` | Yes: `check` names a song the last sync could not write only after the next sync fails it again |
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
 //! | `trusted` | Yes: the song list's commands and servers are asked about again (`trust`) |
+//! | `copies` | Yes: a copy `add` made is then the user's, and no purge deletes it |
 //!
 //! Each file beside an output, as its lyrics, is recorded as the output
 //! is, by its size, time and digest ([`Sidecar`]), so one changed since is
@@ -255,6 +256,12 @@ pub struct State {
     /// Every audio file written, by its path in the library.
     #[serde(default, with = "crate::relpath::portable_keys")]
     pub outputs: BTreeMap<PathBuf, Written>,
+    /// The outputs of each library folder muman was pointed away from, by
+    /// that folder, as they were when it left: pointed back at one, a file
+    /// there as muman wrote it then is muman's again
+    /// ([`crate::reconcile::adopt`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub left: BTreeMap<PathBuf, BTreeMap<PathBuf, Written>>,
     /// Uploads a release was kept in place of, so listing them again
     /// fetches nothing.
     #[serde(default, deserialize_with = "json::lenient_map")]
@@ -329,10 +336,26 @@ pub struct State {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub trusted: BTreeMap<String, String>,
+    /// Each copy `add` made in the manual folder's `added/`, by its key,
+    /// with the digest of its bytes as copied: a purge deletes it only
+    /// while it holds them ([`crate::store::Store::purgeable`]).
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub copies: BTreeMap<SourceKey, String>,
     /// Sources whose failures this process cleared, for a merge to clear
     /// on disk.
     #[serde(skip)]
     pub(crate) cleared: BTreeSet<SourceKey>,
+    /// Each library file a stopped run left between the two renames of a
+    /// move of case alone, by the path it goes to, when the library is
+    /// read as found and nothing in it changed: the next sync finishes the
+    /// move before it judges any file, so every command that says what it
+    /// does counts the file there ([`crate::library::halfway`]).
+    #[serde(skip)]
+    pub halfway: BTreeSet<PathBuf>,
     /// Each source [`State::rebase`] named anew this process, by its
     /// facts before and after.
     #[serde(skip)]
@@ -818,6 +841,18 @@ pub struct Caches {
 }
 
 impl Caches {
+    /// These but what they hold of the sources `gone`.
+    #[must_use]
+    pub fn without(mut self, gone: &BTreeSet<SourceKey>) -> Self {
+        self.facts.retain(|k, _| !gone.contains(k));
+        self.failures.retain(|k, _| !gone.contains(k));
+        self.cleared.retain(|k| !gone.contains(k));
+        self.alignments
+            .retain(|a| !gone.contains(&a.a) && !gone.contains(&a.b));
+        self.mixes.retain(|m| !gone.contains(&m.source));
+        self
+    }
+
     /// These as they are once `delta`, a [`State::since`] of them, is
     /// kept.
     pub fn absorb(&mut self, delta: &Self) {
@@ -931,6 +966,24 @@ impl State {
         state.save(home)
     }
 
+    /// Record each copy of `made` in [`Self::copies`] and forget each of
+    /// `gone`, under the folder's lock, every other row left as the
+    /// store holds it.
+    pub fn keep_copies(
+        home: &Path,
+        made: &BTreeMap<SourceKey, String>,
+        gone: &BTreeSet<SourceKey>,
+    ) -> Result<()> {
+        if made.is_empty() && gone.is_empty() {
+            return Ok(());
+        }
+        let _lock = atomic::Lock::folder(home)?;
+        let mut state = Self::load(home)?;
+        state.copies.retain(|k, _| !gone.contains(k));
+        state.copies.extend(made.clone());
+        state.save(home)
+    }
+
     /// Name each key `renames` names anew, wherever this names it: a
     /// source an extractor's name keyed, renamed by its site.
     pub fn rekey(&mut self, renames: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {
@@ -967,6 +1020,7 @@ impl State {
         now.rebased = std::mem::take(&mut self.rebased);
         now.respelled = std::mem::take(&mut self.respelled);
         now.held = std::mem::take(&mut self.held);
+        now.halfway = std::mem::take(&mut self.halfway);
         for (old, new) in renames {
             now.respelled.insert(new.clone(), old.clone());
         }

@@ -7,9 +7,11 @@
 //! own. Each is read into one canonical tag by Unicode's rules (UTS #35,
 //! through ICU4X), so `ger`, `deu` and `de` are one language, as are `iw`
 //! and `he`, and `tl` is `fil`. `ID3v2` and the `LANGUAGE` tag take ISO
-//! 639-2's terminologic code instead, [`Lang::iso639_2`], read from
+//! 639-2's terminologic code instead, [`Lang::iso639`], read from
 //! isolang's ISO 639-3 table: for each language with a two-letter code,
-//! its ISO 639-3 code is ISO 639-2's terminologic one.
+//! its ISO 639-3 code is ISO 639-2's terminologic one. A tag well formed
+//! but of a language no table names, as `xx`, has no such code, so the
+//! `LANGUAGE` tag refuses it.
 //!
 //! A preference matches a language as RFC 4647's lookup does, refined by
 //! CLDR's likely subtags ([`Lang::fit`]). A bare language takes any of its
@@ -89,15 +91,25 @@ impl Lang {
         (!none.contains(&id.language.as_str())).then_some(Self(id))
     }
 
-    /// Its ISO 639-2 code, as `ID3v2` and the `LANGUAGE` tag hold it: the
-    /// terminologic one where a language has two, `deu` rather than `ger`.
-    /// A language ISO 639-1 has no code for keeps its own three letters.
+    /// Its three-letter ISO 639 code, as the `LANGUAGE` tag holds it: ISO
+    /// 639-2's terminologic one where a language has two, `deu` rather
+    /// than `ger`, or ISO 639-3's for one ISO 639-2 has none of its own
+    /// for, as `yue`; none for a code no ISO 639 table names, as `xx`.
     #[must_use]
-    pub fn iso639_2(&self) -> String {
+    pub fn iso639(&self) -> Option<String> {
         let code = self.0.language.as_str();
         isolang::Language::from_639_1(code)
-            .map_or(code, |l| l.to_639_3())
-            .to_string()
+            .or_else(|| isolang::Language::from_639_3(code))
+            .map(|l| l.to_639_3().to_string())
+    }
+
+    /// [`Lang::iso639`], or its own code where no table names it, as an
+    /// `ID3v2` frame's language, which falls back on `XXX` for one not of
+    /// three letters.
+    #[must_use]
+    pub fn iso639_2(&self) -> String {
+        self.iso639()
+            .unwrap_or_else(|| self.0.language.as_str().to_string())
     }
 
     /// The script it is written in: the one it names, else the one its
@@ -281,7 +293,12 @@ mod tests {
             ("fil", "fil"),
             ("yue", "yue"),
         ] {
+            assert_eq!(lang(text).iso639(), Some(code.to_string()), "{text}");
             assert_eq!(lang(text).iso639_2(), code, "{text}");
+        }
+        for (text, own) in [("xx", "xx"), ("zz-ZZ", "zz"), ("qaa", "qaa")] {
+            assert_eq!(lang(text).iso639(), None, "{text}");
+            assert_eq!(lang(text).iso639_2(), own, "{text}");
         }
     }
 

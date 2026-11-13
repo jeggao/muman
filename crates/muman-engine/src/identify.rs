@@ -9,6 +9,21 @@
 //! elsewhere it is kept as a song of its own with a warning rather than
 //! joined unasked, since a song made of two recordings writes only one.
 //!
+//! A print counts words that nearly agree, and audio that barely changes,
+//! as a drone or noise under a held tone, leaves few words that sound and
+//! those agreeing by chance: two such recordings scored 62% alike over
+//! 15 s. So a source that is, or may be, a listed song's recording by its
+//! print has its audio compared with each of the song's sources, as the
+//! song's sources are told apart ([`recordings::one`]), and the
+//! comparisons are kept for the sync after. It is the song's recording
+//! where it aligns with any of them, as a chain of aligning sources is one
+//! recording, so the verdict does not hang on which copies the song
+//! gathered first. Audio that aligns with none joins nothing unasked: it
+//! is asked about on a terminal, and kept apart without one or with `-y`,
+//! so a song never holds a source it would call another recording. Audio
+//! too short to compare, or that could not be decoded, is matched by its
+//! print alone.
+//!
 //! The question shows the new source beside the listed song it may be:
 //! the name, album, length and audio of each, and how alike they sound.
 //! A difference in length often settles it, as a live take or a video
@@ -17,7 +32,7 @@
 //! without a terminal, and the answers are named by what they do.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use crate::ui::Prompter;
@@ -27,7 +42,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::acquire::Proposal;
 use crate::dirs::Dirs;
 use crate::facts::Facts;
-use crate::fingerprint::{Indexed, Match, Verdict};
+use crate::fingerprint::{Indexed, Match, Print, Verdict};
 use crate::manifest::{Edit, Manifest};
 use crate::parallel;
 use crate::reconcile;
@@ -36,6 +51,7 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::Store;
 use crate::tags::Field;
+use crate::vet::recordings;
 
 /// What to do with a source that may be a listed song.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,8 +107,8 @@ pub fn identify<R: Runner, W: Write>(
     let listed = manifest.keys();
     let mut state = State::load(&dirs.home)?;
     let mut base = state.caches();
-    if mode != Mode::New {
-        let store = Store::scan(dirs)?;
+    let store = (mode != Mode::New).then(|| Store::scan(dirs)).transpose()?;
+    if let Some(store) = &store {
         let wanted: BTreeSet<SourceKey> = listed
             .iter()
             .cloned()
@@ -111,7 +127,7 @@ pub fn identify<R: Runner, W: Write>(
         };
         reconcile::measure(
             runner,
-            &store,
+            store,
             &wanted,
             &mut state,
             temp.path(),
@@ -119,7 +135,10 @@ pub fn identify<R: Runner, W: Write>(
             out,
         )?;
     }
-    let print = |k: &SourceKey| state.facts.get(k).and_then(|f| f.print.as_ref());
+    let prints: BTreeMap<SourceKey, Print> = (state.facts.iter())
+        .filter_map(|(k, f)| Some((k.clone(), f.print.clone()?)))
+        .collect();
+    let print = |k: &SourceKey| prints.get(k);
     let mut known: Vec<Known> = manifest
         .songs
         .iter()
@@ -186,10 +205,46 @@ pub fn identify<R: Runner, W: Write>(
             }
         }
         let best = ranked.first().copied();
+        let ours = p.sources.iter().find(|k| print(k).is_some());
+        // A match the song's comparison of its sources would part again
+        // joins nothing unasked.
+        let refuted = match (best, ours, &store) {
+            (Some((n, m)), Some(ours), Some(store)) if m.verdict() != Verdict::Different => {
+                let one = one_recording(runner, store, &mut state, ours, &known[n].keys, out)?;
+                state.keep_since(&dirs.home, &mut base)?;
+                one == Some(false)
+            }
+            _ => false,
+        };
         let join = match best {
             Some((n, m)) => {
                 let song = &known[n].name;
                 match m.verdict() {
+                    Verdict::Same | Verdict::Unsure if refuted => {
+                        if let Some(ask) = prompter.as_deref_mut().filter(|_| mode != Mode::Yes) {
+                            let theirs = matched[n].as_ref().and_then(|k| state.facts.get(k));
+                            let new = ours.and_then(|k| state.facts.get(k));
+                            for line in card(&p.label, new, &known[n], theirs, &m) {
+                                crate::ui::line(out, &line)?;
+                            }
+                            crate::ui::line(out, UNALIGNED)?;
+                            let items = ["Its own song".to_string(), format!("Add to {song}")];
+                            let question = format!("Where does {} go?", p.label);
+                            (ask.select(&question, &items)? == Some(1)).then_some(n)
+                        } else {
+                            crate::ui::warning(
+                                out,
+                                &format!(
+                                    "{} sounds like {song} ({}), but its audio does not align with \
+                                     that song's; kept as a song of its own. To merge them, move its \
+                                     sources into that song's",
+                                    p.label,
+                                    m.describe()
+                                ),
+                            )?;
+                            None
+                        }
+                    }
                     Verdict::Same => {
                         crate::ui::info(
                             out,
@@ -214,7 +269,6 @@ pub fn identify<R: Runner, W: Write>(
                     }
                     Verdict::Unsure => {
                         if let Some(ask) = prompter.as_deref_mut() {
-                            let ours = p.sources.iter().find(|k| print(k).is_some());
                             let theirs = matched[n].as_ref().and_then(|k| state.facts.get(k));
                             let new = ours.and_then(|k| state.facts.get(k));
                             for line in card(&p.label, new, &known[n], theirs, &m) {
@@ -267,6 +321,59 @@ pub fn identify<R: Runner, W: Write>(
         }
     }
     Ok(edits)
+}
+
+/// What the card adds for a source whose audio does not align with the
+/// song's.
+const UNALIGNED: &str = "  Its audio does not align with the song's: the song would hold it as \
+                         another recording";
+
+/// Whether `ours` is one recording with any of `theirs`, a song's
+/// sources, as the song holding it would tell its sources apart
+/// ([`recordings::one`]): its audio compared with each as the sync after
+/// compares it, and the comparisons kept for it. Comparing with every
+/// source, not the one its print matched best, makes the verdict the same
+/// whichever copies the song gathered first; it is `None` where none can
+/// be compared.
+fn one_recording<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    state: &mut State,
+    ours: &SourceKey,
+    theirs: &[SourceKey],
+    out: &mut W,
+) -> Result<Option<bool>> {
+    let together = crate::manifest::Song {
+        sources: std::iter::once(ours).chain(theirs).cloned().collect(),
+        ..crate::manifest::Song::default()
+    };
+    reconcile::compare(runner, store, std::slice::from_ref(&together), state, out)?;
+    let audible = |key| {
+        let facts = state.facts.get(key);
+        recordings::Audible {
+            key,
+            ms: None,
+            digest: facts.and_then(|f| f.audio.as_ref()?.digest.as_deref()),
+            first: false,
+            whole: facts.is_some_and(|f| f.damage().is_none()),
+        }
+    };
+    let aligned = |a: &SourceKey, b: &SourceKey| {
+        let revs = (
+            state.facts.get(a)?.audio_rev(),
+            state.facts.get(b)?.audio_rev(),
+        );
+        state.alignment(&revs)
+    };
+    let verdicts: Vec<Option<bool>> = theirs
+        .iter()
+        .filter(|key| *key != ours)
+        .map(|key| recordings::one(&audible(ours), &audible(key), aligned))
+        .collect();
+    Ok([Some(true), Some(false)]
+        .into_iter()
+        .find(|verdict| verdicts.contains(verdict))
+        .flatten())
 }
 
 /// The album `song` is on as the card names it, with its place there.

@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/5";
+pub const METHOD: &str = "integrity/6";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -463,9 +463,11 @@ mod tests {
     /// [`METHOD`]. Version 5 measures as 4 did, the method it names aside,
     /// from probes that take the length of every format not known to state
     /// one for guessed, which 4 took for stated unless it was known not to.
+    /// Version 6 measures as 5 did, from probes that take the length a
+    /// WAVE, CAF or ASF header states where ffmpeg estimated one.
     const WRITTEN: (&str, &str) = (
-        "integrity/5",
-        "6ee01e78f50bc7fefc90da25ad48e1930b0d2086fcfc265c4bd3bf6002d55184",
+        "integrity/6",
+        "a96d2411c3a392e02d46d20d6a914e2206a8726aface112bddbc5bec7dcb1610",
     );
 
     #[test]

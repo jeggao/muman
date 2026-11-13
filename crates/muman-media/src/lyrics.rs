@@ -35,6 +35,31 @@
 //! file is refused as no lyrics only when it reads as other data
 //! ([`is_text`]).
 //!
+//! A file names no encoding, so one in a legacy encoding is told by its
+//! bytes. chardetng guesses as a browser guesses a page, by how often
+//! each pair of letters is written in each language, and a few short
+//! lines leave that close: two lines of kana and kanji in Shift-JIS read
+//! as Windows-1251 by a few points of thousands. So its guess is weighed
+//! with each family's, its guess for a site of that family's country
+//! ([`FAMILIES`]), by how plausibly each reads the bytes as text
+//! ([`oddities`]): a reading that decodes them whole with the fewest
+//! oddities is taken. Mojibake is no text: Shift-JIS read as
+//! Windows-1251 puts a `‚` between every two letters, and read as GBK
+//! makes kana Han characters no one writes. Of readings as plausible,
+//! the family an `[la:]` tag names comes first, then a CJK encoding's,
+//! as bytes that pair into its common characters say more than any
+//! reading of one byte a character can, which reads every byte as some
+//! letter; then chardetng's own guess. Where neither the tag nor
+//! chardetng chose the reading taken and another as plausible reads the
+//! bytes otherwise, it is in doubt ([`Doubt`]), which a sync names: a
+//! line of two or three CJK characters can be Chinese or Korean alike.
+//! Run on short invented lines in each family, two lines of Shift-JIS
+//! that chardetng read as Windows-1251, and one character of GBK or
+//! three Hangul syllables it read as Latin or Cyrillic, read as written;
+//! only readings alike letter for letter, as KOI8-R and KOI8-U, and a
+//! Turkish line Windows-1252 reads as other Latin letters, stay as
+//! chardetng guessed, the last settled by `[la:tr]`.
+//!
 //! [`WRITING`] names how a song's lyrics are read from their source,
 //! moved and written: [`decode`], [`shift_lrc`], [`until`], ffmpeg's
 //! [`LRC_ARGS`](crate::facts::LRC_ARGS) for a stream, and
@@ -45,7 +70,11 @@
 
 use crate::lang::{Fit, Lang};
 use crate::units;
-use std::fmt::Write as _;
+use std::borrow::Cow;
+use std::fmt::{self, Write as _};
+
+use icu_properties::CodePointMapData;
+use icu_properties::props::{GeneralCategory, Script};
 
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +82,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 5;
+pub const WRITING: u32 = 6;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -771,35 +800,337 @@ pub fn sung(text: &str) -> String {
     out
 }
 
+/// Whether lyrics or a subtitle sing any word ([`sung`]): what makes them
+/// lyrics at all, wherever they come from. ID tags, cues and credits
+/// alone sing none.
+#[must_use]
+pub fn sings(text: &str) -> bool {
+    !sung(text).trim().is_empty()
+}
+
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
-/// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
-/// guessed as a browser guesses a page that names none; then read as
-/// [`as_read`] reads any lyrics.
+/// encoding, as GBK, Shift-JIS or Windows-1252, that reads its bytes as
+/// text most plausibly (see the module docs); then read as [`as_read`]
+/// reads any lyrics.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
-    as_read(&decoded(bytes))
+    decode_doubting(bytes).0
+}
+
+/// [`decode`]'s text, and the doubt left where two legacy encodings read
+/// the bytes equally well.
+#[must_use]
+pub fn decode_doubting(bytes: &[u8]) -> (String, Option<Doubt>) {
+    let (text, doubt) = decoded(bytes);
+    (as_read(&text), doubt)
 }
 
 /// The lyrics of a file that reads as text ([`is_text`]), as [`decode`]
 /// reads them; none for a file of other data.
 #[must_use]
 pub fn read(bytes: &[u8]) -> Option<String> {
-    let text = decoded(bytes);
+    let (text, _) = decoded(bytes);
     is_text(&text).then(|| as_read(&text))
 }
 
-fn decoded(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
-    let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
-        utf16
-    } else if is_utf8(bytes) {
-        encoding_rs::UTF_8
-    } else {
-        let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
-        detector.feed(bytes, true);
-        detector.guess(None, chardetng::Utf8Detection::Deny)
+/// Two legacy encodings that read a file's bytes as text equally well,
+/// the one taken neither chardetng's guess nor one its `[la:]` tag names:
+/// the one taken, and the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Doubt {
+    pub taken: &'static encoding_rs::Encoding,
+    pub other: &'static encoding_rs::Encoding,
+}
+
+impl fmt::Display for Doubt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "read as {}, though {} reads them as well; an [la:] line naming their language, \
+             as [la:ja], says which",
+            self.taken.name(),
+            self.other.name()
+        )
+    }
+}
+
+fn decoded(bytes: &[u8]) -> (Cow<'_, str>, Option<Doubt>) {
+    if let Some(utf16) = utf16_unmarked(bytes) {
+        return (utf16.decode(bytes).0, None);
+    }
+    if is_utf8(bytes) {
+        return (encoding_rs::UTF_8.decode(bytes).0, None);
+    }
+    let (encoding, doubt) = legacy(bytes);
+    (encoding.decode(bytes).0, doubt)
+}
+
+/// The top-level domains whose sites chardetng expects a family of
+/// legacy encodings from, one a family that is no Western one: its guess
+/// for each is that family's best reading of the bytes.
+const FAMILIES: [&[u8]; 14] = [
+    b"jp", b"cn", b"tw", b"kr", b"ru", b"gr", b"il", b"sa", b"th", b"tr", b"vn", b"cz", b"pl",
+    b"lt",
+];
+
+/// How much of each reading [`oddities`] counts in: enough lines of any
+/// script to tell text from mojibake, and a bound on a body of megabytes.
+const WEIGHED: usize = 16 * 1024;
+
+/// The legacy encoding `bytes` read as most plausibly: of chardetng's
+/// guess and each family's ([`FAMILIES`]), those that decode them whole,
+/// with the fewest [`oddities`]; among those, the one the file's `[la:]`
+/// tag names a family of, else a CJK one, which decoding few bytes whole
+/// and into common characters says more for than any reading in one byte
+/// a character, chardetng's guess first, then as [`cjk`] orders them;
+/// else chardetng's guess. The one taken is in doubt where another reads
+/// the bytes otherwise and neither the tag nor chardetng's guess chose it.
+fn legacy(bytes: &[u8]) -> (&'static encoding_rs::Encoding, Option<Doubt>) {
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+    detector.feed(bytes, true);
+    let guess = |tld: Option<&[u8]>| detector.guess(tld, chardetng::Utf8Detection::Deny);
+    let named = named_language(bytes)
+        .and_then(|l| family_of(&l))
+        .map(|t| guess(Some(t)));
+    let general = guess(None);
+    let mut candidates: Vec<&'static encoding_rs::Encoding> = Vec::new();
+    let families = FAMILIES.iter().map(|t| guess(Some(t)));
+    for encoding in named.into_iter().chain([general]).chain(families) {
+        if !candidates.contains(&encoding) {
+            candidates.push(encoding);
+        }
+    }
+    let mut read: Vec<(&'static encoding_rs::Encoding, String, usize)> = candidates
+        .into_iter()
+        .filter_map(|e| {
+            let text = e.decode_without_bom_handling_and_without_replacement(bytes)?;
+            let weighed = text
+                .char_indices()
+                .nth(WEIGHED)
+                .map_or(&*text, |(at, _)| &text[..at]);
+            let odd = oddities(weighed, e);
+            Some((e, text.into_owned(), odd))
+        })
+        .collect();
+    let Some(fewest) = read.iter().map(|(_, _, odd)| *odd).min() else {
+        return (general, None);
     };
-    encoding.decode(bytes).0
+    read.retain(|(_, _, odd)| *odd == fewest);
+    read.sort_by_key(|(e, _, _)| {
+        let place = common_of(e).map(|(at, _)| at);
+        (Some(*e) != named, place.is_none(), *e != general, place)
+    });
+    let (taken, text, _) = &read[0];
+    let sure = Some(*taken) == named || *taken == general;
+    let other = (!sure)
+        .then(|| read.iter().find(|(_, t, _)| t != text))
+        .flatten();
+    let doubt = other.map(|(other, _, _)| Doubt { taken, other });
+    (taken, doubt)
+}
+
+/// The language an LRC's `[la:]` tag names, read from its bytes, which
+/// write the tag in ASCII whatever their encoding.
+fn named_language(bytes: &[u8]) -> Option<Lang> {
+    bytes.split(|b| *b == b'\n').find_map(|line| {
+        let line = std::str::from_utf8(line.trim_ascii()).ok()?;
+        let inner = line.strip_prefix('[')?.strip_suffix(']')?;
+        let (key, value) = inner.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case("la")
+            .then(|| Lang::parse(value))?
+    })
+}
+
+/// The top-level domain of [`FAMILIES`] whose encodings `lang` is
+/// written in; none for a language of a Western one, chardetng's own
+/// expectation.
+fn family_of(lang: &Lang) -> Option<&'static [u8]> {
+    let tag = lang.to_string();
+    let language = tag.split('-').next()?;
+    let traditional = Lang::parse("zh-Hant").and_then(|t| t.fit(lang)).is_some();
+    Some(match language {
+        "ja" => b"jp",
+        "zh" if traditional => b"tw",
+        "zh" => b"cn",
+        "yue" => b"tw",
+        "ko" => b"kr",
+        "ru" | "uk" | "be" | "bg" | "sr" | "mk" | "kk" | "ky" | "tg" | "mn" | "tt" | "ba" => b"ru",
+        "el" => b"gr",
+        "he" | "yi" => b"il",
+        "ar" | "fa" | "ur" | "ps" => b"sa",
+        "th" => b"th",
+        "tr" | "az" => b"tr",
+        "vi" => b"vn",
+        "cs" | "sk" | "sl" | "hr" | "bs" | "ro" | "sq" => b"cz",
+        "pl" | "hu" => b"pl",
+        "lt" | "lv" | "et" => b"lt",
+        _ => return None,
+    })
+}
+
+/// What a character is to a word of plausible text ([`oddities`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sign {
+    /// A letter of a script, Han, kana and their marks one script, as
+    /// Japanese writes one word in all three; half-width katakana another.
+    Letter(Script),
+    /// ASCII but a letter, a combining mark, a mark of CJK text, or an
+    /// apostrophe or a hyphen: what any word may hold.
+    Plain,
+    /// Punctuation past ASCII that opens or closes a word, as a quote, a
+    /// bracket, a dash or `¿`: what a word holds at its ends.
+    Edge,
+    /// Any other punctuation or symbol past ASCII, as `•`, `¶` or `³`.
+    Symbol,
+    /// A control character, or one no script has: none of a text's.
+    Odd,
+}
+
+fn sign(c: char) -> Sign {
+    if c.is_control() {
+        return Sign::Odd;
+    }
+    if c.is_ascii() {
+        return if c.is_ascii_alphabetic() {
+            Sign::Letter(Script::Latin)
+        } else {
+            Sign::Plain
+        };
+    }
+    if ('\u{FF61}'..='\u{FF9F}').contains(&c) {
+        return Sign::Letter(Script::Katakana);
+    }
+    let plain = matches!(
+        c,
+        '\u{3000}'..='\u{303F}' | '\u{30FB}' | '\u{30FC}' | '\u{FF00}'..='\u{FFEF}'
+            | '’' | 'ʼ' | '·' | '‐' | '‑'
+    );
+    match CodePointMapData::<Script>::new().get(c) {
+        Script::Unknown => Sign::Odd,
+        Script::Hiragana | Script::Katakana | Script::Bopomofo | Script::Han => {
+            Sign::Letter(Script::Han)
+        }
+        Script::Common if !(plain || c.is_alphabetic()) => {
+            let edge = matches!(
+                CodePointMapData::<GeneralCategory>::new().get(c),
+                GeneralCategory::InitialPunctuation
+                    | GeneralCategory::FinalPunctuation
+                    | GeneralCategory::OpenPunctuation
+                    | GeneralCategory::ClosePunctuation
+                    | GeneralCategory::DashPunctuation
+            );
+            if edge || matches!(c, '…' | '¡' | '¿') {
+                Sign::Edge
+            } else {
+                Sign::Symbol
+            }
+        }
+        Script::Common | Script::Inherited => Sign::Plain,
+        script => Sign::Letter(script),
+    }
+}
+
+/// How unlike text `text`, read in `encoding`, reads: a count of what
+/// text rarely holds and the wrong encoding's reading of it often does,
+/// each in a word of letters: a control character or one no script has;
+/// letters changing script, as mojibake's `‚Ü‚ЄЌ` does, or from small to
+/// capital; a mark past ASCII between two letters, a symbol anywhere, or
+/// a second mark in a row, as in `“”‘ä`; and a character outside the
+/// part of a CJK encoding its text is nearly all written in ([`is_rare`]),
+/// as GBK reads Shift-JIS's kana; and Japanese of Han characters
+/// without a kana, which a line of it seldom is.
+fn oddities(text: &str, encoding: &'static encoding_rs::Encoding) -> usize {
+    let words: usize = (text.split_whitespace())
+        .map(|word| word_oddities(word, encoding))
+        .sum();
+    let japanese = [encoding_rs::SHIFT_JIS, encoding_rs::EUC_JP].contains(&encoding);
+    let scripts = CodePointMapData::<Script>::new();
+    let has = |wanted: &[Script]| text.chars().any(|c| wanted.contains(&scripts.get(c)));
+    let kanji_alone =
+        japanese && has(&[Script::Han]) && !has(&[Script::Hiragana, Script::Katakana]);
+    words + usize::from(kanji_alone)
+}
+
+fn word_oddities(word: &str, encoding: &'static encoding_rs::Encoding) -> usize {
+    let signs: Vec<(char, Sign)> = word.chars().map(|c| (c, sign(c))).collect();
+    if !signs.iter().any(|(_, s)| matches!(s, Sign::Letter(_))) {
+        return signs.iter().filter(|(_, s)| *s == Sign::Odd).count();
+    }
+    let mut odd = 0;
+    let mut last: Option<(char, Script)> = None;
+    let (mut marked, mut marks) = (false, 0);
+    for (c, sign) in signs {
+        match sign {
+            Sign::Odd | Sign::Symbol | Sign::Edge => {
+                odd += usize::from(sign != Sign::Edge || marks > 0);
+                marked = last.is_some();
+                marks += 1;
+            }
+            Sign::Plain => marks = 0,
+            Sign::Letter(script) => {
+                if let Some((was, its)) = last {
+                    odd += usize::from(its != script)
+                        + usize::from(marked)
+                        + usize::from(was.is_lowercase() && c.is_uppercase());
+                }
+                odd += usize::from(is_rare(c, encoding));
+                (last, marked, marks) = (Some((c, script)), false, 0);
+            }
+        }
+    }
+    odd
+}
+
+/// Characters by how an encoding writes them: ranges of the first byte,
+/// each with the least second byte.
+type Common = &'static [(u8, u8, u8)];
+
+/// Each CJK encoding with the characters its text is nearly all written
+/// in: its symbols, Latin letters and kana or Hangul, and the Han
+/// characters it orders first as the most often written, GB 2312's,
+/// Big5's and JIS X 0208's first levels. They come by how few those
+/// characters are, the fewest first: of two encodings that read bytes
+/// alike, the one of fewer is the likelier, as text in the other seldom
+/// keeps to its few, while Korean in EUC-KR always reads as GBK's.
+fn cjk() -> [(&'static encoding_rs::Encoding, Common); 5] {
+    use encoding_rs::{BIG5, EUC_JP, EUC_KR, GBK, SHIFT_JIS};
+    [
+        (EUC_KR, &[(0xA1, 0xA3, 0xA1), (0xB0, 0xC8, 0xA1)]),
+        (EUC_JP, &[(0xA1, 0xA5, 0xA1), (0xB0, 0xCF, 0xA1)]),
+        (GBK, &[(0xA1, 0xA3, 0xA1), (0xB0, 0xD7, 0xA1)]),
+        (SHIFT_JIS, &[(0x81, 0x84, 0x40), (0x88, 0x98, 0x40)]),
+        (BIG5, &[(0xA1, 0xA3, 0x40), (0xA4, 0xC6, 0x40)]),
+    ]
+}
+
+/// `encoding`'s place among [`cjk`]'s and the characters its text is
+/// nearly all written in; none for an encoding of one byte a character,
+/// which writes every one alike.
+fn common_of(encoding: &encoding_rs::Encoding) -> Option<(usize, Common)> {
+    (cjk().into_iter().enumerate())
+        .find(|(_, (e, _))| *e == encoding)
+        .map(|(at, (_, common))| (at, common))
+}
+
+/// Whether `encoding` writes `c`, a character past ASCII, outside the part
+/// its text is nearly all written in ([`common_of`]).
+fn is_rare(c: char, encoding: &'static encoding_rs::Encoding) -> bool {
+    let Some((_, common)) = common_of(encoding) else {
+        return false;
+    };
+    let (mut buf, mut utf8) = ([0_u8; 8], [0_u8; 4]);
+    let (result, _, written) = encoding.new_encoder().encode_from_utf8_without_replacement(
+        c.encode_utf8(&mut utf8),
+        &mut buf,
+        true,
+    );
+    let in_common =
+        |&(first, last, least): &(u8, u8, u8)| (first..=last).contains(&buf[0]) && buf[1] >= least;
+    result == encoding_rs::EncoderResult::InputEmpty
+        && !c.is_ascii()
+        && (written != 2 || !common.iter().any(in_common))
 }
 
 /// Lyrics as muman reads them, from a file or a tag alike: CRLF and CR
@@ -1310,6 +1641,102 @@ mod tests {
             assert!(!lossy);
             assert_eq!(decode(&bytes), lrc, "{}", encoding.name());
         }
+    }
+
+    fn guessed(bytes: &[u8]) -> &'static encoding_rs::Encoding {
+        let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+        detector.feed(bytes, true);
+        detector.guess(None, chardetng::Utf8Detection::Deny)
+    }
+
+    #[test]
+    fn short_lyrics_decode_as_text_where_letter_pairs_alone_mislead() {
+        let lrc = "[00:01.00]青い灯台の上で\n[00:04.00]ふたりは歌った\n";
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(lrc);
+        assert_eq!(guessed(&bytes), encoding_rs::WINDOWS_1251, "the case read");
+        assert_eq!(decode_doubting(&bytes), (lrc.to_string(), None));
+        assert_eq!(read(&bytes).as_deref(), Some(lrc));
+    }
+
+    #[test]
+    fn an_la_tag_names_the_family_of_encodings_a_file_is_read_in() {
+        let lrc = "[la:tr]\n[00:01.00]Kağıt ay\n";
+        let (bytes, _, _) = encoding_rs::WINDOWS_1254.encode(lrc);
+        assert_eq!(guessed(&bytes), encoding_rs::WINDOWS_1252, "the case read");
+        assert_eq!(decode_doubting(&bytes), (lrc.to_string(), None));
+        let unnamed = lrc.replace("[la:tr]\n", "");
+        let (bytes, _, _) = encoding_rs::WINDOWS_1254.encode(&unnamed);
+        assert_eq!(
+            decode(&bytes),
+            "[00:01.00]Kaðýt ay\n",
+            "as letter pairs say"
+        );
+        for (tag, family) in [
+            ("ja", "jp"),
+            ("jpn", "jp"),
+            ("zh-TW", "tw"),
+            ("zh-Hant", "tw"),
+            ("zh", "cn"),
+            ("ko", "kr"),
+            ("uk", "ru"),
+            ("tr", "tr"),
+        ] {
+            let lang = Lang::parse(tag).unwrap();
+            assert_eq!(family_of(&lang), Some(family.as_bytes()), "{tag}");
+        }
+        assert_eq!(family_of(&Lang::parse("fr").unwrap()), None);
+        let named = named_language(b"[ar:X]\r\n[LA: ko ]\r\n");
+        assert_eq!(named.map(|l| l.to_string()).as_deref(), Some("ko"));
+    }
+
+    #[test]
+    fn a_cjk_reading_of_a_few_bytes_is_taken_in_doubt_of_another() {
+        let lrc = "[00:01.00]\u{96e8}\n";
+        let (bytes, _, _) = encoding_rs::GBK.encode(lrc);
+        assert_ne!(guessed(&bytes), encoding_rs::GBK, "the case read");
+        let (text, doubt) = decode_doubting(&bytes);
+        assert_eq!(text, lrc);
+        assert_eq!(doubt.map(|d| d.taken), Some(encoding_rs::GBK));
+        let tagged = [b"[la:zh]\n".as_slice(), &bytes].concat();
+        assert_eq!(decode_doubting(&tagged).1, None, "the tag settles it");
+    }
+
+    #[test]
+    fn mojibake_reads_as_odder_than_text() {
+        let lrc = "[00:01.00]青い灯台の上で\n[00:04.00]ふたりは歌った\n";
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(lrc);
+        for wrong in [encoding_rs::WINDOWS_1251, encoding_rs::GBK] {
+            let text = wrong.decode(&bytes).0;
+            assert!(oddities(&text, wrong) > 5, "{text}");
+        }
+        for (text, encoding) in [
+            (lrc, encoding_rs::SHIFT_JIS),
+            (
+                "Déjà la pluie sur l’été, « côté rivière »",
+                encoding_rs::WINDOWS_1252,
+            ),
+            ("Дождь над маяком, мы идём домой", encoding_rs::WINDOWS_1251),
+            ("등대 아래 비가 내려", encoding_rs::EUC_KR),
+            ("灯塔下的雨还在下", encoding_rs::GBK),
+            ("燈塔下的雨還在下", encoding_rs::BIG5),
+            ("Βροχή πάνω από τον φάρο", encoding_rs::WINDOWS_1253),
+        ] {
+            assert_eq!(oddities(text, encoding), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_doubt_names_both_encodings_and_how_to_settle_it() {
+        let doubt = Doubt {
+            taken: encoding_rs::GBK,
+            other: encoding_rs::BIG5,
+        };
+        let said = doubt.to_string();
+        assert!(
+            said.contains("read as GBK") && said.contains("Big5"),
+            "{said}"
+        );
+        assert!(said.contains("[la:"), "{said}");
     }
 
     #[test]

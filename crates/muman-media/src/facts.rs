@@ -37,7 +37,12 @@
 //! and a file of its own are hashed whole. The tags a source offers are
 //! known by the fields of its info JSON they are read from, as
 //! [`info::TAG_FIELDS`] lists them, the rest of it changing on every
-//! fetch, or by a file's own tags, before any cleaning. Facts hashed by
+//! fetch, with the file's own tags where yt-dlp left them its own
+//! ([`VideoInfo::muman_own_tags`]), or by a file's own tags alone, before
+//! any cleaning. What a site served keeps the digest of those fields
+//! apart ([`Served::listed`]): a site's listing holds them and not the
+//! file's own tags, so it is what `check --upstream` can compare with
+//! what the site lists now. Facts hashed by
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
 //!
@@ -208,8 +213,14 @@ pub struct Facts {
 }
 
 /// What a source's digests are of; facts hashed otherwise are hashed
-/// again, decoding nothing, as [`hash`] does.
-pub const HASH_METHOD: &str = "hash/2";
+/// again, decoding nothing, as [`hash`] does. Since hash/3, what a site
+/// served holds the digest of its listing's tag fields apart
+/// ([`Served::listed`]).
+pub const HASH_METHOD: &str = "hash/3";
+
+/// [`HASH_METHOD`] before a site's listing was digested apart: its facts
+/// hold but for a source a site served.
+const BEFORE_LISTED: &str = "hash/2";
 
 /// What a MusicBrainz record's facts keep beside its tags, its length and
 /// the artists it credits, and what its tags hold: since record/3, its
@@ -218,8 +229,9 @@ pub const RECORD_METHOD: &str = "record/3";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
 /// it sings are Latin alone; since lyrics/2, its lines as
-/// [`crate::lyrics::read`] reads them, a control character dropped.
-pub const LYRICS_METHOD: &str = "lyrics/2";
+/// [`crate::lyrics::read`] reads them, a control character dropped; since
+/// lyrics/3, in the legacy encoding that reads them most plausibly.
+pub const LYRICS_METHOD: &str = "lyrics/3";
 
 /// How the tags of a source of `kind` are read: `tags::METHOD`, and for
 /// a record [`RECORD_METHOD`] too, or for a lyrics file [`LYRICS_METHOD`],
@@ -256,11 +268,18 @@ pub struct Served {
     /// Milliseconds the site said it plays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// The digest of the fields of its info JSON tags are read from
+    /// ([`info::tags_digest`]), as the site lists them, apart from the
+    /// file's own tags that the tags digest holds beside them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<String>,
 }
 
 impl Served {
-    fn of(info: &VideoInfo) -> Option<Self> {
+    /// What `info`, dumped into `scratch`, says the site served.
+    fn of(info: &VideoInfo, scratch: &Path) -> Option<Self> {
         Some(Self {
+            listed: listed_digest(scratch),
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
             url: info.page().map(str::to_string),
@@ -426,6 +445,7 @@ impl Facts {
     #[must_use]
     pub fn hashed(&self) -> bool {
         self.hash_method == HASH_METHOD
+            || (self.hash_method == BEFORE_LISTED && self.served.is_none())
     }
 
     /// What the integrity measure found of its audio, by today's method.
@@ -694,11 +714,6 @@ impl LyricsFacts {
     }
 }
 
-/// Whether lyrics or a subtitle sing any word.
-fn sings(text: &str) -> bool {
-    !lyrics::sung(text).trim().is_empty()
-}
-
 /// Whether the letters lyrics or a subtitle sing are Latin alone.
 fn latin(text: &str) -> bool {
     crate::clean::latin_only(&lyrics::sung(text))
@@ -856,8 +871,8 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     Ok(Reread {
         tags: tags_of(info.as_ref(), &probed, &located.path),
         release: info.as_ref().is_some_and(VideoInfo::is_release),
+        lyrics: own_lyrics(located, &probed),
         chapters: probed.chapters,
-        lyrics: tag_lyrics(located),
         ..Reread::default()
     })
 }
@@ -890,7 +905,7 @@ pub fn relyric<R: Runner>(
             }
         };
         if let Some(text) = file.and_then(|f| read_text(f).ok()) {
-            found.push((place.clone(), sings(&text)));
+            found.push((place.clone(), lyrics::sings(&text)));
         }
     }
     let outputs: Vec<Output> = streams
@@ -911,7 +926,7 @@ pub fn relyric<R: Runner>(
         .zip(ffmpeg::run(runner, &inputs, &outputs))
     {
         if let Some(text) = result.ok().and_then(|()| read_text(&output.path).ok()) {
-            found.push((LyricsAt::Stream { index: *index }, sings(&text)));
+            found.push((LyricsAt::Stream { index: *index }, lyrics::sings(&text)));
         }
     }
     Ok(found)
@@ -919,35 +934,54 @@ pub fn relyric<R: Runner>(
 
 /// The digest of the tags a media file offers as written: of the fields
 /// of its info JSON, dumped into `scratch`, that tags are read from, for
-/// what yt-dlp fetched; else of its own tags.
-fn tags_digest(fetched: bool, probed: &Probed, path: &Path, scratch: &Path) -> Option<String> {
-    if fetched {
-        return info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?);
+/// what yt-dlp fetched, with its own tags where they are its own; else of
+/// its own tags.
+fn tags_digest(
+    info: Option<&VideoInfo>,
+    probed: &Probed,
+    path: &Path,
+    scratch: &Path,
+) -> Option<String> {
+    let own = || serde_json::to_vec(&own_tags(probed, path)).ok();
+    let Some(info) = info else {
+        return Some(digest(&own()?));
+    };
+    let fetched = listed_digest(scratch)?;
+    if info.muman_own_tags.is_none() {
+        return Some(fetched);
     }
-    let own = tags::read_file(path).unwrap_or_else(|| {
-        probed
-            .tags
-            .iter()
-            .map(|(k, v)| (k.clone(), vec![v.clone()]))
-            .collect()
-    });
-    Some(digest(&serde_json::to_vec(&own).ok()?))
+    let mut both = fetched.into_bytes();
+    both.extend(own()?);
+    Some(digest(&both))
 }
 
-/// What a media file's tags offer: its info JSON's, for what yt-dlp
-/// fetched; else its own, as `lofty` reads them, or as ffprobe does for a
-/// format `lofty` does not read.
+/// The digest of the fields tags are read from of the info JSON dumped
+/// into `scratch` ([`info::tags_digest`]).
+fn listed_digest(scratch: &Path) -> Option<String> {
+    info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?)
+}
+
+/// What a media file's tags offer: for what yt-dlp fetched, its info
+/// JSON's, after its own where yt-dlp wrote none over them
+/// ([`VideoInfo::muman_own_tags`]); else its own ([`own_tags`]).
 fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
     match info {
+        Some(info) if info.muman_own_tags.is_some() => {
+            tags::of_fetched(&own_tags(probed, path), info)
+        }
         Some(info) => tags::from_info(info),
-        None => tags::from_container(&tags::read_file(path).unwrap_or_else(|| {
-            probed
-                .tags
-                .iter()
-                .map(|(k, v)| (k.clone(), vec![v.clone()]))
-                .collect()
-        })),
+        None => tags::from_container(&own_tags(probed, path)),
     }
+}
+
+/// A media file's own tags, as `lofty` and ffprobe, `probed`, read them
+/// together ([`tags::of_both`]); as ffprobe alone does for a file `lofty`
+/// does not read as the format it is ([`tags::reads_as`]).
+fn own_tags(probed: &Probed, path: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let read = (tags::reads_as(path, probed))
+        .then(|| tags::read_file(path))
+        .flatten();
+    tags::of_both(read, &probed.tags)
 }
 
 fn read_text(path: &Path) -> Result<String> {
@@ -968,6 +1002,14 @@ pub fn tag_lyrics(located: &Located) -> Option<LyricsFacts> {
     })
 }
 
+/// [`tag_lyrics`], of a file `lofty` reads as the format it is, `probed`
+/// ([`tags::reads_as`]).
+fn own_lyrics(located: &Located, probed: &Probed) -> Option<LyricsFacts> {
+    tags::reads_as(&located.path, probed)
+        .then(|| tag_lyrics(located))
+        .flatten()
+}
+
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
     LyricsFacts {
         at,
@@ -975,7 +1017,7 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
         timing: lyrics::timing(&lyrics::clean_lrc(text)),
         stated_ms: lyrics::stated_length(text),
         digest: None,
-        sings: Some(sings(text)),
+        sings: Some(lyrics::sings(text)),
         latin: Some(latin(text)),
     }
 }
@@ -1064,7 +1106,9 @@ fn cover_outputs(
     inputs: &mut Vec<Input>,
 ) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
-    let tagged = picture::tag_pictures(path);
+    let tagged = tags::reads_as(path, probed)
+        .then(|| picture::tag_pictures(path))
+        .flatten();
     let streams = tagged
         .as_deref()
         .is_none_or(|t| streams_agree(&probed.pictures, t));
@@ -1347,11 +1391,11 @@ pub fn hash<R: Runner>(
         }
     }
     file_digests(located, &probed, scratch, &mut digests);
-    if let Some(d) = tag_lyrics(located).and_then(|l| l.digest) {
+    if let Some(d) = own_lyrics(located, &probed).and_then(|l| l.digest) {
         digests.lyrics.push((LyricsAt::Tag, d));
     }
-    digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
-    Ok((digests, info.as_ref().and_then(Served::of)))
+    digests.tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
+    Ok((digests, info.as_ref().and_then(|i| Served::of(i, scratch))))
 }
 
 // The steps read in the order they run; split up, the order would be in the call sites.
@@ -1369,8 +1413,8 @@ fn media<R: Runner>(
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
     facts.chapters.clone_from(&probed.chapters);
-    let served = info.as_ref().and_then(Served::of);
-    let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
+    let served = info.as_ref().and_then(|i| Served::of(i, scratch));
+    let tags = tags_digest(info.as_ref(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
     let lenient: Vec<String> = probed
@@ -1488,7 +1532,7 @@ fn media<R: Runner>(
                         timing: lyrics::timing(&lyrics::clean_lrc(&text)),
                         stated_ms: None,
                         digest: None,
-                        sings: Some(sings(&text)),
+                        sings: Some(lyrics::sings(&text)),
                         latin: Some(latin(&text)),
                     });
                 }
@@ -1522,7 +1566,7 @@ fn media<R: Runner>(
     if let Some(Ok(text)) = &sidecar {
         facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, text));
     }
-    if let Some(l) = tag_lyrics(located) {
+    if let Some(l) = own_lyrics(located, &probed) {
         digests
             .lyrics
             .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));

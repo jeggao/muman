@@ -39,7 +39,11 @@
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
-//! reversed, as a song retagged where it moved to needs, then each file
+//! reversed, as a song retagged where it moved to needs, then the files
+//! no song kept that the run removed to free a path a move landed on, put
+//! back where the moves back left it free: kept apart from the files it
+//! wrote over, as a song moved there and retagged is kept at that path
+//! too. Then each file
 //! the run made, an output or one beside it, taken out: the sync after
 //! cannot, as the song list put back may still name its path, and a file
 //! no record names is the user's to it. A file the user
@@ -95,7 +99,11 @@
 //! next sync, and a file of the user's own is in the desktop's trash,
 //! which muman cannot take it back from on every platform. The run
 //! records each it trashed, and `undo` refuses until the user puts them
-//! back, rather than list their songs again with nothing to make them.
+//! back, rather than list their songs again with nothing to make them:
+//! where each was, or elsewhere in the manual folder, where a run since
+//! followed it or the sync after the undo follows it, found as `restore`
+//! finds it ([`crate::reconcile::not_back`]), an `.lrc` or picture beside
+//! the song file it went to the trash with ([`crate::manifest::moved_with`]).
 //! What `add` copied into the sources is recorded with a digest of it,
 //! and `undo` takes each copy out with its song, else the next sync
 //! would list it again as a file dropped in: a copy as made is deleted,
@@ -156,6 +164,8 @@ use crate::store;
 
 const RECORD: &str = "run.json";
 const VERSION: u32 = 3;
+/// The folder of a run's that keeps the files it freed paths of.
+const FREED: &str = "freed";
 
 fn version_one() -> u32 {
     1
@@ -227,6 +237,16 @@ struct Record {
     /// Library files the run moved, in the order it moved them.
     #[serde(default)]
     moves: Vec<Moved>,
+    /// Library files no song kept that the run removed before its moves,
+    /// to free their paths for a move, each kept under the run's `freed`
+    /// while the budget lasts: `undo` puts them back once it has moved the
+    /// files back, where a file the run kept under `files` goes before.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeSet::is_empty",
+        with = "crate::relpath::portable_keys"
+    )]
+    freed: BTreeSet<PathBuf>,
     /// Files of the user's own the run moved to the desktop's trash,
     /// under the home.
     #[serde(default, with = "crate::relpath::portable_keys")]
@@ -251,7 +271,6 @@ pub struct Run {
     home: PathBuf,
     dir: PathBuf,
     record: Record,
-    outputs_known: bool,
     /// The outputs the run changed or is about to.
     changing: BTreeSet<PathBuf>,
     /// The other kept runs, oldest first, with the bytes each keeps.
@@ -463,9 +482,9 @@ fn held(dir: &Path) -> u64 {
     if said > 0 {
         return said;
     }
-    crate::store::walk(&dir.join("files"), usize::MAX)
-        .unwrap_or_default()
+    [dir.join("files"), dir.join(FREED)]
         .iter()
+        .flat_map(|d| crate::store::walk(d, usize::MAX).unwrap_or_default())
         .filter_map(|f| std::fs::metadata(f).ok())
         .map(|m| m.len())
         .sum()
@@ -475,14 +494,17 @@ fn held(dir: &Path) -> u64 {
 /// by the outputs as `home`'s state holds them now: the output, if new,
 /// and each file beside it its song lists now but did not then. A run
 /// going on with it keeps none of them, as it would keep a file it found.
-/// A file the stopped run moved is not one it made: it holds what was
-/// there before the run, which undoing it moves back, so a run going on
-/// keeps it before writing over it.
+/// A file the stopped run moved, or was about to, is not one it made: it
+/// holds what was there before the run, where it went or where it still
+/// is, which undoing it moves back, so a run going on keeps it before
+/// writing over or removing it.
 fn made_by(record: &Record, home: &Path) -> BTreeSet<PathBuf> {
     if record.before.is_empty() {
         return BTreeSet::new();
     }
-    let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
+    let moved: BTreeSet<&PathBuf> = (record.moves.iter())
+        .flat_map(|m| [&m.from, &m.to])
+        .collect();
     let now = State::load(home).map(|s| s.outputs).unwrap_or_default();
     let files = |rel: &Path, w: Option<&Written>| -> BTreeSet<PathBuf> {
         w.map(|w| w.files(rel).map(Path::to_path_buf).collect())
@@ -579,11 +601,11 @@ impl Run {
         let found = now.clone();
         let mine = resumed.as_ref().map(|(dir, _)| dir.clone());
         let others = others(home, mine.as_ref());
-        let (dir, record, outputs_known) = match resumed {
+        let (dir, record) = match resumed {
             Some((dir, mut record)) => {
                 record.version = VERSION;
                 record.songs_before = songs_before;
-                (dir, record, true)
+                (dir, record)
             }
             None => (
                 history(home).join(id),
@@ -594,7 +616,6 @@ impl Run {
                     was: outputs,
                     ..Record::default()
                 },
-                false,
             ),
         };
         let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
@@ -603,7 +624,6 @@ impl Run {
             home: home.to_path_buf(),
             dir,
             record,
-            outputs_known,
             changing,
             others,
             limits,
@@ -662,12 +682,23 @@ impl Run {
         }
     }
 
-    /// The outputs as they were before the run wrote or removed any.
+    /// The outputs as they were before the run wrote or removed any:
+    /// `outputs`, as the library was found and the state saved just
+    /// before, but each the run, or the stopped run it goes on in, changed
+    /// already, as it was before. A stopped run's moves are followed only
+    /// from a record the state still holds ([`follow_moves`]), so an
+    /// output found otherwise than the state held as the run began,
+    /// re-stamped as a copy or in a library folder named anew, is taken
+    /// as found.
     pub fn outputs_before(&mut self, outputs: &BTreeMap<PathBuf, Written>) {
-        if !self.outputs_known {
-            self.record.was.clone_from(outputs);
-            self.outputs_known = true;
+        let mut was = outputs.clone();
+        for rel in &self.changing {
+            match self.record.was.get(rel) {
+                Some(before) => was.insert(rel.clone(), before.clone()),
+                None => was.remove(rel),
+            };
         }
+        self.record.was = was;
     }
 
     /// Note that the run is about to change the output at `rel`, before
@@ -704,7 +735,21 @@ impl Run {
         if self.lost {
             return Ok(());
         }
-        if let Err(e) = self.try_keep(library, rel) {
+        if let Err(e) = self.try_keep(library, rel, false) {
+            self.lose(&e);
+        }
+        Ok(())
+    }
+
+    /// Keep a library file no song keeps that the run is about to remove
+    /// before its moves, to free its path for one, as [`Run::keep`] keeps
+    /// a file but apart: a move may land where it was, and a file written
+    /// over there after be kept too.
+    pub fn keep_freed(&mut self, library: &Path, rel: &Path) -> Result<()> {
+        if self.lost {
+            return Ok(());
+        }
+        if let Err(e) = self.try_keep(library, rel, true) {
             self.lose(&e);
         }
         Ok(())
@@ -723,7 +768,7 @@ impl Run {
 
     // Keeps a file for undo before the run changes it.
     #[expect(clippy::disallowed_methods)]
-    fn try_keep(&mut self, library: &Path, rel: &Path) -> Result<()> {
+    fn try_keep(&mut self, library: &Path, rel: &Path, freeing: bool) -> Result<()> {
         let from = library.join(rel);
         let Ok(meta) = std::fs::metadata(&from) else {
             return Ok(());
@@ -732,7 +777,12 @@ impl Run {
         if self.made_before.contains(rel) {
             return Ok(());
         }
-        if !self.record.touched.insert(rel.to_path_buf()) {
+        let first = if freeing {
+            self.record.freed.insert(rel.to_path_buf())
+        } else {
+            self.record.touched.insert(rel.to_path_buf())
+        };
+        if !first {
             return Ok(());
         }
         let budget = self.limits.max_size.0;
@@ -745,7 +795,10 @@ impl Run {
         if self.record.bytes + meta.len() > budget {
             return Ok(());
         }
-        let to = self.dir.join("files").join(rel);
+        let to = self
+            .dir
+            .join(if freeing { FREED } else { "files" })
+            .join(rel);
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
@@ -760,7 +813,9 @@ impl Run {
         let kept = std::fs::hard_link(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
             .is_ok();
-        if kept {
+        if kept && freeing {
+            self.record.bytes += meta.len();
+        } else if kept {
             self.record.bytes += meta.len();
             self.record.kept.insert(rel.to_path_buf());
             // A copy with new times, its bytes muman's, is no change.
@@ -802,6 +857,21 @@ impl Run {
                 self.record.changed.remove(&rel);
             }
         }
+    }
+
+    /// Forget the moves of a stopped run this one goes on in that it never
+    /// made, as [`follow_moves`] finds them in `library`: `undo` would
+    /// name each where nothing went, and this run records again those it
+    /// makes.
+    pub fn forget_unmade(&mut self, library: &Path) {
+        if self.fresh {
+            return;
+        }
+        let made = made_moves(library, &self.record.moves, Moves::Foresee);
+        let moves = std::mem::take(&mut self.record.moves);
+        self.record.moves = (moves.into_iter().zip(made))
+            .filter_map(|(m, made)| made.then_some(m))
+            .collect();
     }
 
     /// Record that the run is moving a library file, before it does.
@@ -916,6 +986,7 @@ impl Run {
         // that is the next run's.
         let applied = matches!(self.seen, Seen::As(_)) || self.record.songs_after != self.found;
         if self.record.touched.is_empty()
+            && self.record.freed.is_empty()
             && self.record.moves.is_empty()
             && self.record.copied.is_empty()
             && (self.record.songs_after == self.record.songs_before || !applied)
@@ -1049,16 +1120,19 @@ fn let_go(dir: &Path) -> Result<()> {
             record.bytes = 0;
             let text = serde_json::to_vec(&record).context("writing the run record")?;
             atomic::write_private(dir, &atomic::Name::new(RECORD)?, &text)?;
-            dir.join("files")
+            vec![dir.join("files"), dir.join(FREED)]
         }
-        None => dir.to_path_buf(),
+        None => vec![dir.to_path_buf()],
     };
-    match std::fs::remove_dir_all(&gone) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("removing {}", gone.display()))
+    for dir in gone {
+        match std::fs::remove_dir_all(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", dir.display()));
+            }
+            _ => {}
         }
-        _ => Ok(()),
     }
+    Ok(())
 }
 
 /// The moves `first` and then `second` make, as one set of moves made at
@@ -1093,9 +1167,12 @@ impl Record {
 
     /// The record `text` holds, its outputs as the run began made whole
     /// from `now`, the outputs as they are, where it keeps only those the
-    /// run changed.
+    /// run changed. A move of a file onto its own path, which an earlier
+    /// muman recorded of a folder's file its song moved within the folder,
+    /// is none ([`crate::library::Relocation`]).
     fn read(text: &[u8], now: &BTreeMap<PathBuf, Written>) -> serde_json::Result<Self> {
         let mut record: Self = serde_json::from_slice(text)?;
+        record.moves.retain(|m| m.from != m.to);
         record.was = if record.version < 2 {
             record.outputs.clone()
         } else {
@@ -1156,12 +1233,18 @@ pub enum Moves {
 /// its lyrics if they went too, so the next run knows it as muman's.
 /// Returns how many followed.
 ///
-/// The run made its moves in the order the record lists them, so those
-/// made are the ones before the first whose file is not where it went;
+/// The moves made are found among all the record lists, whatever failed
+/// between them ([`made_moves`]), a move of case alone stopped between
+/// its two renames finished, or taken as made under [`Moves::Foresee`];
 /// one into a path an earlier move left is a chain, as a song moving into
 /// another's old place. They are followed all at once, from the outputs
-/// as the run began, and only when the state still says so: the paths
-/// they left that no move went into are still listed.
+/// as the run began, which a sync saved as it found the library before
+/// its first move ([`Run::outputs_before`]), each only while the state
+/// still holds at the path it left the record the run began with there:
+/// a record there since is another file's, as the run saves the state
+/// once its moves are made and may then record a new song about to be
+/// written at a path a move left, which a path alone would take for the
+/// file moved.
 ///
 /// A file beside a song that stayed where it was moves after the song
 /// under [`Moves::Follow`], but a folder's file the record lists no move
@@ -1184,35 +1267,25 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
     if record.complete || record.undoing {
         return 0;
     }
-    let made: Vec<&Moved> = record
-        .moves
-        .iter()
-        .take_while(|m| library.join(&m.to).exists())
+    let made: Vec<&Moved> = (record.moves.iter())
+        .zip(made_moves(library, &record.moves, moves))
+        .filter_map(|(m, made)| made.then_some(m))
         .collect();
     // A song's move, as the outputs stood when the run began; the rest
     // are its lyrics'.
-    let songs: Vec<&Moved> = made
+    let songs: Vec<(&Moved, &Written)> = made
         .iter()
-        .copied()
-        .filter(|m| record.was.contains_key(&m.from))
+        .filter_map(|m| Some((*m, record.was.get(&m.from)?)))
+        .filter(|(m, was)| state.outputs.get(&m.from) == Some(*was))
         .collect();
-    let into: BTreeSet<&PathBuf> = songs.iter().map(|m| &m.to).collect();
-    let left: Vec<&PathBuf> = songs
-        .iter()
-        .map(|m| &m.from)
-        .filter(|from| !into.contains(from))
-        .collect();
-    if left.is_empty() || !left.iter().all(|from| state.outputs.contains_key(*from)) {
+    if songs.is_empty() {
         return 0;
     }
     let went: BTreeMap<&PathBuf, &PathBuf> = made.iter().map(|m| (&m.from, &m.to)).collect();
     let listed = |rel: &Path| record.moves.iter().any(|m| m.from == rel);
-    let before = state.outputs.clone();
     let mut followed = BTreeMap::new();
-    for m in &songs {
-        let Some(mut written) = before.get(&m.from).cloned() else {
-            continue;
-        };
+    for (m, was) in &songs {
+        let mut written = (*was).clone();
         for sidecar in &mut written.sidecars {
             if let Some(to) = went.get(&sidecar.path) {
                 sidecar.path = (*to).clone();
@@ -1231,12 +1304,63 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
         }
         followed.insert(m.to.clone(), written);
     }
-    for m in &songs {
+    for (m, _) in &songs {
         state.outputs.remove(&m.from);
     }
     let n = followed.len();
     state.outputs.extend(followed);
     n
+}
+
+/// Which of `moves`, a stopped run's in the order it made them, were made
+/// in `library`, each in its place. A move that fails is skipped and the
+/// run goes on, so those made are no prefix of the record. They are read
+/// from the last back, each against the library as the moves after it
+/// found it: a move was made when its file is where it went and none is
+/// where it came from, or the one there is the same file, as a filesystem
+/// blind to case finds a move of case alone at both names. One stopped
+/// between the two renames of a move of case alone, at the name between
+/// them, is made too, finished from there under [`Moves::Follow`].
+fn made_moves(library: &Path, moves: &[Moved], how: Moves) -> Vec<bool> {
+    let mut was: BTreeMap<&Path, bool> = BTreeMap::new();
+    let mut made = vec![false; moves.len()];
+    for (n, m) in moves.iter().enumerate().rev() {
+        let half = match how {
+            Moves::Follow => crate::library::finish_move(library, &m.from, &m.to),
+            Moves::Foresee => crate::library::half_moved(library, &m.from, &m.to),
+        };
+        let there = |rel: &Path, was: &BTreeMap<&Path, bool>| {
+            (was.get(rel).copied()).unwrap_or_else(|| library.join(rel).exists())
+        };
+        let left = !there(&m.from, &was)
+            || same_file::is_same_file(library.join(&m.from), library.join(&m.to)).unwrap_or(false);
+        made[n] = half || (there(&m.to, &was) && left);
+        if made[n] {
+            was.insert(&m.to, false);
+            was.insert(&m.from, true);
+        }
+    }
+    made
+}
+
+/// The paths the latest run, when it was stopped partway, records moving
+/// files to: a `.moving` beside one is its own
+/// ([`crate::library::Leftovers`]).
+#[must_use]
+pub fn moving(home: &Path) -> Vec<PathBuf> {
+    let Some(dir) = runs(home).ok().and_then(|mut r| r.pop()) else {
+        return Vec::new();
+    };
+    let Some(record) = std::fs::read(dir.join(RECORD))
+        .ok()
+        .and_then(|t| serde_json::from_slice::<Record>(&t).ok())
+    else {
+        return Vec::new();
+    };
+    if record.complete {
+        return Vec::new();
+    }
+    record.moves.into_iter().map(|m| m.to).collect()
 }
 
 /// Undoing the latest run, as planned before asking: which run, and
@@ -1272,15 +1396,57 @@ impl UndoPlan {
 }
 
 /// Refuse until every file of the user's the run trashed is back: its
-/// song would be listed again with no file to make it from.
-fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
-    let gone: Vec<String> = record
-        .trashed
-        .iter()
-        .filter(|rel| crate::relpath::on_disk(home, rel).is_none())
-        .map(|rel| format!("  {}", home.join(rel).display()))
+/// song would be listed again with no file to make it from. One put back
+/// elsewhere in the manual folder is back where the sync after the undo
+/// follows it, found as `restore` finds it ([`crate::reconcile::not_back`]),
+/// or where a run since followed it, as the list put back names it
+/// ([`Record::put_back`]); `hear` reads what a song file holds, and a
+/// file arrived within `settling` is still being copied in.
+fn all_trashed_back(
+    dirs: &Dirs,
+    (record, state): (&Record, &State),
+    settling: std::time::Duration,
+    hear: impl FnMut(&crate::store::Located) -> Option<String>,
+) -> Result<()> {
+    if record.trashed.is_empty() {
+        return Ok(());
+    }
+    let home = &dirs.home;
+    let manual = dirs.manual();
+    let key_of = |rel: &Path| {
+        let from = home.join(rel);
+        Some(SourceKey::Manual(from.strip_prefix(&manual).ok()?.into()))
+    };
+    let mut gone: BTreeSet<PathBuf> = (record.trashed.iter())
+        .filter(|rel| key_of(rel).is_none() && crate::relpath::on_disk(home, rel).is_none())
+        .map(|rel| home.join(rel))
         .collect();
+    let trashed: Vec<SourceKey> = record.trashed.iter().filter_map(|r| key_of(r)).collect();
+    let media = |k: &&SourceKey| match k {
+        SourceKey::Manual(m) => store::kind_of(m.path()) == Some(store::Kind::Media),
+        _ => false,
+    };
+    let songs: Vec<SourceKey> = trashed.iter().filter(media).cloned().collect();
+    let store = crate::store::Store::scan(dirs)?;
+    let back = |moved: &BTreeMap<SourceKey, SourceKey>| {
+        crate::reconcile::not_back(&manual, &store, moved, (&songs, &trashed))
+    };
+    let mut waiting = back(&record.followed);
+    if !waiting.is_empty() {
+        let manifest = crate::manifest::Manifest::load(home)?;
+        let found = crate::reconcile::found_moves(&manifest, state, &store, settling, hear);
+        let mut moved = record.followed.clone();
+        moved.extend(found.moved);
+        waiting = back(&moved);
+    }
+    gone.extend(waiting.iter().filter_map(|k| match k {
+        SourceKey::Manual(m) => Some(manual.join(m.path())),
+        _ => None,
+    }));
     if !gone.is_empty() {
+        let gone: Vec<String> = (gone.iter())
+            .map(|source| format!("  {}", source.display()))
+            .collect();
         return Err(crate::errors::Refused(format!(
             "The last run moved these to the trash; put them back there, then undo \
              again:\n{}",
@@ -1291,9 +1457,6 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
     Ok(())
 }
 
-/// What undoing the latest run would do, refused as `undo` itself would
-/// be: when the song list changed since, or the run wrote another
-/// library folder.
 /// Refuse to undo `record` in another library than the one it wrote. A
 /// run stopped before its sync, as an add after its copies, wrote none.
 fn refuse_another_library(record: &Record, state: &State, dirs: &Dirs) -> Result<()> {
@@ -1328,7 +1491,7 @@ fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()
             .flat_map(|w| &w.sidecars)
             .map(|s| (&s.path, s))
             .collect();
-        for rel in &record.touched {
+        for rel in record.touched.iter().chain(&record.freed) {
             if !dirs.library.join(rel).exists() {
                 continue;
             }
@@ -1374,7 +1537,20 @@ fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()
     Ok(())
 }
 
+// allow-no-comments-on-unchanged-code: moved off `refuse_another_library`, which it never described
+/// [`plan_hearing`] with no audio heard: a trashed file put back elsewhere is found by its bytes.
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
+    plan_hearing(dirs, store::SETTLING, |_| None)
+}
+
+/// [`plan`], `hear` reading what a song file put back from the trash
+/// elsewhere holds, as `restore` reads it, one arrived within `settling`
+/// still being copied in.
+pub fn plan_hearing(
+    dirs: &Dirs,
+    settling: std::time::Duration,
+    hear: impl FnMut(&crate::store::Located) -> Option<String>,
+) -> Result<UndoPlan> {
     let home = &dirs.home;
     let state = State::load(home)?;
     let (dir, record) = latest(home, &state.outputs)?;
@@ -1394,7 +1570,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     refuse_another_library(&record, &state, dirs)?;
     refuse_writing_over(&record, &state, dirs)?;
-    all_trashed_back(home, &record)?;
+    all_trashed_back(dirs, (&record, &state), settling, hear)?;
     let mut lines = Vec::new();
     if record.undoing {
         lines.push("Finish the undo stopped partway".to_string());
@@ -1429,7 +1605,9 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     // What an undo stopped partway put back already is not said again.
     let back = |rel: &PathBuf| record.undoing && !dir.join("files").join(rel).exists();
-    for rel in record.touched.iter().filter(|rel| !back(rel)) {
+    // A file the run moved and then wrote over is said by its move back.
+    let moved_to = |rel: &PathBuf| record.moves.iter().any(|m| m.to == *rel);
+    for rel in (record.touched.iter()).filter(|rel| !back(rel) && !moved_to(rel)) {
         let how = if record.kept.contains(rel) {
             "put back"
         } else {
@@ -1440,12 +1618,37 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     let moved_back = |m: &Moved| {
         record.undoing && dirs.library.join(&m.from).exists() && !dirs.library.join(&m.to).exists()
     };
-    for m in record.moves.iter().filter(|m| !moved_back(m)) {
+    // A stopped run records each move before it makes it: only those made
+    // are moved back.
+    let made = if stopped {
+        made_moves(&dirs.library, &record.moves, Moves::Foresee)
+    } else {
+        vec![true; record.moves.len()]
+    };
+    let mut said = BTreeSet::new();
+    for m in (record.moves.iter().zip(made))
+        .filter_map(|(m, made)| made.then_some(m))
+        .filter(|m| !moved_back(m) && said.insert((&m.from, &m.to)))
+    {
+        let then = if record.touched.contains(&m.to) && !record.kept.contains(&m.to) {
+            ", then written again from its sources"
+        } else {
+            ""
+        };
         lines.push(format!(
-            "{}: moved back from {}",
+            "{}: moved back from {}{then}",
             crate::relpath::show(&m.from),
             crate::relpath::show(&m.to)
         ));
+    }
+    let freed_back = |rel: &PathBuf| record.undoing && !dir.join(FREED).join(rel).exists();
+    for rel in record.freed.iter().filter(|rel| !freed_back(rel)) {
+        let how = if dir.join(FREED).join(rel).exists() {
+            "put back, once the files moved there are back"
+        } else {
+            "written again from its sources"
+        };
+        lines.push(format!("{}: {how}", crate::relpath::show(rel)));
     }
     lines.extend(copies_said(dirs, &record));
     // What `undo` removes, the files beside a song, as its lyrics, too.
@@ -1590,11 +1793,10 @@ fn put_back_as(
 /// Move the run kept in `dir` on to the song list `now`, the user's files
 /// `followed` followed in the list its own undo puts back too.
 fn move_on(dir: &Path, now: &str, followed: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {
-    let file = dir.join(RECORD);
-    let mut record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
-    )
-    .with_context(|| format!("reading {}", file.display()))?;
+    let reading = || format!("reading {}", dir.join(RECORD).display());
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(RECORD)).with_context(reading)?)
+            .with_context(reading)?;
     record["songs_after"] = serde_json::Value::String(now.to_string());
     if !followed.is_empty() {
         let its: BTreeMap<SourceKey, SourceKey> =
@@ -1630,54 +1832,61 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     // In the reverse of the order the run went: it moved a file before it
     // wrote over it where it moved to, as a song retagged and moved.
     for rel in &record.kept {
-        let to = dirs.library.join(rel);
         let from = dir.join("files").join(rel);
         if !from.exists() {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        atomic::rename(&from, &to)
-            .or_else(|_| std::fs::copy(&from, &to).map(drop))
-            .with_context(|| format!("putting back {}", to.display()))?;
+        put_file_back(&from, &dirs.library, rel)?;
         changed.written += 1;
-        crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
+        // A file the run moved and then wrote over is said as it moves back.
+        if !record.moves.iter().any(|m| m.to == *rel) {
+            crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
+        }
+    }
+    if !record.complete {
+        for m in &record.moves {
+            let _ = crate::library::finish_move(&dirs.library, &m.from, &m.to);
+        }
     }
     for m in record.moves.iter().rev() {
         let (from, to) = (dirs.library.join(&m.from), dirs.library.join(&m.to));
         if from.exists() || !to.exists() {
             continue;
         }
-        if let Some(parent) = from.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+        if let Some(parent) = m.from.parent() {
+            std::fs::create_dir_all(dirs.library.join(parent))
+                .with_context(|| format!("creating {}", crate::relpath::show(parent)))?;
         }
-        atomic::rename(&to, &from).with_context(|| format!("moving back {}", to.display()))?;
+        atomic::rename(&to, &from)
+            .with_context(|| format!("moving back {}", crate::relpath::show(&m.to)))?;
         changed.moved += 1;
         crate::ui::info(
             out,
             &format!("Moved back: {}", crate::relpath::show(&m.from)),
         )?;
     }
-    // A run stopped partway may have left a part beside any path it wrote,
-    // which the sync after clears only beside the outputs put back.
-    let named: BTreeSet<PathBuf> = (state.outputs.iter().chain(&record.was))
-        .flat_map(|(rel, w)| w.files(rel).map(Path::to_path_buf))
-        .chain(record.before.keys().cloned())
-        .chain(
-            record
-                .moves
-                .iter()
-                .flat_map(|m| [m.from.clone(), m.to.clone()]),
-        )
+    // Where a move landed, so after the moves back; over a song written
+    // there for a move that failed, as a file kept is put back.
+    for rel in &record.freed {
+        let from = dir.join(FREED).join(rel);
+        if !from.exists() {
+            continue;
+        }
+        put_file_back(&from, &dirs.library, rel)?;
+        changed.written += 1;
+        crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
+    }
+    // A run stopped partway may have left a part beside a path it was
+    // writing, which the outputs put back may no longer name.
+    let moving: Vec<&PathBuf> = (record.moves.iter())
+        .filter(|_| !record.complete)
+        .map(|m| &m.to)
         .collect();
-    crate::library::clear_leftovers(&dirs.library, named.into_iter());
+    crate::library::Leftovers::of(&state.outputs, moving).clear(&dirs.library);
     let made = made_by_run(&record, &state.outputs, &dirs.library);
     for rel in &made {
-        let path = dirs.library.join(rel);
-        atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+        atomic::remove(&dirs.library.join(rel))
+            .with_context(|| format!("removing {}", crate::relpath::show(rel)))?;
         changed.removed += 1;
         crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(rel)))?;
     }
@@ -1685,7 +1894,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         .chain(made)
         .collect();
     crate::library::remove_empty_folders(&dirs.library, &left);
-    state.outputs = outputs_put_back(&record, &dirs.library)?;
+    state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library)?;
     take_out_copies(dirs, &record, out)?;
     // A home that had no song list before gets one that lists nothing, so
     // the sync after removes what the run added.
@@ -1698,6 +1907,21 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     Ok(Undone { dir, changed })
+}
+
+/// Put the file kept at `kept` back at `rel` in the `library`, moved, or
+/// copied where it cannot be.
+// Puts a kept file back in the library, as undo.
+#[expect(clippy::disallowed_methods)]
+fn put_file_back(kept: &Path, library: &Path, rel: &Path) -> Result<()> {
+    let to = library.join(rel);
+    if let Some(parent) = rel.parent() {
+        std::fs::create_dir_all(library.join(parent))
+            .with_context(|| format!("creating {}", crate::relpath::show(parent)))?;
+    }
+    atomic::rename(kept, &to)
+        .or_else(|_| std::fs::copy(kept, &to).map(drop))
+        .with_context(|| format!("putting back {}", crate::relpath::show(rel)))
 }
 
 /// What undoing does with each copy `add` made that is still there, a
@@ -1821,7 +2045,9 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
                 continue;
             }
             Copy::Unsure(files) => {
-                let files: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+                let files: Vec<String> = (files.iter())
+                    .map(|copy| copy.display().to_string())
+                    .collect();
                 crate::ui::warning(
                     out,
                     &format!(
@@ -1916,7 +2142,19 @@ fn made_by_run(record: &Record, now: &BTreeMap<PathBuf, Written>, library: &Path
 /// added is no longer one: [`made_by_run`] took it out, or it is the
 /// user's. Each names the user's files the run followed by the keys it
 /// followed them to, as the song list put back does.
-fn outputs_put_back(record: &Record, library: &Path) -> Result<BTreeMap<PathBuf, Written>> {
+///
+/// A file of a song the run changed that the run itself neither wrote
+/// over, removed nor moved is as `now` records it: the sync after an
+/// undo since may have written it, with no run of its own to say so, and
+/// the record from before this run would take that file for the user's.
+/// A song none of whose files the run changed, as one whose write failed,
+/// is recorded whole as `now` has it, under the sources it had, so the
+/// plan recorded is the one its files were written from.
+fn outputs_put_back(
+    record: &Record,
+    now: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+) -> Result<BTreeMap<PathBuf, Written>> {
     let mut outputs = BTreeMap::new();
     // A file moved back holds what the run wrote over it where it went,
     // unless what it held there was kept and put back.
@@ -1926,7 +2164,25 @@ fn outputs_put_back(record: &Record, library: &Path) -> Result<BTreeMap<PathBuf,
         .filter(|m| record.touched.contains(&m.to) && !record.kept.contains(&m.to))
         .map(|m| &m.from)
         .collect();
+    let changed_by_run = |rel: &Path| {
+        record.touched.contains(rel)
+            || record.freed.contains(rel)
+            || (record.moves.iter()).any(|m| m.from == rel || m.to == rel)
+    };
+    let beside_now: BTreeMap<&PathBuf, &crate::state::Sidecar> = (now.values())
+        .flat_map(|w| &w.sidecars)
+        .map(|s| (&s.path, s))
+        .collect();
     for (rel, before) in &record.was {
+        let untouched = !before.files(rel).any(changed_by_run);
+        if let Some(w) = now.get(rel).filter(|_| untouched) {
+            let written = Written {
+                sources: before.sources.clone(),
+                ..w.clone()
+            };
+            outputs.insert(rel.clone(), written);
+            continue;
+        }
         let mut written = before.clone();
         if record.kept.contains(rel) {
             // One changed since written keeps the stamp it no longer matches.
@@ -1936,6 +2192,17 @@ fn outputs_put_back(record: &Record, library: &Path) -> Result<BTreeMap<PathBuf,
         } else if record.touched.contains(rel) || written_over.contains(rel) {
             written.plan = None;
             written.stamp = None;
+        } else if let Some(w) = now.get(rel).filter(|_| !changed_by_run(rel)) {
+            written.stamp.clone_from(&w.stamp);
+            written.digest.clone_from(&w.digest);
+        }
+        for sidecar in &mut written.sidecars {
+            if let Some(s) = beside_now.get(&sidecar.path)
+                && !changed_by_run(&sidecar.path)
+            {
+                sidecar.stamp.clone_from(&s.stamp);
+                sidecar.digest.clone_from(&s.digest);
+            }
         }
         outputs.insert(rel.clone(), written);
     }
@@ -2290,6 +2557,80 @@ mod tests {
     }
 
     #[test]
+    fn a_move_onto_its_own_path_an_earlier_muman_recorded_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/cover.jpg"), "cover").unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.moving(Path::new("A/x.opus"), Path::new("A/y.opus"));
+        run.moving(Path::new("A/cover.jpg"), Path::new("A/cover.jpg"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("A/y.opus")).unwrap();
+        let moved = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        state.outputs.insert("A/y.opus".into(), moved);
+        state.save(&d.home).unwrap();
+        run.finish(&d.home).unwrap();
+
+        let said = plan(&d).unwrap().lines().to_vec();
+        assert!(!said.iter().any(|l| l.contains("cover.jpg")), "{said:?}");
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/cover.jpg")).unwrap(),
+            "cover"
+        );
+    }
+
+    #[test]
+    fn undoing_a_stopped_run_names_only_the_moves_it_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "other").unwrap();
+        state.outputs.insert("A/y.opus".into(), written());
+        state.save(&d.home).unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        // Each move is recorded before it is made; the run stops after the first.
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("B/y.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        drop(run);
+
+        let said = plan(&d).unwrap().lines().to_vec();
+        assert!(
+            said.contains(&"A/x.opus: moved back from B/x.opus".to_string()),
+            "{said:?}"
+        );
+        assert!(
+            !said.iter().any(|l| l.contains("B/y.opus")),
+            "never made: {said:?}"
+        );
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/y.opus")).unwrap(),
+            "other"
+        );
+    }
+
+    #[test]
     fn a_move_then_a_retag_is_undone_in_turn() {
         let dir = tempfile::tempdir().unwrap();
         let (d, mut state) = library(dir.path());
@@ -2311,7 +2652,18 @@ mod tests {
         std::fs::write(d.home.join(MANIFEST), "after").unwrap();
         run.finish(&d.home).unwrap();
 
-        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+        let planned = plan(&d).unwrap();
+        assert_eq!(
+            planned
+                .lines()
+                .iter()
+                .filter(|l| l.contains("B/x.opus"))
+                .count(),
+            1,
+            "the file moved and written over is said by its move: {:?}",
+            planned.lines()
+        );
+        undo(&d, planned, &mut Vec::new())
             .unwrap()
             .finish()
             .unwrap();
@@ -2324,6 +2676,101 @@ mod tests {
         assert_eq!(
             back.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/x.opus")]
+        );
+    }
+
+    /// A run that retags `A/x.opus`, its lyrics beside it left as they
+    /// were, then the lyrics written anew with no run of their own, as the
+    /// sync after an undo of a later run writes them.
+    fn retagged_then_lyrics_written_since(root: &Path) -> Dirs {
+        let (d, mut state) = library(root);
+        std::fs::write(d.library.join("A/x.lrc"), "old words").unwrap();
+        let lyrics = |library: &Path| crate::state::Sidecar::vouched(library, "A/x.lrc".into());
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.stamp = store::stamp_text(&d.library.join("A/x.opus"));
+        song.sidecars = vec![lyrics(&d.library)];
+        state.save(&d.home).unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.keep(&d.library, Path::new("A/x.opus")).unwrap();
+        std::fs::remove_file(d.library.join("A/x.opus")).unwrap();
+        std::fs::write(d.library.join("A/x.opus"), "retagged").unwrap();
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.stamp = store::stamp_text(&d.library.join("A/x.opus"));
+        state.save(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.finish(&d.home).unwrap();
+        std::fs::write(d.library.join("A/x.lrc"), "new words, longer").unwrap();
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.sidecars = vec![lyrics(&d.library)];
+        state.save(&d.home).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_file_beside_a_song_the_run_left_as_it_was_is_muman_s_as_written_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = retagged_then_lyrics_written_since(dir.path());
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "old"
+        );
+        let back = State::load(&d.home).unwrap();
+        let song = &back.outputs[Path::new("A/x.opus")];
+        assert!(
+            song.sidecars
+                .iter()
+                .all(|s| crate::reconcile::sidecar_as_written(&d.library, s)),
+            "{song:?}"
+        );
+    }
+
+    #[test]
+    fn a_song_none_of_whose_files_the_run_changed_is_put_back_as_written_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.stamp = store::stamp_text(&d.library.join("A/x.opus"));
+        state.save(&d.home).unwrap();
+        // A run whose write of the song failed: its record changed, and
+        // none of its files.
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.changing(Path::new("A/x.opus"));
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.sources = vec![SourceKey::youtube("aaaaaaaaaaa")];
+        state.save(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.finish(&d.home).unwrap();
+        // Written since with no run of its own, as an undo's sync writes.
+        std::fs::write(d.library.join("A/x.opus"), "written since").unwrap();
+        let song = state.outputs.get_mut(Path::new("A/x.opus")).unwrap();
+        song.stamp = store::stamp_text(&d.library.join("A/x.opus"));
+        song.digest = Some("since".into());
+        let since = crate::resolve::testing::every_part(crate::resolve::Format::Copy {
+            codec: crate::codec::Codec::Opus,
+        });
+        song.plan = Some(since.clone());
+        state.save(&d.home).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        let back = &State::load(&d.home).unwrap().outputs[Path::new("A/x.opus")];
+        assert_eq!(back.plan, Some(since), "the plan it was written from");
+        assert_eq!(back.digest.as_deref(), Some("since"), "{back:?}");
+        assert!(back.sources.is_empty(), "the sources it had: {back:?}");
+        assert!(
+            !crate::reconcile::changed_since_written(
+                &d.library,
+                &State::load(&d.home).unwrap().outputs,
+                Path::new("A/x.opus")
+            ),
+            "{back:?}"
         );
     }
 
@@ -2392,6 +2839,35 @@ mod tests {
             follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
             0
         );
+    }
+
+    #[test]
+    fn a_move_the_state_said_is_not_followed_onto_a_song_about_to_be_written_where_it_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("A/x two.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("A/x two.opus")).unwrap();
+        // Saved once moved, then a new song recorded ahead at the path left.
+        let moved = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        state.outputs.insert("A/x two.opus".into(), moved);
+        let about_to_be = Written {
+            sources: vec![SourceKey::Manual("new/c.flac".into())],
+            stamp: None,
+            ..written()
+        };
+        state.outputs.insert("A/x.opus".into(), about_to_be);
+        run.changing(Path::new("A/x.opus"));
+        run.checkpoint(&d.home).unwrap();
+        drop(run);
+        let saved = state.outputs.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            0
+        );
+        assert_eq!(state.outputs, saved, "each record stays with its own file");
     }
 
     #[test]
@@ -2499,6 +2975,56 @@ mod tests {
         assert_eq!(
             state.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/y.opus"), Path::new("B/x.opus")]
+        );
+    }
+
+    #[test]
+    fn a_move_after_one_that_failed_is_followed_and_a_half_move_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "edited by the user").unwrap();
+        state.outputs.insert("A/y.opus".into(), written());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        // x's move fails, as over a file held open; y's, of case alone,
+        // is stopped between its two renames.
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("A/Y.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::rename(
+            d.library.join("A/y.opus"),
+            d.library.join("A/Y.opus.moving"),
+        )
+        .unwrap();
+        drop(run);
+        let mut foreseen = state.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut foreseen, Moves::Foresee),
+            1
+        );
+        assert!(d.library.join("A/Y.opus.moving").exists(), "nothing moved");
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            1
+        );
+        assert_eq!(foreseen.outputs, state.outputs);
+        assert_eq!(
+            state.outputs.keys().collect::<Vec<_>>(),
+            [Path::new("A/Y.opus"), Path::new("A/x.opus")]
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/Y.opus")).unwrap(),
+            "edited by the user"
+        );
+
+        let mut resumed = Run::begin(&d.home).unwrap();
+        resumed.forget_unmade(&d.library);
+        assert_eq!(
+            resumed.record.moves,
+            [Moved {
+                from: "A/y.opus".into(),
+                to: "A/Y.opus".into(),
+            }]
         );
     }
 
