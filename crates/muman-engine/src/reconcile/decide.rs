@@ -862,6 +862,33 @@ impl Intent {
                 fates.insert(file.clone(), Fated::Written);
             }
         }
+        // Last, each file a filesystem blind to case spells otherwise takes
+        // its recorded spelling (`library::spell_as_recorded`).
+        let recorded: BTreeSet<&Path> = (self.moved.iter())
+            .flat_map(|(path, written)| written.files(path))
+            .chain(self.writes.values().flat_map(|r| {
+                std::iter::once(r.path.as_path()).chain(r.files.iter().map(PathBuf::as_path))
+            }))
+            .collect();
+        let mut listed = BTreeMap::new();
+        for path in recorded {
+            if fates.get(path) == Some(&Fated::Gone) {
+                continue;
+            }
+            let Some(on_disk) = crate::library::spelled_on_disk(found.root, path, &mut listed)
+                .filter(|d| d != path)
+            else {
+                continue;
+            };
+            let origin = match fates.get(&on_disk) {
+                Some(Fated::From(origin)) => origin.clone(),
+                _ => on_disk.clone(),
+            };
+            fates
+                .entry(path.to_path_buf())
+                .or_insert(Fated::From(origin));
+            fates.insert(on_disk, Fated::Gone);
+        }
         Foretold(fates)
     }
 }

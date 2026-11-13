@@ -630,6 +630,39 @@ pub fn spell_as_recorded(
     renamed
 }
 
+/// Where the file or folder `rel`, as muman's records spell it, is below
+/// `library` now: at `rel` itself, or at the spelling a filesystem blind
+/// to case keeps a name of it in, as [`spell_as_recorded`] finds it; none
+/// where nothing is. `listed` keeps each folder's names, read once.
+pub fn spelled_on_disk(
+    library: &Path,
+    rel: &Path,
+    listed: &mut BTreeMap<PathBuf, Vec<std::ffi::OsString>>,
+) -> Option<PathBuf> {
+    use crate::relpath::folded;
+    let mut at = PathBuf::new();
+    for part in rel.components() {
+        let name = part.as_os_str();
+        if !listed.contains_key(&at) {
+            let entries = std::fs::read_dir(library.join(&at)).ok()?;
+            let names = entries.flatten().map(|e| e.file_name()).collect();
+            listed.insert(at.clone(), names);
+        }
+        let names = &listed[&at];
+        if names.iter().any(|n| n == name) {
+            at.push(name);
+            continue;
+        }
+        let wanted = library.join(&at).join(name);
+        let found = names.iter().find(|n| {
+            folded(Path::new(n)) == folded(Path::new(name))
+                && same_file::is_same_file(library.join(&at).join(n), &wanted).unwrap_or(false)
+        })?;
+        at.push(found);
+    }
+    Some(at)
+}
+
 /// Remove each folder a removed file leaves empty, up to the library.
 // Removes the folders a removal emptied.
 #[expect(clippy::disallowed_methods)]
