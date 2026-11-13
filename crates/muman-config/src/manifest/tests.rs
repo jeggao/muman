@@ -339,6 +339,91 @@ fn a_source_listed_twice_is_refused() {
 }
 
 #[test]
+fn a_tag_set_under_two_spellings_of_its_name_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let song = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
+    for tags in [
+        "tags.title = \"Alpha\"\ntags.Title = \"Beta\"\n",
+        "tags.album_artist = \"Marlo Venn\"\ntags.ALBUMARTIST = \"Ada Quill\"\n",
+        "tags.mood = \"calm\"\ntags.MOOD = \"calm\"\n",
+    ] {
+        write(dir.path(), &format!("{song}{tags}"));
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains("both set"), "{tags}: {e:#}");
+    }
+    write(
+        dir.path(),
+        &format!("{song}tags.title = \"\"\ntags.TITLE = \"Upper\"\n"),
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].tags, [("TITLE".into(), vec!["Upper".into()])]);
+}
+
+#[test]
+fn a_tag_set_is_written_under_its_song_list_name_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![yt("aaaaaaaaaaa")],
+        album: None,
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: yt("aaaaaaaaaaa"),
+        tags: vec![
+            ("TITLE".into(), vec!["Upper".into()]),
+            ("AlbumArtist".into(), vec!["Marlo Venn".into()]),
+            ("MOOD".into(), vec!["calm".into()]),
+        ],
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    for line in [
+        "tags.title = \"Upper\"\n",
+        "tags.album_artist = \"Marlo Venn\"\n",
+        "tags.mood = \"calm\"\n",
+    ] {
+        assert_eq!(t.matches(line).count(), 1, "{line}: {t}");
+    }
+    assert!(
+        !t.contains("tags.TITLE") && !t.contains("tags.title = \"\""),
+        "{t}"
+    );
+    assert!(!t.contains("tags.album_artist = \"\""), "{t}");
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: yt("aaaaaaaaaaa"),
+        tags: vec![("Title".into(), Vec::new())],
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    assert_eq!(t.matches("tags.title = \"\"\n").count(), 1, "{t}");
+}
+
+#[test]
+fn a_tag_written_under_another_spelling_gains_no_empty_twin() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.TITLE = \"Upper\"\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![yt("bbbbbbbbbbb")],
+        album: None,
+    });
+    m.save(&mut Unrecorded).unwrap();
+    let t = text(dir.path());
+    assert!(t.contains("tags.TITLE = \"Upper\"\n"), "{t}");
+    assert_eq!(
+        t.matches("tags.title = \"\"\n").count(),
+        1,
+        "the new song's: {t}"
+    );
+}
+
+#[test]
 fn a_bad_key_is_refused_rather_than_dropping_its_song() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "[[song]]\nsources = [\"youtube:short\"]\n");

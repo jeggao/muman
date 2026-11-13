@@ -540,9 +540,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   its `--folder`, where it refused that folder as not empty, and a run
   clears a stopped run's scratch folder at once rather than after a
   minute, while a folder so named that holds no lock of muman's stays.
-- **A placeholder in any brackets is dropped**: `{unknown}`, as an ID3
-  genre `(12){unknown}` leaves, or `(no label)`, as `[unknown]` and
-  `[no label]` are, where it was written as the song's value.
+- **A placeholder is dropped however it is written**: in any brackets,
+  as `{unknown}`, which an ID3 genre `(12){unknown}` leaves, `(Unknown
+  Artist)` or `{Other}`; in quotes, as `“[unknown]”`; and whatever its
+  width, inner spaces or hyphens, as `[ no label ]` or `[non album
+  tracks]`, where it was written as the song's value, filed the song in
+  a folder `(Unknown Artist)`, and joined songs with differently quoted
+  placeholders into one album.
 - **A change refused because another run changed its song meanwhile
   exits 5**, as every refusal does, where `set`, `remove`, `restore`,
   `duplicates --merge` and stepping through `set` exited 4.
@@ -558,6 +562,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   the site says, where yt-dlp wrote the upload date, uploader and page
   title over them and muman read none: an archive.org file is dated and
   titled as its tags say.
+- **Genres split only where a list is**: `[Rock/Pop]` is `Rock` and
+  `Pop`, and a slash inside a bracket or in `N/A` parts nothing, where
+  the split wrote `[Rock` and `Pop]`, or `N` and `A`. `N/A` is dropped
+  as a placeholder, and an MP3's ID3 genre `(255)`, which means none, or
+  any number no ID3 genre has, gives no genre, where it was written as
+  the genre `255`.
+- **A tag set under two spellings of its name stops the run**, as
+  `tags.title` and `tags.Title` on one song, naming both, where one
+  value was dropped without a word. `set` writes a tag under one name,
+  as `tags.title` for `set TITLE=…`, where it wrote `tags.TITLE` beside
+  an empty `tags.title`.
+- **A quoted query reads alike on the command line and in `skip`**:
+  `'"paper comets"'` passed as one argument finds what `paper comets`
+  finds, as in a provider's `skip`, where it found nothing; and a tag no
+  song has after `has:` is refused, as any misspelled field is, where
+  `^has:<typo>` matched every song.
+- **`until = ["has:genre"]` is taken by `acoustid` and `musicbrainz`**,
+  whose records give the genres MusicBrainz's users voted for, where the
+  song list was refused.
 
 ## [0.11.0] - 2026-11-10
 

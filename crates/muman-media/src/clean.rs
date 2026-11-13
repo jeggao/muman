@@ -38,7 +38,8 @@
 //!
 //! - artists are split at `;` only, since a comma belongs to names such
 //!   as `Venn, Hale & Orchard`; genres split at `,`, `;` and `/`, never at
-//!   `&`, as in `Rock & Roll`;
+//!   `&`, as in `Rock & Roll`, inside a bracket but one around them all,
+//!   or in a value standing for none, as `N/A`;
 //! - a remaster note goes from a title, never from an album, whose
 //!   remaster is another release;
 //! - a bracket naming the video stays when it also says live, demo, mix,
@@ -1279,12 +1280,68 @@ fn disc_in_album(v: &str, _: &At<'_>) -> Option<Vec<String>> {
     disc_in(v).map(|(at, _)| vec![v[..at].to_string()])
 }
 
+/// The brackets a genre's separator inside stays in: `Rock (Hard/Soft)`
+/// is one genre.
+const GENRE_BRACKETS: [(char, char); 7] = [
+    ('(', ')'),
+    ('[', ']'),
+    ('{', '}'),
+    ('（', '）'),
+    ('［', '］'),
+    ('【', '】'),
+    ('〔', '〕'),
+];
+
+/// Genres joined in one value, parted at `,`, `;` or `/` outside every
+/// bracket, and inside one around them all, which it drops: `[Rock/Pop]`
+/// is `Rock` and `Pop`. A value whole that stands for none, as `N/A`
+/// ([`crate::detect::placeholder`]), is no list, nor one whose brackets
+/// do not pair.
 fn joined_genres(v: &str, _: &At<'_>) -> Option<Vec<String>> {
-    let parts: Vec<String> = v
-        .split([',', ';', '/', '；', '、'])
-        .map(str::to_string)
-        .collect();
-    (parts.len() > 1).then_some(parts)
+    if crate::detect::placeholder(Field::Genre, v) {
+        return None;
+    }
+    let tops = |s: &str| -> Option<Vec<usize>> {
+        let mut open: Vec<char> = Vec::new();
+        let mut at = Vec::new();
+        for (i, c) in s.char_indices() {
+            if let Some((_, close)) = GENRE_BRACKETS.iter().find(|(o, _)| *o == c) {
+                open.push(*close);
+            } else if GENRE_BRACKETS.iter().any(|(_, close)| *close == c) {
+                if open.pop() != Some(c) {
+                    return None;
+                }
+            } else if open.is_empty() && [',', ';', '/', '；', '、'].contains(&c) {
+                at.push(i);
+            }
+        }
+        open.is_empty().then_some(at)
+    };
+    let trimmed = v.trim();
+    let mut s = trimmed;
+    let mut at = tops(s)?;
+    if at.is_empty() {
+        let mut chars = trimmed.chars();
+        let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
+            return None;
+        };
+        let inner = chars.as_str();
+        if GENRE_BRACKETS.contains(&(first, last)) {
+            s = inner;
+            at = tops(s)?;
+        }
+    }
+    if at.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut from = 0;
+    for i in at {
+        parts.push(s[from..i].to_string());
+        from = i + s[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    parts.push(s[from..].to_string());
+    Some(parts)
 }
 
 /// Words a `'` opening them shortens, lower-case: `'til`, `rock 'n' roll`.

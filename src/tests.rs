@@ -6333,7 +6333,7 @@ fn set_shows_and_stores_each_value_as_it_takes_effect() {
     assert!(text.contains("→ 7\n"), "{text}");
     assert!(text.contains("→ 2019-07-04\n"), "{text}");
     let songs = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
-    assert!(songs.contains("tracknumber = \"7\""), "{songs}");
+    assert!(songs.contains("tags.track = \"7\""), "{songs}");
     let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "tracknumber=07"]);
     assert!(ok, "{text}");
     assert!(text.contains("Nothing changed"), "{text}");

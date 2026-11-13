@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/16";
+pub const METHOD: &str = "tags/17";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1479,7 +1479,7 @@ pub fn of_fetched(own: &BTreeMap<String, Vec<String>>, info: &VideoInfo) -> Offe
 
 /// Every field a MusicBrainz record can offer, as [`from_record`] does
 /// for one that names all it may.
-pub const RECORD_FIELDS: [Field; 27] = [
+pub const RECORD_FIELDS: [Field; 28] = [
     Field::Title,
     Field::Artist,
     Field::Artists,
@@ -1487,6 +1487,7 @@ pub const RECORD_FIELDS: [Field; 27] = [
     Field::MusicBrainzTrackId,
     Field::MusicBrainzArtistId,
     Field::Language,
+    Field::Genre,
     Field::Album,
     Field::AlbumArtist,
     Field::Track,
@@ -1510,7 +1511,8 @@ pub const RECORD_FIELDS: [Field; 27] = [
 ];
 
 /// What a MusicBrainz record offers: the recording's title, artists,
-/// ISRCs, IDs, first release's date and its works' lyrics languages, and
+/// ISRCs, IDs, first release's date and its works' lyrics languages, the
+/// genres MusicBrainz's users voted for ([`crate::genres`]), and
 /// its release's album, album
 /// artist, track, disc, date, track total, country, IDs, status, types
 /// and medium, and the labels, catalogue numbers, barcode, ASIN and
@@ -1647,8 +1649,10 @@ fn offer_release(o: &mut Offers, r: &crate::record::Release) {
 /// named as muman writes them (`render`), and a comment given
 /// twice, as two `TITLE`s, kept as two values where ffprobe joins them
 /// with `;`. The file's main tag first; another, as an `ID3v1` beside an
-/// `ID3v2`, adds only names the first lacks. `None` for a file `lofty`
-/// does not read, as Matroska.
+/// `ID3v2`, adds only names the first lacks. A genre frame naming none,
+/// as `TCON` `(255)`, is read as an empty genre ([`native`]), so neither
+/// reader gives its number as a genre. `None` for a file `lofty` does not
+/// read, as Matroska.
 #[must_use]
 pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>> {
     use lofty::file::TaggedFileExt;
@@ -1722,7 +1726,9 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
 /// freeform atom under Picard's capitals, a Vorbis comment its map has
 /// no key for, as `ASIN`, or an `ID3v2.3` genre given by its `ID3v1`
 /// number. An `ID3v2.3` artist is read whole, `/` and all, as Picard
-/// reads it: the slash that would part two names is in one's too.
+/// reads it: the slash that would part two names is in one's too. A
+/// `TCON` naming no genre, as `(255)`, reads as an empty genre, so no
+/// other reading of the file gives the number as one.
 fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<String, Vec<String>> {
     use lofty::file::{AudioFile, FileType};
 
@@ -1748,10 +1754,15 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
     if let Some(comments) = comments {
         return comments;
     }
+    let mut genre_frame = false;
     let read = match kind {
         FileType::Mpeg => lofty::mpeg::MpegFile::read_from(&mut file, options)
             .ok()
-            .and_then(|f| f.id3v2().map(id3_fields)),
+            .and_then(|f| {
+                let tag = f.id3v2()?;
+                genre_frame = tcon(tag).is_some();
+                Some(id3_fields(tag))
+            }),
         FileType::Mp4 => lofty::mp4::Mp4File::read_from(&mut file, options)
             .ok()
             .and_then(|f| f.ilst().map(ilst_fields)),
@@ -1760,11 +1771,17 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
             .and_then(|f| f.ape().map(ape_fields)),
         _ => None,
     };
-    read.unwrap_or_default()
+    let mut fields: BTreeMap<String, Vec<String>> = read
+        .unwrap_or_default()
         .into_iter()
         .filter(|(_, values)| !values.is_empty())
         .map(|(spec, values)| (spec.vorbis.to_ascii_lowercase(), values))
-        .collect()
+        .collect();
+    if genre_frame {
+        let genre = Field::Genre.vorbis().to_ascii_lowercase();
+        fields.entry(genre).or_default();
+    }
+    fields
 }
 
 type Read = Vec<(&'static Spec, Vec<String>)>;
@@ -1783,12 +1800,56 @@ fn vorbis_fields(comments: &lofty::ogg::tag::VorbisComments) -> BTreeMap<String,
     fields
 }
 
-/// The genres of `TCON`: an `ID3v1` number, `(17)` in 2.3 or `17` in
-/// 2.4, as its name, and a name given after its number once.
-fn genres(tag: &lofty::id3::v2::Id3v2Tag) -> Vec<String> {
+/// A `TCON` frame's text, its values parted by NUL as 2.4 parts them.
+fn tcon(tag: &lofty::id3::v2::Id3v2Tag) -> Option<&str> {
+    lofty::id3::v2::FrameId::new("TCON")
+        .ok()
+        .and_then(|id| tag.get_text(&id))
+}
+
+/// The genres of a `TCON` frame's text, as ID3 writes them: in 2.4 each
+/// value, in 2.3 each `(17)` reference and the text after them, where `((`
+/// starts text with `(`. A number is an `ID3v1` genre, read as its name,
+/// and `RX` and `CR` are `Remix` and `Cover`; 255, which `ID3v1` writes
+/// for none, or a number its list names nothing at, gives no genre. A
+/// bracket holding anything else is text, as `(Rock/Pop)`, and a name
+/// given after its number is given once.
+fn genres(text: &str) -> Vec<String> {
+    /// The genres a reference names, one or none; `None` for no reference.
+    fn reference(r: &str) -> Option<&'static [&'static str]> {
+        match r.trim() {
+            "RX" => Some(&["Remix"]),
+            "CR" => Some(&["Cover"]),
+            n if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => Some(
+                n.parse::<usize>()
+                    .ok()
+                    .and_then(|n| lofty::id3::v1::GENRES.get(n..=n))
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        }
+    }
+    let mut named: Vec<&str> = Vec::new();
+    for value in text.split('\0') {
+        let mut rest = value.trim();
+        while let Some(after) = rest.strip_prefix('(').filter(|a| !a.starts_with('('))
+            && let Some((r, tail)) = after.split_once(')')
+            && let Some(genre) = reference(r)
+        {
+            named.extend(genre);
+            rest = tail.trim_start();
+        }
+        match reference(rest) {
+            Some(genre) => named.extend(genre),
+            None => named.push(
+                rest.strip_prefix('(')
+                    .filter(|r| r.starts_with('('))
+                    .unwrap_or(rest),
+            ),
+        }
+    }
     let mut out: Vec<String> = Vec::new();
-    for genre in tag.genres().into_iter().flatten() {
-        let genre = genre.trim();
+    for genre in named.into_iter().map(str::trim) {
         if !genre.is_empty() && !out.iter().any(|g| g == genre) {
             out.push(genre.to_string());
         }
@@ -1817,7 +1878,7 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
         .iter()
         .map(|spec| {
             let values = match spec.id3 {
-                Id3::Text("TCON") => genres(tag),
+                Id3::Text("TCON") => tcon(tag).map(genres).unwrap_or_default(),
                 // iTunes writes a grouping into `GRP1`, its `TIT1` then the work.
                 Id3::Text("TIT1") => text("GRP1").or_else(|| text("TIT1")).unwrap_or_default(),
                 Id3::Text(id) | Id3::Place(id) => text(id).unwrap_or_default(),
@@ -2619,6 +2680,10 @@ mod tests {
         let o = from_record(&record);
         let mut whole = record.clone();
         whole.credit = "A & B".into();
+        whole.genres = vec![crate::record::Genre {
+            name: "ambient".into(),
+            count: 2,
+        }];
         if let Some(r) = whole.release.as_mut() {
             r.track_id = Some("00000000-0000-0000-0000-00000000000c".into());
             r.details.asin = Some("B000000001".into());
@@ -2853,6 +2918,48 @@ mod tests {
     }
 
     #[test]
+    fn a_tcon_reads_as_id3_writes_its_genres() {
+        for (text, read) in [
+            ("(17)", vec!["Rock"]),
+            ("(17)(13)", vec!["Rock", "Pop"]),
+            ("(17)Rock", vec!["Rock"]),
+            ("(RX)(CR)", vec!["Remix", "Cover"]),
+            ("(12){unknown}", vec!["Other", "{unknown}"]),
+            ("((Harbor) Folk", vec!["(Harbor) Folk"]),
+            ("17\0Night Pop\0CR", vec!["Rock", "Night Pop", "Cover"]),
+            ("(Rock/Pop)", vec!["(Rock/Pop)"]),
+            ("Ambient", vec!["Ambient"]),
+            ("(255)", vec![]),
+            ("255", vec![]),
+            ("(17)(255)(400)", vec!["Rock"]),
+            ("99999999999999999999", vec![]),
+        ] {
+            assert_eq!(genres(text), read, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_tcon_naming_no_genre_gives_none_by_any_reading() {
+        use lofty::config::WriteOptions;
+        use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("a.mp3");
+        std::fs::write(&mp3, crate::testing::SILENCE_MP3).unwrap();
+        let mut id3 = Id3v2Tag::new();
+        id3.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::new("TCON").unwrap(),
+            lofty::TextEncoding::UTF8,
+            "(255)".to_string(),
+        )));
+        id3.save_to_path(&mp3, WriteOptions::default()).unwrap();
+        let probed = BTreeMap::from([("genre".to_string(), "(255)".to_string())]);
+        let o = from_container(&of_both(read_file(&mp3), &probed));
+        assert!(!o.contains_key(&Field::Genre), "{o:?}");
+    }
+
+    #[test]
     fn a_file_s_own_lyrics_are_read_with_the_language_a_uslt_frame_names() {
         use lofty::config::WriteOptions;
         use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
@@ -3080,7 +3187,7 @@ mod tests {
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/16",
+        "tags/17",
         "5867e0cfc67f5bc7fe9430cc4f2437e695a13e6010b58d2fc11c02142afceb90",
     );
 

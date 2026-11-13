@@ -16,7 +16,9 @@
 //! as an album's songs share its cover. A key that does not parse, a
 //! file two songs list, and a pin outside the song's sources stop the
 //! run before anything is written, rather than a song being silently
-//! dropped and its file deleted.
+//! dropped and its file deleted; so does a tag set under two spellings
+//! of its name, as `tags.title` and `tags.Title`, rather than one value
+//! silently winning.
 //!
 //! A list in which songs share a picture of the user's is format version
 //! 3, and one in which they share only records a lookup keeps version 2:
@@ -47,9 +49,12 @@
 //!
 //! Every write puts the usage comment atop the file, replacing one an
 //! earlier version wrote, while the user's own comments below it stay;
-//! and it gives each song the common `tags.<name>` keys it lacks, added
-//! empty, so the file shows what can be set. Tags are dotted keys last
-//! in their song, not a `[song.tags]` table, so each song reads as one
+//! and it gives each song the common `tags.<name>` keys it lacks, under
+//! any spelling, added empty, so the file shows what can be set. A tag
+//! muman sets is written under the one name the song list gives it
+//! ([`tags::song_list_name`]), over its other spellings. Tags are
+//! dotted keys last in their song, not a `[song.tags]` table, so each
+//! song reads as one
 //! block between blank lines; a `[song.tags]` written by hand is read
 //! the same and written back dotted. Anything a song gains later takes
 //! a dotted prefix of its own in the same block, never a table. A key under
@@ -2159,8 +2164,6 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
     }
 }
 
-/// Set `tags` in a song table's `tags`, over any it sets under
-/// another spelling of their names; a tag with no values is cleared.
 /// `drop` added to the `[[tags.from]]` naming `torrent` or `channel`, or
 /// to a new one after the others.
 fn tags_from(
@@ -2210,6 +2213,9 @@ fn tags_from(
     Ok(())
 }
 
+/// Set `tags` in a song table's `tags`, each under the name the song list
+/// gives it ([`tags::song_list_name`]) and over any it sets under another
+/// spelling of it; a tag with no values is cleared.
 pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     let table = song
         .entry("tags")
@@ -2220,7 +2226,8 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
         return;
     };
     for (name, values) in tags {
-        let field = tags::vorbis_key(name);
+        let name = tags::song_list_name(name);
+        let field = tags::vorbis_key(&name);
         let spellings: Vec<String> = table
             .iter()
             .map(|(k, _)| k.to_string())
@@ -2247,7 +2254,7 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
         for k in &spellings {
             table.remove(k);
         }
-        table.insert(name, item);
+        table.insert(&name, item);
     }
 }
 
@@ -2384,7 +2391,8 @@ fn dot_tags(table: &mut Table, template: bool) -> bool {
     }
     if template {
         for name in TAG_TEMPLATE {
-            if !tags.contains_key(name) {
+            let field = tags::vorbis_key(name);
+            if !tags.iter().any(|(k, _)| tags::vorbis_key(k) == field) {
                 tags.insert(name, value(""));
                 changed = true;
             }
@@ -2633,7 +2641,10 @@ fn switches_template(
 /// nothing. A value its field cannot hold, as a date that is none, or of
 /// any other type, as a table, refuses the song list, naming the song as
 /// `what`; but a language no ISO 639 table names, which an earlier muman
-/// set, is left out and said in `left_out`, so the list still reads.
+/// set, is left out and said in `left_out`, so the list still reads. Two
+/// spellings of one tag's name both setting it, as `tags.title` and
+/// `tags.Title`, refuse it too, as neither is the one meant; an empty one
+/// beside another, which an earlier `set` wrote, sets nothing.
 fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Result<Tags> {
     let Some(t) = item.and_then(Item::as_table_like) else {
         return Ok(Vec::new());
@@ -2648,7 +2659,7 @@ fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Resul
             "{what}: tags.{key} is no text, number, yes or no, date or list of them"
         )),
     };
-    let mut tags = Vec::new();
+    let mut tags: Tags = Vec::new();
     for (key, item) in t.iter() {
         let Some(value) = item.as_value() else {
             bail!("{what}: tags.{key} is no text, number, yes or no, date or list of them");
@@ -2674,9 +2685,18 @@ fn tags_of(item: Option<&Item>, what: &str, left_out: &mut Vec<String>) -> Resul
                 Err(why) => bail!("{what}: tags.{why}"),
             }
         }
-        if !values.is_empty() {
-            tags.push((key.to_string(), values));
+        if values.is_empty() {
+            continue;
         }
+        let field = tags::vorbis_key(key);
+        if let Some((twin, _)) = tags.iter().find(|(k, _)| tags::vorbis_key(k) == field) {
+            bail!(
+                "{what}: tags.{twin} and tags.{key} both set {}, as a tag's name is read \
+                 whatever its case; keep one, listing both values there to set both",
+                tags::song_list_name(key)
+            );
+        }
+        tags.push((key.to_string(), values));
     }
     Ok(tags)
 }

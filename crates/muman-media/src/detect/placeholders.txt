@@ -1,7 +1,8 @@
 # Values sources write where they know none, by the field they stand in,
 # one a line as `FIELD<tab>value`; `*` stands for every field. A value is
-# compared whole, case aside, so `[unknown]` is no placeholder for a song
-# titled `Unknown`.
+# compared whole, as `detect.rs` reads both, and holds in any brackets
+# around it all; one listed in brackets holds only in brackets, so
+# `[unknown]` is no placeholder for a song titled `Unknown`.
 #
 # MusicBrainz's special purpose artists, label and release, which stand
 # for no artist, no label and no album:
@@ -34,6 +35,7 @@ ARTIST	未知艺术家
 ALBUMARTIST	未知艺术家
 GENRE	Other
 GENRE	Unknown
+GENRE	N/A
 # A video site's categories, given where its extractor names a genre.
 GENRE	音楽・サウンド
 GENRE	エンターテイメント

@@ -10,9 +10,8 @@ programs and settings, and [the command reference](cli.md) every flag.
 
 ## The home
 
-The home holds everything muman needs to make the library again. The
-library holds only what muman writes from it. `muman info` shows where
-both are.
+The home holds everything muman needs to make the library again. The library
+holds only what muman writes from it. `muman info` shows where both are.
 
 | Path in the home | Holds |
 |---|---|
@@ -247,7 +246,8 @@ two runs at once keep each other's songs. Each write fills in the common
 `tags.<name>` keys a song lacks, empty, so you can see what to set.
 
 These stop a run before anything is written: a key that does not parse,
-a file two songs list, and a pin to a source the song does not list.
+a file two songs list, a pin to a source the song does not list, and a
+tag set under two spellings of its name, as `tags.title` and `tags.Title`.
 muman writes each song list in the oldest format that holds its songs,
 and an older muman refuses a newer format rather than misread it. Songs
 sharing a lookup's record need `version = 2`, songs sharing a picture of

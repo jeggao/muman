@@ -481,6 +481,15 @@ fn albums_lose_a_disc_and_keep_their_edition() {
 fn joined_names_and_genres_split_where_a_list_is_certain() {
     assert_eq!(kept(Field::Genre, "Pop, Rock"), ["Pop", "Rock"]);
     assert_eq!(kept(Field::Genre, "Rock & Roll"), ["Rock & Roll"]);
+    assert_eq!(kept(Field::Genre, "[Rock/Pop]"), ["Rock", "Pop"]);
+    assert_eq!(kept(Field::Genre, "(Rock/Pop)"), ["Rock", "Pop"]);
+    assert_eq!(
+        kept(Field::Genre, "Rock (Hard/Soft), Pop"),
+        ["Rock (Hard/Soft)", "Pop"]
+    );
+    for whole in ["N/A", "n/a", "(N/A)", "[Rock/Pop", "(Rock)/Pop)"] {
+        assert_eq!(kept(Field::Genre, whole), [whole], "{whole}");
+    }
     assert_eq!(
         kept(Field::Artist, "The Glass Orchards;Odell Ferrin"),
         ["The Glass Orchards", "Odell Ferrin"]

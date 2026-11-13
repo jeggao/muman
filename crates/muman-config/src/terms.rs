@@ -56,12 +56,14 @@ pub struct Term {
 #[derive(Debug, Clone, Default)]
 pub struct Query(pub Vec<Term>);
 
-/// `text` without one pair of double quotes around it, so that
-/// `album:="The Glass Orchards"` reads alike whether a shell took its
-/// quotes or they reached muman.
+/// `text` without one pair of double or single quotes around it, so that
+/// `"paper comets"` and `album:="The Glass Orchards"` read alike whether
+/// a shell took their quotes, as the song list's queries are split, or
+/// they reached muman, as one argument holding them.
 fn unquoted(text: &str) -> &str {
-    text.strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
+    ['"', '\'']
+        .into_iter()
+        .find_map(|q| text.strip_prefix(q).and_then(|t| t.strip_suffix(q)))
         .unwrap_or(text)
 }
 
@@ -74,17 +76,22 @@ impl Query {
             .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
     }
 
-    /// The first field a term names that is no tag muman knows and that
-    /// `had`, given its Vorbis name, says no song has: a misspelling, which
-    /// would match nothing, or negated, every song.
-    pub fn unknown_field(&self, had: impl Fn(&str) -> bool) -> Option<&str> {
+    /// The first field a term names, or tag a `has:` term asks for, that is
+    /// no tag muman knows and that `had`, given its Vorbis name, says no
+    /// song has: a misspelling, which would match nothing, or negated,
+    /// every song.
+    pub fn unknown_field(&self, had: impl Fn(&str) -> bool) -> Option<String> {
         self.0.iter().find_map(|term| {
-            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
-                &term.test
-            else {
-                return None;
+            let (field, known) = match &term.test {
+                Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _) => {
+                    (field.clone(), is_field(field))
+                }
+                Test::Is(Closed::Has(tag)) => {
+                    (tags::song_list_name(tag), Field::named(tag).is_some())
+                }
+                _ => return None,
             };
-            (!is_field(field) && !had(&tags::vorbis_key(field))).then_some(field.as_str())
+            (!known && !had(&tags::vorbis_key(&field))).then_some(field)
         })
     }
 
@@ -114,9 +121,10 @@ impl Query {
     pub fn parse_terms(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
         let mut parsed = Vec::new();
         for raw in terms {
-            let (negated, body) = match raw.strip_prefix('^') {
-                Some(rest) => (true, rest),
-                None => (false, raw.as_str()),
+            let term = unquoted(raw);
+            let (negated, body) = match term.strip_prefix('^') {
+                Some(rest) => (true, unquoted(rest)),
+                None => (false, term),
             };
             if body.trim().is_empty() {
                 bail!("`{raw}` is an empty term");
@@ -290,6 +298,55 @@ mod tests {
         assert_eq!(
             fold("Twenty\u{2010}Five \u{2019}n\u{2019} \u{201c}x\u{201d}"),
             fold("twenty-five 'n' \"x\"")
+        );
+    }
+
+    /// A term's test, as `Debug` writes it, and whether it is negated.
+    fn read(term: &str) -> (bool, String) {
+        let q = Query::parse_terms(&[term.to_string()], &BTreeSet::new()).unwrap();
+        (q.0[0].negated, format!("{:?}", q.0[0].test))
+    }
+
+    #[test]
+    fn a_term_reads_alike_whether_a_shell_took_its_quotes_or_not() {
+        let text = |t: &str| {
+            let q = parse_text(t, &BTreeSet::new()).unwrap();
+            (q.0[0].negated, format!("{:?}", q.0[0].test))
+        };
+        for (quoted, plain) in [
+            ("\"paper comets\"", "paper comets"),
+            ("'02 Tide.flac'", "02 Tide.flac"),
+            ("^\"paper comets\"", "^paper comets"),
+            ("\"^paper comets\"", "^paper comets"),
+            ("\"title:paper comets\"", "title:paper comets"),
+            ("album:=\"The Glass Orchards\"", "album:=The Glass Orchards"),
+        ] {
+            assert_eq!(read(quoted), read(plain), "{quoted}");
+            assert_eq!(text(quoted), read(plain), "{quoted} in the song list");
+        }
+        assert_eq!(read("\"paper comets\"").1, "Word(\"paper comets\")");
+    }
+
+    #[test]
+    fn a_tag_no_song_has_and_muman_knows_not_is_refused_under_has_too() {
+        let parse = |t: &str| Query::parse_terms(&[t.to_string()], &BTreeSet::new()).unwrap();
+        let none = |_: &str| false;
+        for term in ["has:dat", "^has:dat", "has:path"] {
+            assert!(parse(term).unknown_field(none).is_some(), "{term}");
+        }
+        assert_eq!(
+            parse("^has:DAT").unknown_field(none).as_deref(),
+            Some("dat")
+        );
+        assert_eq!(parse("^dat:x").unknown_field(none).as_deref(), Some("dat"));
+        for term in ["has:genre", "^has:album_artist", "has:albumartist"] {
+            assert_eq!(parse(term).unknown_field(none), None, "{term}");
+        }
+        let mood = |name: &str| name == "MOOD";
+        assert_eq!(
+            parse("^has:mood").unknown_field(mood),
+            None,
+            "a song has it"
         );
     }
 }

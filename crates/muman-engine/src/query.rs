@@ -8,11 +8,14 @@
 //! text with spaces, as one argument quoted, is its words, each to match
 //! as one alone would, so a script passing `"$query"` finds what the
 //! words typed apart find; all of it may still name a file whole, as
-//! `"02 tide.flac"`. `field:text` a field containing the text, spaces
-//! and all, `field:=text` one equal to it, `field::regex` one matching
-//! it; `^` before any term negates it. A
-//! field that is no tag muman knows and that no song has is refused, so
-//! a misspelled one neither matches nothing nor, negated, every song.
+//! `"02 tide.flac"`. Quotes around a term, or around a field's text, read
+//! alike whether a shell took them, as the song list's queries are split,
+//! or they reached muman in one argument. `field:text` a field containing
+//! the text, spaces and all, `field:=text` one equal to it, `field::regex`
+//! one matching it; `^` before any term negates it. A field, or a tag
+//! `has:` asks for, that is no tag muman knows and that no song has is
+//! refused, so a misspelled one neither matches nothing nor, negated,
+//! every song.
 //! A source key, as `youtube.com:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case and
 //! accents are ignored throughout, as is how a name was composed: `cafe`
@@ -374,7 +377,7 @@ impl QueryMatch for Query {
     fn check_fields(&self, views: &[View]) -> Result<()> {
         let had = |name: &str| views.iter().any(|v| v.tags.iter().any(|(k, _)| k == name));
         match self.unknown_field(had) {
-            Some(field) => Err(crate::errors::Refused(crate::terms::no_field(field)).into()),
+            Some(field) => Err(crate::errors::Refused(crate::terms::no_field(&field)).into()),
             None => Ok(()),
         }
     }

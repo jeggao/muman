@@ -12,11 +12,13 @@
 //! as `Show OST 2`, on 38 as their artist.
 //!
 //! - A **placeholder** is a value `placeholders.txt` lists for its field,
-//!   compared whole, case, spacing, typography and the kind of brackets
-//!   around it all aside ([`BRACKETS`]): taggers write MusicBrainz's
-//!   `[unknown]` as `{unknown}` or `(unknown)` too, and an `ID3v2.3`
-//!   genre such as `(12){unknown}` leaves its braced text once its number
-//!   is read as `Other`. Or it is a credit that names a soundtrack
+//!   compared whole as every value here is ([`plain`]), and in brackets
+//!   around it all or not, so `(Unknown Artist)` is one too: taggers
+//!   write MusicBrainz's `[unknown]` as `{unknown}` or `(unknown)`, and
+//!   an `ID3v2.3` genre such as `(12){unknown}` leaves its braced text
+//!   once its number is read as `Other`. A value listed in brackets is a
+//!   placeholder only in brackets, so `[unknown]` is none for a song
+//!   titled `Unknown`. Or it is a credit that names a soundtrack
 //!   rather than anyone, ending in `OST` and perhaps its volume: files
 //!   tagged by album, their artist filled with the album's short name.
 //!   A release country that is no two-letter code, as a group's name
@@ -39,17 +41,21 @@
 //!   names a release, and only the first two tests hold it.
 //!
 //! A source group is the torrent a file came from, else the folder or the
-//! site, as the caller says. Values are compared folded to their letters
-//! and digits, case aside.
+//! site, as the caller says. Values are compared by their letters and
+//! digits alone.
 //!
-//! Each test holds a value alike whether cleaning has run on it or not:
-//! `tidy.typography` writes `[non-album tracks]` with the hyphen U+2010,
-//! and the spacing rule makes a no-break space a space, so a placeholder
-//! is compared with its spaces, quotes and hyphens as ASCII writes them,
-//! and a watermark by its letters and digits alone.
+//! Every test reads a value one way first ([`plain`]), so it holds a value
+//! alike however it is written and whether cleaning has run on it or not:
+//! width, case, spacing, quotes and brackets around it all, and which
+//! hyphen or dash it has, or a space for one, say nothing. `tidy.typography`
+//! writes `[non-album tracks]` with the hyphen U+2010 and `"[unknown]"` as
+//! `“[unknown]”`, the spacing rule makes a no-break space a space, and a
+//! tagger may write `[ no label ]`, `‘[no label]’` or `[non album tracks]`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
+
+use unicode_normalization::UnicodeNormalization;
 
 use crate::tags::{Field, Offers};
 
@@ -72,10 +78,10 @@ pub const TITLES: usize = 10;
 /// The fields a soundtrack's short name stands in as a placeholder.
 const CREDITS: [Field; 3] = [Field::Artist, Field::Artists, Field::AlbumArtist];
 
-/// `placeholders.txt`, each field's placeholders lower-cased; `None` for
-/// those of every field.
-static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<String>>> = LazyLock::new(|| {
-    let mut table: BTreeMap<Option<Field>, BTreeSet<String>> = BTreeMap::new();
+/// `placeholders.txt`, each field's placeholders as [`plain`] reads
+/// them; `None` for those of every field.
+static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<Plain>>> = LazyLock::new(|| {
+    let mut table: BTreeMap<Option<Field>, BTreeSet<Plain>> = BTreeMap::new();
     for line in include_str!("detect/placeholders.txt").lines() {
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
@@ -96,48 +102,101 @@ static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<String>>> = LazyL
     table
 });
 
-/// The brackets a placeholder may be written in, each read as `[` and
-/// `]` when they hold the whole value.
-const BRACKETS: [(char, char); 8] = [
+/// The brackets a value may be written in, around it all, width aside:
+/// `（` is `(`.
+const BRACKETS: [(char, char); 9] = [
     ('(', ')'),
+    ('[', ']'),
     ('{', '}'),
     ('<', '>'),
-    ('（', '）'),
-    ('［', '］'),
-    ('｛', '｝'),
     ('【', '】'),
     ('〔', '〕'),
+    ('〖', '〗'),
+    ('〈', '〉'),
+    ('《', '》'),
 ];
 
-/// `value` as a placeholder is compared: its spaces one space each, its
-/// quotes and hyphens as ASCII writes them, brackets around it all as
-/// `[` and `]`, lower-cased.
-fn plain(value: &str) -> String {
-    let words: Vec<&str> = value.split_whitespace().collect();
-    let plain = words
-        .join(" ")
-        .chars()
+/// The quotes a value may be written in, around it all, as ASCII writes
+/// them where it has them: `“` is `"`.
+const QUOTES: [(char, char); 8] = [
+    ('"', '"'),
+    ('\'', '\''),
+    ('„', '"'),
+    ('‚', '\''),
+    ('«', '»'),
+    ('‹', '›'),
+    ('「', '」'),
+    ('『', '』'),
+];
+
+/// A value as every test here compares it ([`plain`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Plain {
+    /// Whether brackets stood around it all, as around `[unknown]`.
+    bracketed: bool,
+    text: String,
+}
+
+/// `value` as every test here compares it: in Unicode's compatibility
+/// form, so width says nothing; its quotes as ASCII writes them and each
+/// hyphen or dash a space; lower-cased; the quotes and brackets around
+/// it all taken off, however many and in whatever order, with the
+/// spaces inside them; its spaces one space each.
+fn plain(value: &str) -> Plain {
+    let flat: String = value
+        .nfkc()
         .map(crate::clean::plain_punctuation)
+        .map(|c| if is_dash(c) { ' ' } else { c })
         .collect::<String>()
         .to_lowercase();
-    let mut chars = plain.chars();
-    let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
-        return plain;
-    };
-    let inner = chars.as_str();
-    match BRACKETS.iter().find(|(o, c)| *o == first && *c == last) {
-        Some(&(o, c)) if !inner.contains([o, c]) => format!("[{}]", inner.trim()),
-        _ => plain,
+    let mut text = flat.trim();
+    let mut bracketed = false;
+    loop {
+        let mut chars = text.chars();
+        let (Some(first), Some(last)) = (chars.next(), chars.next_back()) else {
+            break;
+        };
+        let inner = chars.as_str();
+        let around = |pairs: &[(char, char)]| {
+            (pairs.iter()).any(|&(o, c)| o == first && c == last && !inner.contains([o, c]))
+        };
+        if around(&BRACKETS) {
+            bracketed = true;
+        } else if !around(&QUOTES) {
+            break;
+        }
+        text = inner.trim();
+    }
+    Plain {
+        bracketed,
+        text: text.split_whitespace().collect::<Vec<_>>().join(" "),
     }
 }
 
-/// Whether `value` stands for no value in `field`.
+/// Whether `c` is a hyphen or a dash, which spellings of one value swap
+/// for each other or for a space: `[non-album tracks]`, `[non album
+/// tracks]`.
+fn is_dash(c: char) -> bool {
+    matches!(
+        c,
+        '-' | '\u{2010}'..='\u{2015}' | '\u{2212}' | '\u{fe58}' | '\u{fe63}'
+    )
+}
+
+/// Whether `value` stands for no value in `field`: listed for it, both
+/// read as [`plain`] reads them, and brackets around it that the listed
+/// value lacks aside, so `(Unknown Artist)` is `Unknown Artist`; but a
+/// value listed in brackets, as `[unknown]`, is never one written bare.
 #[must_use]
 pub fn placeholder(field: Field, value: &str) -> bool {
     let plain = plain(value);
-    let listed = [None, Some(field)]
-        .iter()
-        .any(|f| PLACEHOLDERS.get(f).is_some_and(|set| set.contains(&plain)));
+    let bare = Plain {
+        bracketed: false,
+        text: plain.text.clone(),
+    };
+    let listed = [None, Some(field)].iter().any(|f| {
+        (PLACEHOLDERS.get(f)).is_some_and(|set| set.contains(&plain) || set.contains(&bare))
+    });
     listed
         || (CREDITS.contains(&field) && names_a_soundtrack(value))
         || (field == Field::ReleaseCountry && !is_country(value.trim()))
@@ -288,12 +347,12 @@ fn name_tags(name: &str) -> BTreeSet<String> {
     tags
 }
 
-/// `value`'s letters and digits, lower-cased.
+/// `value`'s letters and digits as [`plain`] reads them.
 fn fold(value: &str) -> String {
-    value
+    plain(value)
+        .text
         .chars()
         .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
         .collect()
 }
 
@@ -350,7 +409,34 @@ mod tests {
             assert!(placeholder(Field::Album, value), "{value}");
         }
         assert!(placeholder(Field::Artist, "Unknown\u{a0}Artist"));
-        assert!(!placeholder(Field::Album, "[non album tracks]"));
+        assert!(placeholder(Field::Album, "[non album tracks]"));
+        assert!(placeholder(Field::Album, "[non \u{2013} album tracks]"));
+        assert!(
+            placeholder(Field::Artist, "Ｕｎｋｎｏｗｎ Ａｒｔｉｓｔ"),
+            "width aside"
+        );
+        assert!(!placeholder(Field::Album, "[nonalbum tracks]"));
+    }
+
+    #[test]
+    fn a_placeholder_is_one_in_quotes() {
+        for value in [
+            "\"[unknown]\"",
+            "\u{201c}[unknown]\u{201d}",
+            "'[unknown]'",
+            "\u{ab}[unknown]\u{bb}",
+            "\u{300c}[unknown]\u{300d}",
+            "\u{201c} [ unknown ] \u{201d}",
+        ] {
+            assert!(placeholder(Field::Album, value), "{value}");
+        }
+        assert!(placeholder(Field::Label, "\u{2018}[no label]\u{2019}"));
+        assert!(placeholder(Field::Artist, "\"Unknown Artist\""));
+        assert!(
+            !placeholder(Field::Title, "\"Unknown\""),
+            "a title of its own, quoted"
+        );
+        assert!(!placeholder(Field::Title, "\"[unknown]\" Shore"));
     }
 
     #[test]
@@ -361,10 +447,21 @@ mod tests {
             "<unknown>",
             "（unknown）",
             "{ unknown }",
+            "[ unknown ]",
+            "［ＵＮＫＮＯＷＮ］",
+            "{Other}",
         ] {
             assert!(placeholder(Field::Genre, value), "{value}");
         }
         assert!(placeholder(Field::Label, "(no label)"));
+        assert!(placeholder(Field::Label, "[ no label ]"));
+        assert!(placeholder(Field::AlbumArtist, "(Unknown Artist)"));
+        assert!(placeholder(Field::Album, "{Unknown Album}"));
+        assert!(placeholder(Field::Genre, "(Other)"));
+        assert!(
+            !placeholder(Field::Title, "Unknown"),
+            "listed in brackets alone"
+        );
         assert!(
             !placeholder(Field::Title, "(Unknown) Shore"),
             "a title of its own"

@@ -27,7 +27,8 @@ matches "Café":
 Words quoted together, as `"paper comets"`, are still each a word of
 its own, so a script passing a query as one argument finds what the
 words typed apart find; all of them together may also name a file
-whole, as `"02 Tide.flac"`. A field's text is one phrase:
+whole, as `"02 Tide.flac"`. Quotes read alike on the command line, where
+a script may pass them in one argument, and in a provider's `skip`. A field's text is one phrase:
 `title:"paper comets"` finds that title, not "Comets of Paper". A
 regular expression is matched against the field lower-cased and with
 its accents taken off, and its own accents are taken off too, so
@@ -48,9 +49,10 @@ A field is any tag, or one of these:
 `lyrics`, `cover`, `from` and `has` compare their value whole, so
 `lyrics:timed` never matches "untimed". An album artist muman takes
 from the artist, or an album named after a single's title, is no tag
-for `has`. muman refuses a field, here or in a provider's `skip`, that
-is no tag it knows and that no song has, so a misspelled field never
-quietly matches nothing, or every song when negated.
+for `has`. muman refuses a field, or a tag after `has:`, here or in a
+provider's `skip`, that is no tag it knows and that no song has, so a
+misspelled field never quietly matches nothing, or every song when
+negated.
 
 ## Changing songs
 

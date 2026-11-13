@@ -229,7 +229,7 @@ impl Config {
         for (what, text) in all {
             let query = crate::terms::parse_text(text, &schemes)?;
             if let Some(field) = query.unknown_field(&had) {
-                let why = format!("{what}: `{text}`: {}", crate::terms::no_field(field));
+                let why = format!("{what}: `{text}`: {}", crate::terms::no_field(&field));
                 return Err(crate::errors::Invalid(why).into());
             }
         }
@@ -517,7 +517,10 @@ mod tests {
             format!("{e:#}").contains("lyrics:timed, lyrics:yes, from:lrclib"),
             "the error names what lrclib takes: {e:#}"
         );
-        assert!(config("[providers.musicbrainz]\nuntil = \"has:genre\"\n").is_err());
+        for p in ["musicbrainz", "acoustid"] {
+            config(&format!("[providers.{p}]\nuntil = \"has:genre\"\n"))
+                .unwrap_or_else(|e| panic!("a record's genres, from {p}: {e:#}"));
+        }
         let e = config("[providers.musicbrainz]\nuntil = \"has:mood\"\n").unwrap_err();
         let said = format!("{e:#}");
         for name in [
