@@ -559,6 +559,73 @@ pub fn finish_move(library: &Path, from: &Path, to: &Path) -> bool {
         && crate::atomic::rename(&library.join(named(to, MOVING)), &library.join(to)).is_ok()
 }
 
+/// Each folder below `library` that every file `outputs` records in it
+/// spells alike, renamed to that spelling where a filesystem blind to
+/// case keeps it under another, as each renamed, from and to.
+///
+/// A move or a write into `Chan/Lantern` lands, on such a filesystem, in
+/// a `Chan/lantern` already there, so a song retitled in case alone kept
+/// its folder's old spelling, while a filesystem that tells case apart
+/// makes the folder anew: the records then named a path the disk spelled
+/// otherwise, and `check` took the song's own file for another's. A
+/// folder is renamed only where the spelling the records agree on opens
+/// that very folder, so a filesystem that tells case apart, where it
+/// would open another or none, never has one renamed; a folder whose
+/// files' records spell it two ways is left as it is. No run records the
+/// rename: the sync after an `undo` spells the folder back as the records
+/// it puts back do.
+#[must_use]
+pub fn spell_folders(
+    library: &Path,
+    outputs: &BTreeMap<PathBuf, Written>,
+) -> Vec<(PathBuf, PathBuf)> {
+    use crate::relpath::folded;
+    let mut spellings: BTreeMap<String, BTreeSet<&Path>> = BTreeMap::new();
+    for (path, written) in outputs {
+        for file in written.files(path) {
+            for folder in file.ancestors().skip(1) {
+                if !folder.as_os_str().is_empty() {
+                    spellings.entry(folded(folder)).or_default().insert(folder);
+                }
+            }
+        }
+    }
+    let mut folders: Vec<&Path> = (spellings.into_values())
+        .filter(|s| s.len() == 1)
+        .flatten()
+        .collect();
+    // A folder's parent is spelled first, so the folder is found under it.
+    folders.sort_by_key(|f| f.components().count());
+    let mut renamed = Vec::new();
+    for folder in folders {
+        let (Some(parent), Some(name)) = (folder.parent(), folder.file_name()) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(library.join(parent)) else {
+            continue;
+        };
+        let names: Vec<std::ffi::OsString> = entries.flatten().map(|e| e.file_name()).collect();
+        if names.iter().any(|n| n == name) {
+            continue;
+        }
+        let Some(found) = (names.iter()).find(|n| folded(Path::new(n)) == folded(Path::new(name)))
+        else {
+            continue;
+        };
+        let was = parent.join(found);
+        if !same_file::is_same_file(library.join(&was), library.join(folder)).unwrap_or(false) {
+            continue;
+        }
+        // Spells a folder anew in place: no file moves, so no ledger is kept.
+        #[expect(clippy::disallowed_methods)]
+        let spelled = crate::atomic::rename(&library.join(&was), &library.join(folder));
+        if spelled.is_ok() {
+            renamed.push((was, folder.to_path_buf()));
+        }
+    }
+    renamed
+}
+
 /// Remove each folder a removed file leaves empty, up to the library.
 // Removes the folders a removal emptied.
 #[expect(clippy::disallowed_methods)]
@@ -796,5 +863,47 @@ mod tests {
             format!("{e:#}").starts_with("moving A/y.opus to B/y.opus: "),
             "{e:#}"
         );
+    }
+
+    #[test]
+    fn a_folder_is_spelled_as_its_records_agree_where_case_is_one_name_to_the_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for file in [
+            "Chan/lantern/Lantern.opus",
+            "Chan/lantern/Lantern.lrc",
+            "Two/a/x.opus",
+        ] {
+            std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+            std::fs::write(root.join(file), "x").unwrap();
+        }
+        let outputs = BTreeMap::from([
+            (
+                PathBuf::from("Chan/Lantern/Lantern.opus"),
+                written(None, Some("Chan/Lantern/Lantern.lrc")),
+            ),
+            // Two records spell this folder two ways: it is left as it is.
+            (PathBuf::from("Two/A/x.opus"), written(None, None)),
+            (PathBuf::from("Two/a/y.opus"), written(None, None)),
+        ]);
+        let blind = root.join("Chan/Lantern").exists();
+        let renamed = spell_folders(root, &outputs);
+        let names = |dir: &str| -> Vec<String> {
+            let entries = std::fs::read_dir(root.join(dir)).unwrap();
+            let mut names: Vec<String> = (entries.flatten())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        if blind {
+            let moved = (PathBuf::from("Chan/lantern"), PathBuf::from("Chan/Lantern"));
+            assert_eq!(renamed, [moved]);
+            assert_eq!(names("Chan"), ["Lantern"]);
+        } else {
+            assert_eq!(renamed, []);
+            assert_eq!(names("Chan"), ["lantern"]);
+        }
+        assert_eq!(names("Two"), ["a"]);
     }
 }

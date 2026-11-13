@@ -308,6 +308,10 @@ pub(super) fn apply<R: Runner, W: Write>(
         .collect();
     crate::library::remove_empty_folders(library, &emptied);
     let removed = prune(ledger, &old, &mut outputs, failed, force, out)?;
+    for (was, now) in crate::library::spell_folders(library, &outputs) {
+        let (was, now) = (crate::relpath::show(&was), crate::relpath::show(&now));
+        crate::ui::info(out, &format!("Moved: {was} → {now}"))?;
+    }
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
