@@ -4256,7 +4256,7 @@ fn copies_that_do_not_decode_are_not_compared_again_nor_with_the_setting_off() {
     .unwrap();
     let (ok, text) = h.run_plain(&fake(), Options::default());
     assert!(ok && !text.contains("sample by sample"), "{text}");
-    assert!(State::load(&h.dirs.home).unwrap().gates.is_empty());
+    assert_eq!(State::load(&h.dirs.home).unwrap().gates, []);
 
     h.songs(COPIES);
     let (ok, text) = h.run_plain(&fake(), Options::default());
