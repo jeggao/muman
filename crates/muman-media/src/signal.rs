@@ -35,12 +35,13 @@ pub type Frames = Vec<[f64; 2]>;
 /// ffmpeg writes `f32le`; a trailing partial frame is dropped.
 #[must_use]
 pub fn frames_of_f32le(bytes: &[u8]) -> Frames {
-    bytes
-        .chunks_exact(8)
-        .map(|b| {
-            let l = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-            let r = f32::from_le_bytes([b[4], b[5], b[6], b[7]]);
-            [f64::from(l), f64::from(r)]
+    let (frames, _) = bytes.as_chunks::<8>();
+    frames
+        .iter()
+        .map(|&[l0, l1, l2, l3, r0, r1, r2, r3]| {
+            let left = f32::from_le_bytes([l0, l1, l2, l3]);
+            let right = f32::from_le_bytes([r0, r1, r2, r3]);
+            [f64::from(left), f64::from(right)]
         })
         .collect()
 }
