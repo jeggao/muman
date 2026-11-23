@@ -6,6 +6,9 @@ version = 2
 ignore = [
     # paste, a proc-macro lofty uses at build time; unmaintained, not unsound.
     "RUSTSEC-2024-0436",
+    # chrono, which turns two timestamps into dates and which trash and zip
+    # use; unmaintained, not unsound, and no release is a safe upgrade.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
