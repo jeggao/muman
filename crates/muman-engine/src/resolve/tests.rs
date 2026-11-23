@@ -24,6 +24,7 @@ fn defaults<'a>(song: &'a Song, facts: &'a BTreeMap<SourceKey, Facts>) -> Input<
         facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &ENGLISH,
         clean: &CLEAN,
         typography: clean::Typography::default(),
@@ -238,6 +239,7 @@ fn run_reading(
         facts,
         on_disk: None,
         alignments,
+        gates: &[],
         lyrics,
         clean: &Settings::default(),
         typography: clean::Typography::default(),
@@ -341,6 +343,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         facts: &facts,
         on_disk: None,
         alignments: &alignments,
+        gates: &[],
         lyrics: &english(),
         clean: &off,
         typography: clean::Typography::default(),
@@ -946,6 +949,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         facts: &facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &none_read(),
         clean: &clean,
         typography: clean::Typography::default(),
@@ -1019,6 +1023,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         facts: &facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
@@ -1131,6 +1136,7 @@ fn hand_set_tags_and_the_album_win_last() {
         facts: &facts,
         on_disk: None,
         alignments: &alignments,
+        gates: &[],
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
@@ -1442,6 +1448,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &english(),
         clean,
         typography: clean::Typography::default(),
@@ -1588,6 +1595,7 @@ fn a_record_on_the_release_most_of_its_album_is_on_gives_its_release() {
         facts: &facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
@@ -1802,6 +1810,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             facts: &facts,
             on_disk: None,
             alignments: &[],
+            gates: &[],
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
@@ -2001,6 +2010,120 @@ fn a_song_with_no_damaged_source_is_ranked_as_ever() {
     ]);
     let s = song(&[a, b]);
     assert_eq!(run(&s, &bare, &[]).plan, run(&s, &whole, &[]).plan);
+}
+
+/// What the gate found of `keys`, sorted as it takes them, at their
+/// audio in `facts`: each one's master and how it is broken.
+fn gated(
+    facts: &BTreeMap<SourceKey, Facts>,
+    keys: &[&SourceKey],
+    master: &[usize],
+    broken: &[Option<crate::gate::Broken>],
+) -> Gated {
+    assert!(keys.is_sorted(), "the gate takes a song's sources sorted");
+    Gated {
+        keys: keys.iter().map(|k| (*k).clone()).collect(),
+        revs: keys.iter().map(|k| facts[*k].audio_rev()).collect(),
+        version: crate::gate::VERSION,
+        gate: Some(crate::gate::Gate {
+            master: master.to_vec(),
+            broken: broken.to_vec(),
+        }),
+    }
+}
+
+/// `song` resolved with what the gate found, `[audio]` as given.
+fn gated_run(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    gates: &[Gated],
+    audio: &Audio,
+) -> Resolved {
+    let input = Input {
+        gates,
+        audio,
+        ..defaults(song, facts)
+    };
+    resolve(&input).unwrap()
+}
+
+#[test]
+fn a_copy_the_gate_finds_broken_ranks_below_a_whole_one() {
+    use crate::gate::Broken;
+    let wide = manual("a-wide.flac");
+    let narrow = manual("b-narrow.mp3");
+    let mut facts = BTreeMap::from([
+        (wide.clone(), audio("flac", 22.0)),
+        (narrow.clone(), audio("mp3", 16.0)),
+    ]);
+    let s = song(&[wide.clone(), narrow.clone()]);
+    let dropouts = Some(Broken::Dropouts { gaps: 3, ms: 450 });
+    let gates = [gated(&facts, &[&wide, &narrow], &[0, 0], &[dropouts, None])];
+    let r = gated_run(&s, &facts, &gates, &AUDIO);
+    assert_eq!(r.plan.audio.key, narrow, "{:?}", r.why);
+    assert!(!r.why.audio.contains("masters"), "{:?}", r.why);
+
+    let mut off = (*AUDIO).clone();
+    off.pick.integrity.enabled = false;
+    assert_eq!(gated_run(&s, &facts, &gates, &off).plan.audio.key, wide);
+
+    // The broken one's audio fetched again is not the audio compared.
+    facts.insert(wide.clone(), audio("flac", 21.0));
+    assert_eq!(gated_run(&s, &facts, &gates, &AUDIO).plan.audio.key, wide);
+}
+
+#[test]
+fn a_pick_names_how_its_copy_is_broken_and_how_many_masters_there_are() {
+    use crate::gate::Broken;
+    let (a, b, c) = (manual("a.flac"), manual("b.flac"), manual("c.mp3"));
+    let facts = BTreeMap::from([
+        (a.clone(), audio("flac", 22.0)),
+        (b.clone(), audio("flac", 20.0)),
+        (c.clone(), audio("mp3", 16.0)),
+    ]);
+    let listed = song(&[c.clone(), b.clone(), a.clone()]);
+    let cut = Some(Broken::Truncated { seconds: 12 });
+    let clicks = Some(Broken::Clicks { count: 40 });
+    let gates = [gated(
+        &facts,
+        &[&a, &b, &c],
+        &[0, 0, 2],
+        &[cut, None, clicks],
+    )];
+    let r = gated_run(&listed, &facts, &gates, &AUDIO);
+    assert_eq!(r.plan.audio.key, b, "{:?}", r.why);
+    assert!(r.why.audio.ends_with(", one of 2 masters"), "{:?}", r.why);
+    assert!(!r.why.audio.contains("lacks"), "{:?}", r.why);
+
+    let every = [gated(
+        &facts,
+        &[&a, &b, &c],
+        &[0, 0, 0],
+        &[cut, cut, clicks],
+    )];
+    let r = gated_run(&listed, &facts, &every, &AUDIO);
+    assert_eq!(r.plan.audio.key, a, "broken alike, the widest: {:?}", r.why);
+    assert!(
+        r.why.audio.ends_with(", lacks 12 s other copies hold"),
+        "{:?}",
+        r.why
+    );
+}
+
+#[test]
+fn what_the_gate_found_of_audio_holds_for_another_source_holding_it() {
+    use crate::gate::Broken;
+    let (was, now, other) = (manual("a.flac"), manual("a-again.flac"), manual("b.mp3"));
+    let facts = BTreeMap::from([
+        (was.clone(), audio("flac", 22.0)),
+        (now.clone(), audio("flac", 22.0)),
+        (other.clone(), audio("mp3", 16.0)),
+    ]);
+    let dropouts = Some(Broken::Dropouts { gaps: 3, ms: 450 });
+    let gates = [gated(&facts, &[&was, &other], &[0, 0], &[dropouts, None])];
+    let s = song(&[now, other.clone()]);
+    let r = gated_run(&s, &facts, &gates, &AUDIO);
+    assert_eq!(r.plan.audio.key, other, "{:?}", r.why);
 }
 
 #[test]
@@ -2484,6 +2607,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             facts: &facts,
             on_disk: None,
             alignments: &[],
+            gates: &[],
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
@@ -2981,6 +3105,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             facts: &facts,
             on_disk: None,
             alignments: &[],
+            gates: &[],
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
@@ -3244,6 +3369,7 @@ fn run_knowing(
         facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &none_read(),
         clean,
         typography: clean::Typography::default(),
@@ -3510,6 +3636,7 @@ fn run_believing(
         facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
@@ -3777,6 +3904,7 @@ fn run_picked(
             facts,
             on_disk: None,
             alignments: &[],
+            gates: &[],
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
@@ -3944,6 +4072,7 @@ fn run_lyrics(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings)
         facts,
         on_disk: None,
         alignments: &[],
+        gates: &[],
         lyrics: &lyrics,
         clean,
         typography: clean::Typography::default(),

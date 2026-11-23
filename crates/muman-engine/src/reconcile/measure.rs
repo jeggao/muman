@@ -1,7 +1,20 @@
 //! What the offline phase measures of the listed sources: each source's
 //! facts, read again or caught up where an earlier version measured it
-//! another way, the comparisons each song's resolving asks for, and the
-//! audio sizes fitting asks for.
+//! another way, the comparisons each song's resolving asks for, of two
+//! sources at a time and of all of a song's audio through the gate, and
+//! the audio sizes fitting asks for.
+//!
+//! The gate decodes every audio source of a song at once, each whole at
+//! 48 kHz in two channels, and holds 24 bytes a frame of each while it
+//! compares them: 280 MB a source for four minutes, and up to 1.7 times
+//! that at its peak. Three copies of a song of 4 min 36 s peaked at
+//! 1.6 GB, and five of one of 6 min 7 s at 2.9 GB. So a song whose
+//! sources play more than [`GATE_MOST_S`] together is not compared at
+//! all: it is picked by its measures alone. The others are compared
+//! [`GATE_SONGS`] at a time, where pairs are compared on every core, and
+//! one whose sources play more than its share of [`GATE_MOST_S`] is
+//! compared alone, so the audio held at once never plays longer than
+//! that: 1.4 GB held, about 2.3 GB at the peak.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
@@ -18,7 +31,7 @@ use crate::progress;
 use crate::resolve;
 use crate::runner::Runner;
 use crate::source::SourceKey;
-use crate::state::{self, Aligned, State, Step};
+use crate::state::{self, Aligned, Gated, State, Step};
 use crate::store::{Kind, Located, Store};
 
 use super::plan::Planned;
@@ -202,6 +215,13 @@ pub(super) fn pending(
     pending.extend(
         (uncompared(store, &manifest.songs, state).into_iter()).flat_map(|(a, b, _)| [a, b]),
     );
+    if settings.audio.pick.integrity.enabled {
+        pending.extend(
+            ungated(store, &manifest.songs, state)
+                .into_iter()
+                .flat_map(|(keys, _)| keys),
+        );
+    }
     pending
 }
 
@@ -758,6 +778,102 @@ pub fn compare<R: Runner, W: Write>(
     });
     for aligned in compared.into_iter().flatten() {
         state.record_alignment(aligned);
+    }
+    Ok(true)
+}
+
+/// Songs whose audio the gate compares at a time.
+pub const GATE_SONGS: usize = 2;
+
+/// The most audio, in seconds over all its sources, of a song the gate
+/// compares, and of the songs it compares at a time: 20 minutes, five
+/// copies of a four-minute song.
+pub const GATE_MOST_S: f64 = 1200.0;
+
+/// Each song's audio sources the gate has not compared together at their
+/// revisions: what [`gate_copies`] compares, with those revisions.
+fn ungated(store: &Store, songs: &[Song], state: &State) -> Vec<(Vec<SourceKey>, Vec<String>)> {
+    songs
+        .iter()
+        .filter_map(|s| resolve::wanted_gate(s, &state.facts))
+        .filter(|keys| keys.iter().all(|k| store.has(k)))
+        .filter(|keys| {
+            let lengths = keys
+                .iter()
+                .map(|k| state.facts.get(k).and_then(Facts::length));
+            lengths
+                .sum::<Option<f64>>()
+                .is_some_and(|s| s <= GATE_MOST_S)
+        })
+        .filter_map(|keys| {
+            let revs: Vec<String> = keys
+                .iter()
+                .map(|k| state.facts.get(k).map(Facts::audio_rev))
+                .collect::<Option<_>>()?;
+            state.gated(&revs).is_none().then_some((keys, revs))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Compare each song's audio sources together through the gate
+/// ([`crate::gate`]), where not done at their revisions; whether any was.
+/// A song one of whose sources does not decode is kept as not compared,
+/// and not tried again until its audio changes.
+pub fn gate_copies<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    songs: &[Song],
+    state: &mut State,
+    out: &mut W,
+) -> Result<bool> {
+    let due = ungated(store, songs, state);
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!(
+            "Comparing the audio of {} song(s) sample by sample",
+            due.len()
+        ),
+    )?;
+    let step = progress::step("Comparing", Some(due.len() as u64));
+    let decode = |path: &Path| {
+        (runner.output(&crate::gate::pcm_command(path, true)))
+            .or_else(|_| runner.output(&crate::gate::pcm_command(path, false)))
+            .ok()
+            .map(|pcm| crate::gate::frames(&pcm))
+    };
+    let seconds = |keys: &[SourceKey]| -> f64 {
+        let lengths = keys
+            .iter()
+            .map(|k| state.facts.get(k).and_then(Facts::length));
+        lengths.flatten().sum()
+    };
+    let (alone, together): (Vec<_>, Vec<_>) =
+        (due.into_iter()).partition(|(keys, _)| seconds(keys) > GATE_MOST_S / GATE_SONGS as f64);
+    let compare = |(keys, revs): &(Vec<SourceKey>, Vec<String>)| {
+        let xs = keys
+            .iter()
+            .map(|k| {
+                let path = store.locate(k)?.path;
+                let _working = step.working(&progress::label(&path));
+                decode(&path)
+            })
+            .collect::<Option<Vec<_>>>();
+        Gated {
+            keys: keys.clone(),
+            revs: revs.clone(),
+            version: crate::gate::VERSION,
+            gate: xs.map(crate::gate::analyze),
+        }
+    };
+    let mut found = parallel::map(&together, GATE_SONGS, compare);
+    found.extend(parallel::map(&alone, 1, compare));
+    for gated in found {
+        state.record_gate(gated);
     }
     Ok(true)
 }

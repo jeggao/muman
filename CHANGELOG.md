@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **A song's copies are compared sample by sample, and one that drops
+  out, clicks or stops short loses the pick**: muman decodes the audio
+  of a song's sources together and finds which are copies of one
+  master. A copy that falls silent mid-song, holds clicks, or stops
+  more than 10 s and a tenth of the song short, where another copy of
+  its master plays on, ranks with damaged sources, however well it
+  measures alone; a remaster is never held against the master it
+  remakes, and `status` says of how many masters a pick is one. Each
+  song with two or more sources is compared once for their audio,
+  several seconds a song on the first sync, holding up to 2.3 GB of
+  memory for the longest; a song whose copies play more than 20 minutes
+  together is left to its measures. `[audio.pick.integrity] enabled =
+  false` turns the comparison off.
+
 ### Fixed
 
 - **A run stopped in its moves after the library's times changed, or

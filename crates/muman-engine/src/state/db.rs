@@ -109,6 +109,12 @@ const LEFT_TABLE: &str = "
     );
 ";
 
+/// What the gate found of each song's audio sources, a table a store made
+/// before it lacks, so made on every open.
+const GATES_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS gates (audio TEXT PRIMARY KEY, row TEXT NOT NULL);
+";
+
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
 const TABLES: &str = "
@@ -188,6 +194,7 @@ impl Db {
                 tx.execute_batch(BUILT_TABLE)?;
                 tx.execute_batch(COPIES_TABLE)?;
                 tx.execute_batch(LEFT_TABLE)?;
+                tx.execute_batch(GATES_TABLE)?;
                 Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
@@ -197,6 +204,7 @@ impl Db {
                 .and_then(|()| db.conn.execute_batch(BUILT_TABLE))
                 .and_then(|()| db.conn.execute_batch(COPIES_TABLE))
                 .and_then(|()| db.conn.execute_batch(LEFT_TABLE))
+                .and_then(|()| db.conn.execute_batch(GATES_TABLE))
                 .and_then(|()| db.conn.execute_batch(RENAMINGS))
                 .with_context(|| format!("opening {}", db.file.display()))?;
         }
@@ -225,6 +233,7 @@ impl Db {
                 ("built", BUILT_TABLE),
                 ("copies", COPIES_TABLE),
                 ("left_outputs", LEFT_TABLE),
+                ("gates", GATES_TABLE),
                 ("renamings", RENAMINGS),
             ] {
                 let held: i64 = conn.query_row(
@@ -393,6 +402,7 @@ const ALIGNMENTS: Table = table(
     false,
 );
 const MIXES: Table = table("mixes", &["audio", "layout"], Some("row"), false);
+const GATES: Table = table("gates", &["audio"], Some("row"), false);
 const BUILT: Table = table("built", &["audio", "layout"], Some("row"), false);
 const FAILURES: Table = table("failures", &["key"], Some("row"), false);
 const SONGS_FAILED: Table = table("song_failures", &["key"], Some("row"), false);
@@ -414,7 +424,7 @@ const fn table(
 }
 
 /// Every table, in the order a snapshot reads them.
-const TABLES_OF_STATE: [&Table; 16] = [
+const TABLES_OF_STATE: [&Table; 17] = [
     &META,
     &OUTPUTS,
     &LEFT,
@@ -428,6 +438,7 @@ const TABLES_OF_STATE: [&Table; 16] = [
     &FACTS,
     &ALIGNMENTS,
     &MIXES,
+    &GATES,
     &FAILURES,
     &LOOKUPS,
     &SIZES,
@@ -475,7 +486,7 @@ fn key_of<T: DeserializeOwned>(text: &str) -> Option<T> {
 }
 
 /// The tables a step without the run's lock keeps what it measured in.
-const CACHES: [&Table; 5] = [&FACTS, &ALIGNMENTS, &MIXES, &FAILURES, &SIZES];
+const CACHES: [&Table; 6] = [&FACTS, &ALIGNMENTS, &MIXES, &GATES, &FAILURES, &SIZES];
 
 /// The state the rows `read`, by table, hold; a table not read is empty.
 /// A cache row an earlier version wrote in another shape is dropped; an
@@ -541,6 +552,9 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
         .filter_map(|r| serde_json::from_str(&value(r)).ok())
         .collect();
     state.mixes = parse(&MIXES)
+        .filter_map(|r| serde_json::from_str(&value(r)).ok())
+        .collect();
+    state.gates = parse(&GATES)
         .filter_map(|r| serde_json::from_str(&value(r)).ok())
         .collect();
     state.built = parse(&BUILT)
@@ -720,6 +734,14 @@ fn cache_rows(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
                 let layout = layout.as_str().unwrap_or_default().to_string();
                 Ok(Row::new(vec![m.audio.clone(), layout], Some(json(m)?)))
             })
+            .collect::<Result<_>>()?,
+    ));
+    tables.push((
+        &GATES,
+        state
+            .gates
+            .iter()
+            .map(|g| Ok(Row::new(vec![g.revs.join(" ")], Some(json(g)?))))
             .collect::<Result<_>>()?,
     ));
     tables.push((
@@ -1086,6 +1108,20 @@ mod tests {
         assert_eq!(count(&mut db, "listed"), 0);
     }
 
+    /// What the gate found of two sources: two masters, the second's
+    /// copy holding clicks.
+    fn two_masters(a: &SourceKey, b: &SourceKey) -> crate::state::Gated {
+        crate::state::Gated {
+            keys: vec![a.clone(), b.clone()],
+            revs: vec!["1".into(), "2".into()],
+            version: crate::gate::VERSION,
+            gate: Some(crate::gate::Gate {
+                master: vec![0, 1],
+                broken: vec![None, Some(crate::gate::Broken::Clicks { count: 9 })],
+            }),
+        }
+    }
+
     /// A state with a row in every table.
     fn every_row() -> State {
         use crate::state::{
@@ -1145,6 +1181,7 @@ mod tests {
             a_lacks_ms: 0,
             b_lacks_ms: 0,
         });
+        state.gates.push(two_masters(&key, &manual));
         state.mixes.push(Mix {
             source: key.clone(),
             audio: "1".into(),

@@ -106,6 +106,9 @@ pub struct Fake {
     pub segments: Vec<(String, Vec<u8>)>,
     /// The 8 kHz samples a comparison decodes, by path fragment.
     pub pcm: Vec<(String, Vec<u8>)>,
+    /// The 48 kHz stereo f32 samples a song's copies are compared in, by
+    /// path fragment; a path without them does not decode.
+    pub whole: Vec<(String, Vec<u8>)>,
     /// The WAV an analysis decodes to its pipe, by path fragment; a short
     /// quiet tone otherwise.
     pub wavs: Vec<(String, Vec<u8>)>,
@@ -615,13 +618,18 @@ impl Runner for Fake {
             Some("ffmpeg") if args.iter().any(|a| a == "-version") => {
                 Ok(b"ffmpeg version fake\n".to_vec())
             }
-            Some("ffmpeg") if args.iter().any(|a| a == "s16le") => {
+            Some("ffmpeg") => {
                 let path = args
                     .iter()
                     .position(|a| a == "-i")
                     .map(|i| args[i + 1].clone())
                     .unwrap_or_default();
-                find(&self.pcm, &path)
+                let samples = match () {
+                    () if args.iter().any(|a| a == "s16le") => &self.pcm,
+                    () if args.iter().any(|a| a == "f32le") => &self.whole,
+                    () => return Err(anyhow!("offline")),
+                };
+                find(samples, &path)
                     .cloned()
                     .ok_or_else(|| anyhow!("no samples for {path}"))
             }

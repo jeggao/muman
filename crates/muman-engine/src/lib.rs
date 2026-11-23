@@ -20,7 +20,7 @@ use muman_core::{
     relpath, runner, sites, source, store, tools, ui, units,
 };
 use muman_media::{
-    align, analysis, chapters, clean, codec, cues, detect, dynamics, facts, ffmpeg, flac,
+    align, analysis, chapters, clean, codec, cues, detect, dynamics, facts, ffmpeg, flac, gate,
     integrity, loudness, lyrics, naming, ogg, parts, picture, quality, readings, record, similar,
     style, tags,
 };

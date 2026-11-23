@@ -233,7 +233,7 @@ use crate::quality::{AudioQuality, ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
 use crate::source::SourceKey;
-use crate::state::Aligned;
+use crate::state::{Aligned, Gated};
 use crate::style;
 use crate::tags::{self, Field, Offer, Scope};
 use crate::vet::recordings::{self, Recordings};
@@ -1147,6 +1147,8 @@ pub struct Input<'a> {
     /// take from; unset, every source measured is taken to be.
     pub on_disk: Option<&'a BTreeSet<SourceKey>>,
     pub alignments: &'a [Aligned],
+    /// What the gate found of each song's audio sources together.
+    pub gates: &'a [Gated],
     /// Which lyrics are taken, and in what order.
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
@@ -1180,6 +1182,29 @@ impl Input<'_> {
             .find(|x| x.revs == revs && x.method == crate::align::METHOD)
     }
 
+    /// What the gate found of the song's audio sources together, at their
+    /// audio now, where `[audio.pick.integrity]` asks.
+    fn gated(&self) -> Option<(Vec<SourceKey>, &crate::gate::Gate)> {
+        if !self.audio.pick.integrity.enabled {
+            return None;
+        }
+        let keys = wanted_gate(self.song, self.facts)?;
+        let revs: Vec<String> = keys
+            .iter()
+            .map(|k| Some(self.facts.get(k)?.audio_rev()))
+            .collect::<Option<_>>()?;
+        let gated =
+            (self.gates.iter()).find(|g| g.version == crate::gate::VERSION && g.revs == revs)?;
+        Some((keys, gated.gate.as_ref()?))
+    }
+
+    /// How the gate finds `key`'s audio broken, if it does.
+    fn broken(&self, key: &SourceKey) -> Option<crate::gate::Broken> {
+        let (keys, gate) = self.gated()?;
+        let i = keys.iter().position(|k| k == key)?;
+        *gate.broken.get(i)?
+    }
+
     /// The song's sources on disk, in the song list's order.
     fn present(&self) -> impl Iterator<Item = (usize, &SourceKey, &Facts)> {
         self.song
@@ -1189,6 +1214,19 @@ impl Input<'_> {
             .filter(|(_, k)| self.on_disk.is_none_or(|d| d.contains(*k)))
             .filter_map(|(n, k)| Some((n, k, self.facts.get(k)?)))
     }
+}
+
+/// The song's sources the gate compares together: every one with audio,
+/// sorted, where there are two or more.
+#[must_use]
+pub fn wanted_gate(song: &Song, facts: &BTreeMap<SourceKey, Facts>) -> Option<Vec<SourceKey>> {
+    let keys: BTreeSet<SourceKey> = song
+        .sources
+        .iter()
+        .filter(|k| facts.get(*k).is_some_and(|f| f.audio.is_some()))
+        .cloned()
+        .collect();
+    (keys.len() >= 2).then(|| keys.into_iter().collect())
 }
 
 /// The pairs of sources whose comparison resolving may ask for: every
@@ -1484,7 +1522,7 @@ fn pick_audio(
             let w = &input.audio.pick;
             let [unknown, sum] = audio_score(w, unmatched, q, facts);
             let rank: Rank = vec![
-                i64::from(facts.damage().is_some()),
+                i64::from(facts.damage().is_some() || input.broken(key).is_some()),
                 unknown,
                 sum,
                 i64::from(made_from == Some(true) && w.bandwidth.weight() != 0),
@@ -1696,11 +1734,19 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
     } else {
         why
     };
-    match facts.damage() {
+    let why = match facts.damage() {
         Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
         Some(Damage::Missing { seconds, .. }) => format!("{why}, {seconds:.1} s missing"),
         Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
         None => why,
+    };
+    let why = match input.broken(chosen.key) {
+        Some(broken) => format!("{why}, {broken}"),
+        None => why,
+    };
+    match input.gated().map(|(_, gate)| gate.masters()) {
+        Some(masters) if masters > 1 => format!("{why}, one of {masters} masters"),
+        _ => why,
     }
 }
 

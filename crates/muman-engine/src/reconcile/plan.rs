@@ -360,6 +360,7 @@ impl<'a> Resolver<'a> {
             facts: &self.state.facts,
             on_disk,
             alignments: &self.state.alignments,
+            gates: &self.state.gates,
             lyrics: &settings.lyrics,
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             typography: settings.tags.typography,

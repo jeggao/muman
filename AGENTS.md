@@ -93,19 +93,19 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   analysis.rs       the whole of a source's audio, one decode, every analyzer
   integrity.rs      whether a source's audio is all there: cut off or missing
+  gate.rs, coherence.rs   a song's copies compared whole: which are one master, which broken; their spectra
+                    aligned; signal.rs, signal/filter.rs, as numpy and scipy compute; coherence/fixtures.rs
   loudness.rs, dynamics.rs   EBU R128 loudness and a song's gains; how high its peaks stand
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
   detect.rs         values that say nothing of a song: placeholders and watermarks
-  genres.rs         the genres a MusicBrainz record gives, spelled as genres/spelled.txt says
+  genres.rs, record.rs   a MusicBrainz record's genres, spelled as genres/spelled.txt says; the record kept
   overrides.rs      [[tags.from]]: what one torrent's or channel's sources are not believed for
   parts.rs, style.rs   values read as parts: titles, credits, albums, dates; the house style
   readings.rs       the ways a video's title reads as a title and artist, and whether one is clear
   lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
-  chapters.rs       a source's chapters, in each container's own form
-  naming.rs         safe names, through the path template
+  chapters.rs, naming.rs   a source's chapters, in each container's form; safe names, by the path template
   quality.rs, align.rs   audio and picture measures; audio compared by loudness envelopes
   codec.rs, ogg.rs, flac.rs   output codecs, their arguments; an Opus header's gain; a FLAC's length
-  record.rs         the MusicBrainz record kept, and the answer it is read from
 crates/muman-core/src/   the lowest layer, which every other module builds on
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   new.toml          a new home's song list, the reference for every setting

@@ -4179,6 +4179,98 @@ fn a_file_named_as_another_song_s_folder_is_told_apart_in_either_order() {
     }
 }
 
+/// The samples the gate decodes of `x`: its frames as 32-bit floats.
+fn f32le(x: &[[f64; 2]]) -> Vec<u8> {
+    x.iter()
+        .flatten()
+        .flat_map(|v| (*v as f32).to_le_bytes())
+        .collect()
+}
+
+const COPIES: &str =
+    "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n";
+
+#[test]
+fn a_songs_copies_are_compared_once_and_a_broken_one_loses_the_pick() {
+    use muman_media::coherence::fixtures::{music, noisy};
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(COPIES);
+    // The first source, which a tie would take, falls silent five times.
+    let whole = music(5.0, 31);
+    let mut holed = whole.clone();
+    for gap in 1..=5 {
+        let at = gap * holed.len() / 6;
+        holed[at..at + 4800].fill([0.0; 2]);
+    }
+    let fake = || Fake {
+        whole: vec![
+            ("aaaaaaaaaaa".into(), f32le(&holed)),
+            ("bbbbbbbbbbb".into(), f32le(&noisy(&whole, 0.002, 32))),
+        ],
+        ..infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"])
+    };
+    let (ok, text) = h.run_plain(&fake(), Options::default());
+    assert!(ok && text.contains("sample by sample"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let [gated] = &state.gates[..] else {
+        panic!("{:?}", state.gates)
+    };
+    let gate = gated.gate.as_ref().unwrap();
+    assert_eq!(gate.master, [0, 0]);
+    assert!(
+        matches!(
+            gate.broken[..],
+            [Some(crate::gate::Broken::Dropouts { gaps: 5, .. }), None]
+        ),
+        "{gate:?}"
+    );
+    let plan = |state: &State| state.outputs.values().next().unwrap().plan.clone().unwrap();
+    assert_eq!(plan(&state).audio.key, SourceKey::youtube("bbbbbbbbbbb"));
+
+    let (ok, text) = h.run(&fake(), Options::default());
+    assert!(ok && !text.contains("sample by sample"), "{text}");
+
+    std::fs::write(
+        h.dirs.manifest(),
+        format!("version = 1\n[audio.pick.integrity]\nenabled = false\n{COPIES}"),
+    )
+    .unwrap();
+    let (ok, text) = h.run_plain(&fake(), Options::default());
+    assert!(ok, "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(plan(&state).audio.key, SourceKey::youtube("aaaaaaaaaaa"));
+}
+
+#[test]
+fn copies_that_do_not_decode_are_not_compared_again_nor_with_the_setting_off() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = || infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    std::fs::write(
+        h.dirs.manifest(),
+        format!("version = 1\n[audio.pick.integrity]\nenabled = false\n{COPIES}"),
+    )
+    .unwrap();
+    let (ok, text) = h.run_plain(&fake(), Options::default());
+    assert!(ok && !text.contains("sample by sample"), "{text}");
+    assert!(State::load(&h.dirs.home).unwrap().gates.is_empty());
+
+    h.songs(COPIES);
+    let (ok, text) = h.run_plain(&fake(), Options::default());
+    assert!(ok && text.contains("sample by sample"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(
+        matches!(&state.gates[..], [gated] if gated.gate.is_none()),
+        "{:?}",
+        state.gates
+    );
+    let (ok, text) = h.run_plain(&fake(), Options::default());
+    assert!(ok && !text.contains("sample by sample"), "{text}");
+}
+
 #[test]
 fn a_source_holding_audio_compared_before_is_not_compared_again() {
     let h = home();

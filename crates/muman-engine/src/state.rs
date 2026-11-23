@@ -14,7 +14,7 @@
 //! |---|---|
 //! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
-//! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
+//! | `library`, `alignments`, `facts`, `mixes`, `gates` | Yes: measured or set again |
 //! | `built` | Yes: a song left as built, its source holding other audio since, is levelled without its file until accepted |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
@@ -283,6 +283,14 @@ pub struct State {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub mixes: Vec<Mix>,
+    /// What the gate found of each song's audio sources together, found
+    /// by their audio, whichever sources hold it now ([`Gated`]).
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub gates: Vec<Gated>,
     /// The loudness of the audio each library file was made from, found
     /// by that audio and the layout it was mixed into, so a song left as
     /// built is levelled as its file was made once its source holds other
@@ -827,6 +835,21 @@ impl Aligned {
     }
 }
 
+/// What the gate found of a song's audio sources together: which hold
+/// one master and which are broken ([`crate::gate`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gated {
+    /// The sources compared, in the order the gate's findings follow.
+    pub keys: Vec<SourceKey>,
+    /// Their audio's revisions, in that order.
+    pub revs: Vec<String>,
+    /// The [`crate::gate::VERSION`] that found it.
+    pub version: u32,
+    /// What it found; nothing where one of them did not decode, which is
+    /// not tried again until its audio changes.
+    pub gate: Option<crate::gate::Gate>,
+}
+
 /// The caches of a state, apart from what the library holds: what a step
 /// without the run's lock measures and keeps ([`State::keep_measures`]).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -837,6 +860,7 @@ pub struct Caches {
     pub cleared: BTreeSet<SourceKey>,
     pub alignments: Vec<Aligned>,
     pub mixes: Vec<Mix>,
+    pub gates: Vec<Gated>,
     pub sizes: BTreeMap<String, Measured>,
 }
 
@@ -850,6 +874,8 @@ impl Caches {
         self.alignments
             .retain(|a| !gone.contains(&a.a) && !gone.contains(&a.b));
         self.mixes.retain(|m| !gone.contains(&m.source));
+        self.gates
+            .retain(|g| !g.keys.iter().any(|k| gone.contains(k)));
         self
     }
 
@@ -865,6 +891,7 @@ impl Caches {
             .extend(delta.failures.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.alignments.extend(delta.alignments.iter().cloned());
         self.mixes.extend(delta.mixes.iter().cloned());
+        self.gates.extend(delta.gates.iter().cloned());
         self.sizes
             .extend(delta.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
@@ -1171,6 +1198,9 @@ impl State {
         for mix in &measured.mixes {
             self.record_mix(mix.clone());
         }
+        for gated in &measured.gates {
+            self.record_gate(gated.clone());
+        }
         self.sizes
             .extend(measured.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.rebased.split_off(before)
@@ -1305,6 +1335,7 @@ impl State {
             cleared: self.cleared.clone(),
             alignments: self.alignments.clone(),
             mixes: self.mixes.clone(),
+            gates: self.gates.clone(),
             sizes: self.sizes.clone(),
         }
     }
@@ -1335,6 +1366,7 @@ impl State {
                 .collect(),
             alignments: added(&self.alignments, &base.alignments),
             mixes: added(&self.mixes, &base.mixes),
+            gates: added(&self.gates, &base.gates),
             sizes: changed(&self.sizes, &base.sizes),
         }
     }
@@ -1354,6 +1386,22 @@ impl State {
             db => db?.keep(measured)?,
         }
         stub(home)
+    }
+
+    /// What this muman's gate found of the audio at `revs`, together.
+    #[must_use]
+    pub fn gated(&self, revs: &[String]) -> Option<&Gated> {
+        self.gates
+            .iter()
+            .find(|g| g.version == crate::gate::VERSION && g.revs == revs)
+    }
+
+    /// Keep `gated`, in place of what was found of the same audio, or of
+    /// the same sources, before.
+    pub fn record_gate(&mut self, gated: Gated) {
+        self.gates
+            .retain(|g| g.revs != gated.revs && g.keys != gated.keys);
+        self.gates.push(gated);
     }
 
     pub fn record_alignment(&mut self, aligned: Aligned) {
