@@ -401,16 +401,18 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
     assert!(ok, "{text}");
     let list = s.dir.path().join("home/songs.toml");
     let now = std::fs::read_to_string(&list).unwrap();
-    // Edition 5 knew no [audio.pick.recording] nor [audio.pick.dynamics];
-    // a sync adds them back.
+    // Edition 5 knew no [audio.pick.recording], [audio.pick.integrity] nor
+    // [audio.pick.dynamics]; a sync adds them back.
     let table = |at: &str, end: &str| {
         let at = now.find(at).unwrap();
         now[at..at + now[at..].find(end).unwrap() + end.len()].to_string()
     };
     let recording = table("[audio.pick.recording]", "enabled = true\n");
+    let integrity = table("[audio.pick.integrity]", "enabled = true\n");
     let dynamics = table("[audio.pick.dynamics]", "step = \"1 dB\"\n");
     let old = now
         .replace(&recording, "")
+        .replace(&integrity, "")
         .replace(&dynamics, "")
         .replace(
             &format!("edition = {}", crate::migrate::EDITION),
@@ -432,10 +434,14 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
     assert!(text.contains("Up to date: 1 song(s)"), "{text}");
     let filled = std::fs::read_to_string(&list).unwrap();
     assert!(
-        filled.contains(&recording) && filled.contains(&dynamics),
+        filled.contains(&recording) && filled.contains(&integrity) && filled.contains(&dynamics),
         "{filled}"
     );
-    let without = |text: &str| text.replace(&recording, "").replace(&dynamics, "");
+    let without = |text: &str| {
+        text.replace(&recording, "")
+            .replace(&integrity, "")
+            .replace(&dynamics, "")
+    };
     assert_eq!(without(&filled), without(&now));
 }
 

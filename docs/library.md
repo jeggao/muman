@@ -45,7 +45,7 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
   `status` names each source of another recording, and one playing more
   than 0.5% faster or slower than the rest of its own.
   `[audio.pick.recording] enabled = false` turns this off.
-- **A whole copy** beats a [damaged](guide.md#damaged-sources) one, however little it lacks.
+- **A whole copy** beats a [damaged](guide.md#damaged-sources) one, however little it lacks. So does one that plays on where another copy of its master drops out, clicks, or stops more than 10 s and a tenth of the song short: muman decodes a song's copies together and compares them sample by sample, once for their audio, and holds no remaster against the master it remakes. `status` says of how many masters a pick is one. `[audio.pick.integrity] enabled = false` turns this off.
 - **Sound beyond the song** is how long a source plays outside the
   stretch it shares with another source of the song. A music video's
   intro counts; silence does not. An excerpt lacks the rest of the

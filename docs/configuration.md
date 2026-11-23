@@ -371,7 +371,7 @@ has a table under its part's `pick`: `[audio.pick.purity]`, `stereo`,
 `resolution` and `blockiness` covers. In each, `enabled` and `weight`
 say whether and how much it counts, the other keys how it is cut into
 steps; the lowest sum of steps times weights wins. The song's recording,
-`[audio.pick.recording]`, takes `enabled` alone and ranks ahead of sums.
+`[audio.pick.recording]`, and its copies compared, `[audio.pick.integrity]`, take `enabled` alone and rank ahead of sums.
 
 ```toml
 # Mono costs as much as 2.5 kHz of bandwidth: 50 against 10 for each

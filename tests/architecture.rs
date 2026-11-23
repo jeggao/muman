@@ -294,6 +294,10 @@ const STATICS: &[(&str, &str)] = &[
         "crates/muman-core/src/errors.rs",
         "whether a thread catches a panic, and what the one caught said, for its error",
     ),
+    (
+        "crates/muman-media/src/signal.rs",
+        "the Fourier transforms a thread has planned, by length: none changes a result",
+    ),
 ];
 
 #[test]
@@ -450,6 +454,10 @@ const RESHAPES: &[(&str, &str)] = &[
     (
         "crates/muman-media/src/align.rs",
         "the mono copy two recordings are aligned on",
+    ),
+    (
+        "crates/muman-media/src/gate.rs",
+        "the stereo copy at one rate a song's copies are compared in, sample by sample",
     ),
 ];
 

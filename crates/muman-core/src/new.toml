@@ -177,6 +177,11 @@ cutoffs = ["0.1 %", "1 %"]
 # song's ranks after every source of the song's: the recording its
 # record's length fits, else the one most of its sources align as.
 enabled = true
+[audio.pick.integrity]
+# Its copies decoded together and compared sample by sample: one with
+# dropouts, clicks or its music cut short where another copy of the
+# same master plays on ranks with damaged sources.
+enabled = true
 
 [loudness]
 # How each song is levelled to `target`, measured as EBU R128 measures:

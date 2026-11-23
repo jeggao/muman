@@ -529,6 +529,7 @@ impl Audio {
 #[serde(default, deny_unknown_fields)]
 pub struct AudioPick {
     pub recording: Recording,
+    pub integrity: Integrity,
     pub purity: Purity,
     pub bandwidth: Bandwidth,
     pub stereo: Stereo,
@@ -838,6 +839,22 @@ pub struct Recording {
 }
 
 impl Default for Recording {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// A song's copies compared sample by sample, decoded together: one with
+/// dropouts, clicks or its music cut short where another copy of its
+/// master plays on ranks with damaged sources, and the pick's reason
+/// says of how many masters it is one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Integrity {
+    pub enabled: bool,
+}
+
+impl Default for Integrity {
     fn default() -> Self {
         Self { enabled: true }
     }

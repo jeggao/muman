@@ -59,7 +59,7 @@ use self::keys::sites_found;
 pub use self::keys::{Following, Moves, Unlisted, deleted, found_moves, hearing, moved, not_back};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
-pub use self::measure::{analyze_mixes, compare};
+pub use self::measure::{analyze_mixes, compare, gate_copies};
 pub use self::owned::{
     Adopted, LEFT_KEPT, adopt, as_found, changed_since_written, edited_since_written, found,
     rehome, sidecar_as_written, vouch_for_copies,
@@ -582,6 +582,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
     };
     let listed = manifest.keys();
     if compare(runner, &store, &manifest.songs, &mut state, out)? {
+        persist(home, &state, opts.dry_run, &lock)?;
+    }
+    if manifest.settings.audio.pick.integrity.enabled
+        && gate_copies(runner, &store, &manifest.songs, &mut state, out)?
+    {
         persist(home, &state, opts.dry_run, &lock)?;
     }
 
