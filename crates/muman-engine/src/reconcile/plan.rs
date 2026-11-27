@@ -14,6 +14,11 @@
 //! yet accepted would reach the songs beside it: another song given its
 //! file's path, or the cover file its folder holds, would write over it,
 //! and its album's songs would be spelled as the source spells it now.
+//!
+//! Songs are resolved on every core, as are an album's songs resolved
+//! again: a song's plan is made from the song list, the state and what
+//! its album agreed on, never from another song resolved in the same
+//! round, so the order they are resolved in changes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -417,17 +422,23 @@ fn agree_on_albums(
         (n, pick)
     })
     .collect();
+    let built: BTreeSet<usize> = now.iter().map(|(n, _)| *n).collect();
     let again = |planned: &mut Planned,
                  picks: &BTreeMap<usize, crate::album::Pick>,
                  of: &BTreeSet<usize>| {
-        for (n, r) in
-            (planned.iter_mut()).filter(|(n, _)| of.contains(n) && now.iter().all(|(m, _)| m != n))
-        {
+        let due: Vec<&mut (usize, Resolved)> = (planned.iter_mut())
+            .filter(|(n, _)| of.contains(n) && !built.contains(n))
+            .collect();
+        let songs: Vec<usize> = due.iter().map(|(n, _)| *n).collect();
+        let agreed = crate::parallel::map(&songs, crate::parallel::builds(), |n| {
             let input = Input {
                 pick: picks.get(n),
                 ..resolver.input(&manifest.songs[*n], on_disk)
             };
-            if let Ok(again) = resolve::resolve(&input) {
+            resolve::resolve(&input).ok()
+        });
+        for ((_, r), again) in due.into_iter().zip(agreed) {
+            if let Some(again) = again {
                 *r = again;
             }
         }
@@ -555,8 +566,11 @@ fn resolve_fitted(
         over_max_path: 0,
         unplaced: Vec::new(),
     };
-    for (n, song) in manifest.songs.iter().enumerate() {
-        match resolve::resolve(&resolver.input(song, on_disk)) {
+    let plans = crate::parallel::map(&manifest.songs, crate::parallel::builds(), |song| {
+        resolve::resolve(&resolver.input(song, on_disk))
+    });
+    for (n, (song, plan)) in manifest.songs.iter().zip(plans).enumerate() {
+        match plan {
             Ok(r) => resolution.planned.push((n, r)),
             Err(_) if song.sources.iter().any(|k| waiting.contains(k)) => {
                 resolution.awaiting.push(n);

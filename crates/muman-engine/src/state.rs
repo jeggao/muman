@@ -913,14 +913,38 @@ impl State {
     /// `state.json` an earlier muman left is brought into `state.db`
     /// first.
     pub fn load(home: &Path) -> Result<Self> {
+        match Self::store(home)? {
+            Ok(mut db) => {
+                let (mut state, loaded) = db.snapshot()?;
+                state.held = Held::new(loaded);
+                Ok(state)
+            }
+            Err(state) => Ok(state),
+        }
+    }
+
+    /// The commands and servers trusted in `home`, as [`Self::load`] reads
+    /// them, without reading the rest of the state, which runs to a
+    /// hundred megabytes in a large library.
+    pub fn trusted_in(home: &Path) -> Result<BTreeMap<String, String>> {
+        match Self::store(home)? {
+            Ok(mut db) => db.trusted(),
+            Err(state) => Ok(state.trusted),
+        }
+    }
+
+    /// The store of `home` to read the state from, or the state itself
+    /// where there is no store to read: none yet, or one just brought
+    /// over from `state.json`.
+    fn store(home: &Path) -> Result<Result<db::Db, Self>> {
         if let Some(imported) = bring_over(home)? {
-            return Ok(imported);
+            return Ok(Err(imported));
         }
         if !exists(home) {
-            return Ok(Self {
+            return Ok(Err(Self {
                 version: VERSION,
                 ..Self::default()
-            });
+            }));
         }
         let file = home.join(db::FILE);
         if std::fs::metadata(&file).is_ok_and(|m| m.len() == 0) && crate::history::kept_any(home) {
@@ -931,15 +955,13 @@ impl State {
                 file.display()
             );
         }
-        let Some(mut db) = opened(home)? else {
-            return Ok(Self {
+        let Some(db) = opened(home)? else {
+            return Ok(Err(Self {
                 version: VERSION,
                 ..Self::default()
-            });
+            }));
         };
-        let (mut state, loaded) = db.snapshot()?;
-        state.held = Held::new(loaded);
-        Ok(state)
+        Ok(Ok(db))
     }
 
     /// Write what differs from what this was read from: a run that

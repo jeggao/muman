@@ -286,7 +286,7 @@ pub fn gate<W: Write>(
     prompter: Option<&mut dyn Prompter>,
     out: &mut W,
 ) -> Result<bool> {
-    let trusted = State::load(home)?.trusted;
+    let trusted = State::trusted_in(home)?;
     let now: BTreeMap<String, String> = held
         .iter()
         .map(|h| (h.name.clone(), h.digest.clone()))

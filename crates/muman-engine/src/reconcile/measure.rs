@@ -16,7 +16,7 @@
 //! compared alone, so the audio held at once never plays longer than
 //! that: 1.4 GB held, about 2.3 GB at the peak.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
@@ -62,13 +62,27 @@ impl std::fmt::Debug for Measuring<'_> {
 /// their file as it is, or miss a file beside it: what [`measure`] reads,
 /// but those [`moved`] keeps and those [`read_again`] leaves.
 fn outdated(store: &Store, keys: &BTreeSet<SourceKey>, state: &State) -> Vec<Located> {
-    keys.iter()
-        .filter_map(|k| store.locate(k))
-        .filter(|l| {
-            !(state.facts.get(&l.key))
-                .is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
-        })
-        .collect()
+    located_where(store, keys, |l| {
+        !(state.facts.get(&l.key)).is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
+    })
+}
+
+/// The sources of `keys` the store holds for which `keep` holds, in
+/// their order, looked at on every core: each source's revision reads
+/// its files' times from the disk, and a large library lists tens of
+/// thousands of sources, every step that measures asking of each.
+fn located_where(
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    keep: impl Fn(&Located) -> bool + Sync,
+) -> Vec<Located> {
+    let keys: Vec<&SourceKey> = keys.iter().collect();
+    parallel::map(&keys, parallel::builds(), |k| {
+        store.locate(k).filter(|l| keep(l))
+    })
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Whether [`measure`] reads `l` again at time `now`, not asked to retry:
@@ -86,12 +100,11 @@ fn holding(
     store: &Store,
     keys: &BTreeSet<SourceKey>,
     state: &State,
-    due: impl Fn(&Located, &Facts) -> bool,
+    due: impl Fn(&Located, &Facts) -> bool + Sync,
 ) -> Vec<Located> {
-    keys.iter()
-        .filter_map(|k| store.locate(k))
-        .filter(|l| (state.facts.get(&l.key)).is_some_and(|f| f.holds_for(&l.rev()) && due(l, f)))
-        .collect()
+    located_where(store, keys, |l| {
+        (state.facts.get(&l.key)).is_some_and(|f| f.holds_for(&l.rev()) && due(l, f))
+    })
 }
 
 /// Where the lyrics `f` measured are that were never asked whether they
@@ -158,13 +171,17 @@ fn uncompared(
     state: &State,
 ) -> Vec<(SourceKey, SourceKey, (String, String))> {
     let rev = |k: &SourceKey| state.facts.get(k).map(Facts::audio_rev);
+    let made: HashSet<&(String, String)> = (state.alignments.iter())
+        .filter(|x| x.method == crate::align::METHOD)
+        .map(|x| &x.revs)
+        .collect();
     songs
         .iter()
         .flat_map(|s| resolve::wanted_alignments(s, &state.facts))
         .filter(|(a, b)| store.has(a) && store.has(b))
         .filter_map(|(a, b)| {
             let revs = (rev(&a)?, rev(&b)?);
-            state.alignment(&revs).is_none().then_some((a, b, revs))
+            (!made.contains(&revs)).then_some((a, b, revs))
         })
         .collect()
 }

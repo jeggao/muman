@@ -486,10 +486,11 @@ impl Located {
             .chain(&self.lyrics)
             .chain(&self.covers)
             .map(|p| {
-                let Some((size, ns)) = stamp(p) else {
+                let meta = std::fs::metadata(p).ok();
+                let Some((size, ns)) = meta.as_ref().and_then(stamp_of) else {
                     return "-".to_string();
                 };
-                match changed_ns(p) {
+                match meta.as_ref().and_then(changed_ns) {
                     Some(changed) => format!("{size}:{ns}:{changed}"),
                     None => format!("{size}:{ns}"),
                 }
@@ -508,20 +509,20 @@ pub fn without_change_times(rev: &str) -> String {
         .join(";")
 }
 
-/// When `path` last changed in any way, data or name or mode, in
-/// nanoseconds; Unix keeps it, other systems not as `std` reads them.
-fn changed_ns(path: &Path) -> Option<u128> {
+/// When the file of `meta` last changed in any way, data or name or
+/// mode, in nanoseconds; Unix keeps it, other systems not as `std` reads
+/// them.
+fn changed_ns(meta: &std::fs::Metadata) -> Option<u128> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::metadata(path).ok()?;
         let secs = u128::try_from(meta.ctime()).ok()?;
         let ns = u128::try_from(meta.ctime_nsec()).ok()?;
         Some(secs * 1_000_000_000 + ns)
     }
     #[cfg(not(unix))]
     {
-        let _ = path;
+        let _ = meta;
         None
     }
 }
@@ -529,7 +530,11 @@ fn changed_ns(path: &Path) -> Option<u128> {
 /// A file's size and modification time in nanoseconds.
 #[must_use]
 pub fn stamp(path: &Path) -> Option<(u64, u128)> {
-    let meta = std::fs::metadata(path).ok()?;
+    stamp_of(&std::fs::metadata(path).ok()?)
+}
+
+/// [`stamp`] of the file of `meta`.
+fn stamp_of(meta: &std::fs::Metadata) -> Option<(u64, u128)> {
     let ns = meta
         .modified()
         .ok()?
@@ -1162,29 +1167,29 @@ fn sidecars(
     top_is_album: bool,
 ) -> (Option<PathBuf>, Vec<PathBuf>) {
     let stem = rel.with_extension("");
+    let folder = rel.parent().unwrap_or(Path::new(""));
+    let here: Vec<(&PathBuf, Kind)> = in_folder(files, folder).collect();
     let another_s = |p: &Path| {
-        files.iter().any(|(m, k)| {
-            *k == Kind::Media && m != rel && m.with_extension("") == p.with_extension("")
+        here.iter().any(|(m, k)| {
+            *k == Kind::Media && *m != rel && m.with_extension("") == p.with_extension("")
         })
     };
     let named = |kind: Kind| -> Vec<PathBuf> {
-        let mut found: Vec<PathBuf> = files
+        let mut found: Vec<PathBuf> = here
             .iter()
-            .filter(|(p, k)| **k == kind && named_as(p, rel))
+            .filter(|(p, k)| *k == kind && named_as(p, rel))
             .filter(|(p, _)| p.with_extension("") == stem || !another_s(p))
-            .map(|(p, _)| p.clone())
+            .map(|(p, _)| (*p).clone())
             .collect();
         found.sort_by_key(|p| p.with_extension("") != stem);
         found
     };
     let lyrics = named(Kind::Lyrics).into_iter().next();
     let mut covers = named(Kind::Image);
-    let of_folder = |folder: &Path| -> Vec<PathBuf> {
+    let of_folder = |files: &mut dyn Iterator<Item = (&PathBuf, Kind)>| -> Vec<PathBuf> {
         files
-            .iter()
             .filter(|(p, k)| {
-                **k == Kind::Image
-                    && p.parent().unwrap_or(Path::new("")) == folder
+                *k == Kind::Image
                     && p.file_stem()
                         .and_then(|s| s.to_str())
                         .is_some_and(|s| FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()))
@@ -1192,24 +1197,43 @@ fn sidecars(
             .map(|(p, _)| p.clone())
             .collect()
     };
-    let folder = rel.parent().unwrap_or(Path::new(""));
-    let mut own = of_folder(folder);
+    let mut own = of_folder(&mut here.iter().copied());
     let disc = folder
         .file_name()
         .is_some_and(|n| is_disc_folder(&n.to_string_lossy()));
     // The folder above a disc's is its album's only where it holds discs
     // and no song file, not a folder of loose songs.
-    let album = folder.parent().filter(|p| {
-        (top_is_album || !p.as_os_str().is_empty())
-            && !files
-                .iter()
-                .any(|(f, k)| *k == Kind::Media && f.parent() == Some(*p))
-    });
-    if let Some(album) = album.filter(|_| covers.is_empty() && own.is_empty() && disc) {
-        own = of_folder(album);
+    let album = || {
+        folder.parent().filter(|p| {
+            (top_is_album || !p.as_os_str().is_empty())
+                && !in_folder(files, p).any(|(_, k)| k == Kind::Media)
+        })
+    };
+    if covers.is_empty()
+        && own.is_empty()
+        && disc
+        && let Some(album) = album()
+    {
+        own = of_folder(&mut in_folder(files, album));
     }
     covers.extend(own);
     (lyrics, covers)
+}
+
+/// The files of `files` in `folder` itself, in path order: a path sorts
+/// by its parts, so every path below `folder` follows it, together.
+fn in_folder<'a>(
+    files: &'a BTreeMap<PathBuf, Kind>,
+    folder: &'a Path,
+) -> impl Iterator<Item = (&'a PathBuf, Kind)> {
+    files
+        .range::<Path, _>((
+            std::ops::Bound::Included(folder),
+            std::ops::Bound::Unbounded,
+        ))
+        .take_while(move |(p, _)| p.starts_with(folder))
+        .filter(move |(p, _)| p.parent().unwrap_or(Path::new("")) == folder)
+        .map(|(p, k)| (p, *k))
 }
 
 /// The `.lrc` and pictures among `files` that the song files `songs` of
@@ -1217,10 +1241,11 @@ fn sidecars(
 /// are a torrent's, by their paths in it, or a folder's, by whole paths.
 #[must_use]
 pub fn brought_by(files: &[&Path], songs: &[&Path]) -> BTreeSet<PathBuf> {
+    let listed: std::collections::HashSet<&Path> = songs.iter().copied().collect();
     let kinds: BTreeMap<PathBuf, Kind> = files
         .iter()
         .filter_map(|f| Some((f.to_path_buf(), kind_of(f)?)))
-        .filter(|(f, k)| *k != Kind::Media || songs.contains(&f.as_path()))
+        .filter(|(f, k)| *k != Kind::Media || listed.contains(f.as_path()))
         .collect();
     songs
         .iter()
