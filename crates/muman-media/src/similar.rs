@@ -295,7 +295,35 @@ fn kana(c: char) -> char {
 }
 
 /// `s` folded but for its kana, which the word breaker reads by script.
+///
+/// A run folds hundreds of thousands of texts, as each candidate's title
+/// is held against each other's, and most are ASCII, which folds by a
+/// rule of its own that gives what the whole one does for it: NFKC, NFD
+/// and NFC leave it as it is, it holds no mark and no default-ignorable
+/// character, its case folds as its lower case does, and its letters and
+/// digits are all that count of it.
 fn prepare(s: &str) -> String {
+    if s.is_ascii() {
+        return prepare_ascii(s);
+    }
+    prepare_any(s)
+}
+
+/// [`prepare`] of ASCII `s`.
+fn prepare_ascii(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.replace('&', " and ").chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with(' ') {
+            out.push(' ');
+        }
+    }
+    out.trim().to_string()
+}
+
+/// [`prepare`] of any `s`, by the whole rule.
+fn prepare_any(s: &str) -> String {
     let wide: String = s
         .nfkc()
         .filter(|&c| !CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c))

@@ -28,6 +28,21 @@ fn latin_folds_case_width_marks_and_letters_without_a_base() {
 }
 
 #[test]
+fn every_ascii_character_folds_by_the_ascii_rule_as_by_the_whole_one() {
+    for c in (0..=127u8).map(char::from) {
+        let s = format!("A{c}b{c}{c}9");
+        assert_eq!(prepare_ascii(&s), prepare_any(&s), "{s:?}");
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn ascii_folds_by_its_own_rule_as_by_the_whole_one(s in "[ -~\\t\\n]{0,24}") {
+        proptest::prop_assert_eq!(prepare_ascii(&s), prepare_any(&s));
+    }
+}
+
+#[test]
 fn caseless_names_ignore_case_in_any_script_and_nothing_else() {
     assert!(caseless("ÖLUND ÄRCHIVE", "ölund ärchive"));
     assert!(caseless("ΚΑΛΗ", "καλη"));

@@ -229,6 +229,42 @@ pub fn gather<W: Write>(
         mut following,
         fetches,
     } = how;
+    // The sources are read while the state loads and the library is
+    // taken as found: the two folders are apart, and neither step changes
+    // the other's.
+    let (found, store) = std::thread::scope(|scope| {
+        let scanning = scope.spawn(|| Store::scan(dirs));
+        let found = take_as_found(dirs, &mut following, out);
+        let store = scanning
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        (found, store)
+    });
+    let (mut state, adopted) = found?;
+    let store = store?;
+    let listed = manifest.keys();
+    let settling = following.settling;
+    let (moves, unlisted) = following.follow(&mut manifest, &mut state, &store, hear, out)?;
+    let ahead = Ahead::of(&manifest, &state, &store, &moves, settling, fetches);
+    Ok(Ground {
+        manifest,
+        state,
+        store,
+        ahead,
+        listed,
+        moves,
+        unlisted,
+        adopted,
+    })
+}
+
+/// The state in `dirs`' home, with the library taken as it is found
+/// ([`as_found`]) and, for a sync, what a stopped run left in it cleared.
+fn take_as_found<W: Write>(
+    dirs: &Dirs,
+    following: &mut Following<'_>,
+    out: &mut W,
+) -> Result<(State, Option<Adopted>)> {
     let mut state = State::load(&dirs.home)?;
     let same =
         (state.library.as_deref()).is_some_and(|l| crate::platform::same_path(l, &dirs.library));
@@ -248,21 +284,7 @@ pub fn gather<W: Write>(
         let moving = crate::history::moving(&dirs.home);
         crate::library::Leftovers::of(&state.outputs, &moving).clear(&dirs.library);
     }
-    let store = Store::scan(dirs)?;
-    let listed = manifest.keys();
-    let settling = following.settling;
-    let (moves, unlisted) = following.follow(&mut manifest, &mut state, &store, hear, out)?;
-    let ahead = Ahead::of(&manifest, &state, &store, &moves, settling, fetches);
-    Ok(Ground {
-        manifest,
-        state,
-        store,
-        ahead,
-        listed,
-        moves,
-        unlisted,
-        adopted,
-    })
+    Ok((state, adopted))
 }
 
 /// A forecast's [`gather`]: the grounds a command that changes nothing

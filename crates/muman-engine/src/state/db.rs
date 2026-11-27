@@ -461,6 +461,11 @@ impl Row {
         self.keys.join("\0")
     }
 
+    /// Its value's text, empty where it has none.
+    fn text(&self) -> &str {
+        self.value.as_deref().unwrap_or_default()
+    }
+
     /// A digest of its value's text.
     fn digest(&self) -> [u8; 16] {
         let whole = Sha256::digest(self.value.as_deref().unwrap_or_default());
@@ -468,6 +473,18 @@ impl Row {
         short.copy_from_slice(&whole[..16]);
         short
     }
+}
+
+/// `f` over `items` in their order, on every core where there are
+/// enough of them: the facts alone are tens of megabytes of JSON, each
+/// row read, written and digested apart from the others.
+fn each<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
+    let workers = if items.len() < 64 {
+        1
+    } else {
+        crate::parallel::builds()
+    };
+    crate::parallel::map(items, workers, f)
 }
 
 /// The digest of each row a snapshot read or a save wrote, by its
@@ -488,11 +505,20 @@ fn key_of<T: DeserializeOwned>(text: &str) -> Option<T> {
 /// The tables a step without the run's lock keeps what it measured in.
 const CACHES: [&Table; 6] = [&FACTS, &ALIGNMENTS, &MIXES, &GATES, &FAILURES, &SIZES];
 
+/// The values of `rows` that read as a `T`, in their order.
+fn values_of<T: DeserializeOwned + Send>(rows: &[Row]) -> Vec<T> {
+    each(rows, |r| serde_json::from_str(r.text()).ok())
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 /// The state the rows `read`, by table, hold; a table not read is empty.
 /// A cache row an earlier version wrote in another shape is dropped; an
 /// output that does not read refuses the store at `file`.
 fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<State> {
     let parse = |t: &Table| read.get(t.name).into_iter().flatten();
+    let rows = |t: &Table| read.get(t.name).map_or(&[][..], Vec::as_slice);
     let value = |r: &Row| r.value.clone().unwrap_or_default();
     let mut state = State {
         version: VERSION,
@@ -511,7 +537,7 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
             )
         };
         let path = crate::relpath::recorded(&row.keys[0]).map_err(|_| refused())?;
-        let written = serde_json::from_str(&value(row)).map_err(|_| refused())?;
+        let written = serde_json::from_str(row.text()).map_err(|_| refused())?;
         state.outputs.insert(path, written);
     }
     // One that does not read is let go of: it only makes a folder's files
@@ -519,7 +545,7 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
     for row in parse(&LEFT) {
         let library = serde_json::from_str::<PathBuf>(&row.keys[0]);
         let path = crate::relpath::recorded(&row.keys[1]);
-        let written = serde_json::from_str(&value(row));
+        let written = serde_json::from_str(row.text());
         if let (Ok(library), Ok(path), Ok(written)) = (library, path, written) {
             state.left.entry(library).or_default().insert(path, written);
         }
@@ -543,38 +569,27 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
             state.copies.insert(k, value(row));
         }
     }
-    for row in parse(&FACTS) {
-        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
-            state.facts.insert(k, f);
-        }
-    }
-    state.alignments = parse(&ALIGNMENTS)
-        .filter_map(|r| serde_json::from_str(&value(r)).ok())
-        .collect();
-    state.mixes = parse(&MIXES)
-        .filter_map(|r| serde_json::from_str(&value(r)).ok())
-        .collect();
-    state.gates = parse(&GATES)
-        .filter_map(|r| serde_json::from_str(&value(r)).ok())
-        .collect();
-    state.built = parse(&BUILT)
-        .filter_map(|r| serde_json::from_str(&value(r)).ok())
-        .collect();
+    let facts = each(rows(&FACTS), |r| {
+        Some((key_of(&r.keys[0])?, serde_json::from_str(r.text()).ok()?))
+    });
+    state.facts.extend(facts.into_iter().flatten());
+    state.alignments = values_of(rows(&ALIGNMENTS));
+    state.mixes = values_of(rows(&MIXES));
+    state.gates = values_of(rows(&GATES));
+    state.built = values_of(rows(&BUILT));
     for row in parse(&SONGS_FAILED) {
-        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
+        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(row.text())) {
             state.song_failures.insert(k, f);
         }
     }
     for row in parse(&FAILURES) {
-        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
+        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(row.text())) {
             state.failures.insert(k, f);
         }
     }
-    state.lookups = parse(&LOOKUPS)
-        .filter_map(|r| serde_json::from_str(&value(r)).ok())
-        .collect();
+    state.lookups = values_of(rows(&LOOKUPS));
     for row in parse(&SIZES) {
-        if let Ok(m) = serde_json::from_str(&value(row)) {
+        if let Ok(m) = serde_json::from_str(row.text()) {
             state.sizes.insert(row.keys[0].clone(), m);
         }
     }
@@ -705,12 +720,11 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
 fn cache_rows(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
     let key = |k: &SourceKey| k.to_string();
     let mut tables = Vec::new();
+    let facts: Vec<(&SourceKey, &Facts)> = state.facts.iter().collect();
     tables.push((
         &FACTS,
-        state
-            .facts
-            .iter()
-            .map(|(k, f)| Ok(Row::new(vec![key(k)], Some(json(f)?))))
+        each(&facts, |(k, f)| Ok(Row::new(vec![key(k)], Some(json(f)?))))
+            .into_iter()
             .collect::<Result<_>>()?,
     ));
     tables.push((
@@ -810,8 +824,8 @@ impl Db {
         })?;
         let mut loaded = Loaded::default();
         for (name, rows) in &read {
-            for row in rows {
-                loaded.0.insert((name, row.key()), row.digest());
+            for (row, digest) in rows.iter().zip(each(rows, Row::digest)) {
+                loaded.0.insert((name, row.key()), digest);
             }
         }
         let mut state = state_of(&read, &file)?;
@@ -820,6 +834,15 @@ impl Db {
             loaded.1 = seq;
         }
         Ok((state, loaded))
+    }
+
+    /// The commands and servers trusted, as [`Db::snapshot`] reads them.
+    pub(crate) fn trusted(&mut self) -> Result<BTreeMap<String, String>> {
+        let rows = self.read(|tx| rows_in(tx, &TRUSTED))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.keys[0].clone(), r.value.unwrap_or_default()))
+            .collect())
     }
 
     /// Keep what a step `measured` without the run's lock in the caches as
@@ -848,11 +871,12 @@ impl Db {
                 let Some(was) = read.get(table.name) else {
                     continue;
                 };
-                let was: BTreeMap<String, [u8; 16]> =
-                    was.iter().map(|r| (r.key(), r.digest())).collect();
+                let was: BTreeMap<String, [u8; 16]> = (was.iter().map(Row::key))
+                    .zip(each(was, Row::digest))
+                    .collect();
                 let mut now = BTreeSet::new();
-                for row in rows {
-                    let digest = row.digest();
+                let digests = each(&rows, Row::digest);
+                for (row, digest) in rows.into_iter().zip(digests) {
                     if was.get(&row.key()) != Some(&digest) {
                         put_row(tx, table, &row, &digest)?;
                     }
@@ -876,9 +900,9 @@ impl Db {
         let mut upserts: Vec<(&Table, Row, [u8; 16])> = Vec::new();
         let mut held: BTreeSet<(&'static str, String)> = BTreeSet::new();
         for (table, rows) in tables {
-            for row in rows {
+            let digests = each(&rows, Row::digest);
+            for (row, digest) in rows.into_iter().zip(digests) {
                 let key = (table.name, row.key());
-                let digest = row.digest();
                 if loaded.0.get(&key) != Some(&digest) {
                     upserts.push((table, row, digest));
                 }
@@ -1228,11 +1252,36 @@ mod tests {
         assert!(db.save_diff(&state, &mut Loaded::default()).unwrap());
         let (back, mut loaded) = db.snapshot().unwrap();
         assert_eq!(back, state);
+        assert_eq!(db.trusted().unwrap(), state.trusted);
         let before = db.conn.total_changes();
         assert!(
             !db.save_diff(&back, &mut loaded).unwrap(),
             "nothing differs"
         );
+        assert_eq!(db.conn.total_changes(), before);
+    }
+
+    #[test]
+    fn a_state_of_many_rows_read_and_written_on_every_core_reads_back_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        let mut state = every_row();
+        let first = state.alignments[0].clone();
+        for n in 0..200 {
+            let key = SourceKey::youtube(&format!("vid{n:08}"));
+            let facts = crate::facts::Facts::unreadable(format!("{n}:20"));
+            state.facts.insert(key.clone(), facts);
+            state.alignments.push(crate::state::Aligned {
+                a: key,
+                revs: (format!("{n}"), format!("{}", 199 - n)),
+                ..first.clone()
+            });
+        }
+        assert!(db.save_diff(&state, &mut Loaded::default()).unwrap());
+        let (back, mut loaded) = db.snapshot().unwrap();
+        assert_eq!(back, state);
+        let before = db.conn.total_changes();
+        assert!(!db.save_diff(&back, &mut loaded).unwrap());
         assert_eq!(db.conn.total_changes(), before);
     }
 

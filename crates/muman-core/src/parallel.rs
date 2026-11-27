@@ -1,5 +1,6 @@
 //! A fixed number of threads working through a list, for the steps
-//! that spend their time waiting on subprocesses.
+//! that spend their time waiting on subprocesses, and for work over a
+//! whole library that keeps every core busy.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

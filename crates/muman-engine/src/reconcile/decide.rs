@@ -27,7 +27,7 @@
 //! file it takes over. A sync departs from it only where a move, a free or
 //! a write fails, and judges the writes and pruning again by what was done.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
@@ -164,21 +164,28 @@ pub fn files_of(
     manifest: &Manifest,
     old: &BTreeMap<PathBuf, Written>,
 ) -> BTreeMap<usize, PathBuf> {
-    let own = |keys: &[SourceKey]| -> BTreeSet<SourceKey> {
+    fn own(keys: &[SourceKey]) -> BTreeSet<&SourceKey> {
         keys.iter()
             .filter(|k| !crate::manifest::shareable(k))
-            .cloned()
             .collect()
-    };
+    }
+    // Each file by the own sources it was made from, so a song meets
+    // only the files it shares one with, not every file the state holds.
+    let mut made_from: HashMap<&SourceKey, Vec<&PathBuf>> = HashMap::new();
+    for (path, written) in old {
+        for key in own(&written.sources) {
+            made_from.entry(key).or_default().push(path);
+        }
+    }
     let mut scored: Vec<(usize, usize, &PathBuf)> = Vec::new();
     for n in songs {
-        let mine = own(&manifest.songs[n].sources);
-        for (path, written) in old {
-            let shared = own(&written.sources).intersection(&mine).count();
-            if shared > 0 {
-                scored.push((shared, n, path));
+        let mut shared: BTreeMap<&PathBuf, usize> = BTreeMap::new();
+        for key in own(&manifest.songs[n].sources) {
+            for path in made_from.get(key).into_iter().flatten() {
+                *shared.entry(path).or_default() += 1;
             }
         }
+        scored.extend(shared.into_iter().map(|(path, shared)| (shared, n, path)));
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
     let mut files = BTreeMap::new();

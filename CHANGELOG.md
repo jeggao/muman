@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **Commands run four to six times faster on a large library**: on one
+  of 2,700 songs, `status` takes 6 s where it took 40, `sync` with
+  nothing to do 8 s where it took 28, `check` 3 s where it took 19,
+  `info` 4 s where it took 18, and `list` 3 s where it took 12. Songs
+  are resolved on every core, the state is read and written on every
+  core, and names, files beside a song and the files a song was made
+  from are found without going through the whole library for each song.
+
 ## [0.11.1] - 2026-11-23
 
 ### Added
