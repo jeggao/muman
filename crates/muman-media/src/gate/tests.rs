@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::coherence::fixtures::{music, noisy, sped};
+use crate::signal::filter::sosfilt;
 
 fn scaled(x: &[[f64; 2]], gain: f64, dc: f64) -> Frames {
     x.iter()
@@ -183,4 +184,45 @@ fn the_version_rises_with_what_it_finds() {
     let mut digest = crate::testing::Digest::default();
     digest.debug(&analyze(faults)).debug(&analyze(cut));
     crate::testing::check(WRITTEN, &format!("gate/{VERSION}"), &digest.hex());
+}
+
+/// A copy's two channels, unlike each other, as a whole song is decoded.
+fn two_channels(n: usize) -> Frames {
+    (0..n)
+        .map(|i| {
+            let t = real(i);
+            [(t * 0.031).sin() * 0.7, (t * 0.017).cos() * 0.4 - 0.1]
+        })
+        .collect()
+}
+
+#[test]
+fn a_copy_high_passed_as_it_streams_is_each_channel_filtered_whole() {
+    let x = two_channels(20_000);
+    let sos = butter(4, Band::High(6000.0), FS);
+    let channel = |c: usize| sosfilt(&sos, &x.iter().map(|f| f[c]).collect::<Vec<_>>());
+    let whole: Vec<[u32; 2]> = channel(0)
+        .into_iter()
+        .zip(channel(1))
+        .map(|(l, r)| [(l as f32).to_bits(), (r as f32).to_bits()])
+        .collect();
+    let streamed: Vec<[u32; 2]> = hp(&x)
+        .into_iter()
+        .map(|[l, r]| [l.to_bits(), r.to_bits()])
+        .collect();
+    assert_eq!(streamed, whole);
+}
+
+#[test]
+fn a_copy_s_level_read_as_it_streams_is_its_mono_s() {
+    let x = two_channels(20_000);
+    let m = mono(&x);
+    let whole: Vec<u64> = (0..m.len() / 480)
+        .map(|w| {
+            let power = m[w * 480..(w + 1) * 480].iter().map(|v| v * v).sum::<f64>();
+            (10.0 * (power / 480.0 + 1e-14).log10()).to_bits()
+        })
+        .collect();
+    let streamed: Vec<u64> = env(&x).into_iter().map(f64::to_bits).collect();
+    assert_eq!(streamed, whole);
 }

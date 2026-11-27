@@ -208,21 +208,43 @@ fn zpk2sos(all_zeros: &[Complex64], all_poles: &[Complex64], gain: f64) -> Sos {
 /// (two a section) or rest; the output and the final states.
 #[must_use]
 pub fn sosfilt_from(sos: &Sos, x: &[f64], zi: Option<&[[f64; 2]]>) -> (Vec<f64>, Vec<[f64; 2]>) {
-    let mut z: Vec<[f64; 2]> = zi.map_or_else(|| vec![[0.0; 2]; sos.0.len()], <[_]>::to_vec);
-    let y = x
-        .iter()
-        .map(|&v| {
-            let mut x = v;
-            for (s, z) in sos.0.iter().zip(z.iter_mut()) {
-                let y = s[0] * x + z[0];
-                z[0] = s[1] * x - s[4] * y + z[1];
-                z[1] = s[2] * x - s[5] * y;
-                x = y;
-            }
-            x
-        })
-        .collect();
-    (y, z)
+    let mut running = Running {
+        sos,
+        z: zi.map_or_else(|| vec![[0.0; 2]; sos.0.len()], <[_]>::to_vec),
+    };
+    let y = x.iter().map(|&v| running.step(v)).collect();
+    (y, running.z)
+}
+
+/// `sos` run one sample at a time from rest, as [`sosfilt`] runs it, for
+/// a signal never held whole: a whole song is 8 bytes a sample for each
+/// signal made of it.
+#[derive(Clone, Debug)]
+pub struct Running<'a> {
+    sos: &'a Sos,
+    z: Vec<[f64; 2]>,
+}
+
+impl<'a> Running<'a> {
+    #[must_use]
+    pub fn new(sos: &'a Sos) -> Self {
+        Self {
+            sos,
+            z: vec![[0.0; 2]; sos.0.len()],
+        }
+    }
+
+    /// The output for the next sample, `v`.
+    pub fn step(&mut self, v: f64) -> f64 {
+        let mut x = v;
+        for (s, z) in self.sos.0.iter().zip(self.z.iter_mut()) {
+            let y = s[0] * x + z[0];
+            z[0] = s[1] * x - s[4] * y + z[1];
+            z[1] = s[2] * x - s[5] * y;
+            x = y;
+        }
+        x
+    }
 }
 
 /// `x` through `sos` from rest, as `scipy.signal.sosfilt`.
@@ -351,6 +373,16 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_filter_run_sample_by_sample_gives_what_sosfilt_does_to_the_bit() {
+        let sos = butter(8, Band::Low(5000.0), 48_000.0);
+        let x: Vec<f64> = (0..5000).map(|n| (real(n) * 0.37).sin() * 0.8).collect();
+        let mut running = Running::new(&sos);
+        let stepped: Vec<u64> = x.iter().map(|v| running.step(*v).to_bits()).collect();
+        let whole: Vec<u64> = sosfilt(&sos, &x).into_iter().map(f64::to_bits).collect();
+        assert_eq!(stepped, whole);
+    }
 
     fn close(a: &[f64], b: &[f64], tol: f64) {
         assert_eq!(a.len(), b.len());

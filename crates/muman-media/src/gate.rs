@@ -44,7 +44,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::coherence::{self, Analysis, freq};
-use crate::signal::filter::{Band, butter, sosfilt};
+use crate::signal::filter::{Band, Running, butter};
 use crate::signal::{
     FS, Frames, corrcoef, frames_of_f32le, irfft, median, real, rfft, signed, std,
 };
@@ -413,12 +413,17 @@ fn complete_linkage(a: &Analysis, same: &BTreeMap<(usize, usize), bool>) -> Vec<
 
 /// The level of the mid in dB per 10 ms window.
 fn env(x: &[[f64; 2]]) -> Vec<f64> {
-    let m = mono(x);
-    let n = m.len() / 480;
+    let n = x.len() / 480;
     (0..n)
         .map(|w| {
-            10.0 * (m[w * 480..(w + 1) * 480].iter().map(|v| v * v).sum::<f64>() / 480.0 + 1e-14)
-                .log10()
+            let power = x[w * 480..(w + 1) * 480]
+                .iter()
+                .map(|[l, r]| {
+                    let v = (l + r) / 2.0;
+                    v * v
+                })
+                .sum::<f64>();
+            10.0 * (power / 480.0 + 1e-14).log10()
         })
         .collect()
 }
@@ -460,11 +465,9 @@ fn gaps(levels: &[f64], min_w: usize, max_w: usize) -> Vec<(usize, usize)> {
 /// off it to a ratio of 4, and a whole song of every copy is held at once.
 fn hp(x: &[[f64; 2]]) -> Vec<[f32; 2]> {
     let sos = butter(4, Band::High(6000.0), FS);
-    let l = sosfilt(&sos, &x.iter().map(|f| f[0]).collect::<Vec<_>>());
-    let r = sosfilt(&sos, &x.iter().map(|f| f[1]).collect::<Vec<_>>());
-    l.into_iter()
-        .zip(r)
-        .map(|(a, b)| [a as f32, b as f32])
+    let (mut l, mut r) = (Running::new(&sos), Running::new(&sos));
+    x.iter()
+        .map(|f| [l.step(f[0]) as f32, r.step(f[1]) as f32])
         .collect()
 }
 
@@ -795,8 +798,8 @@ fn integrity(
     };
     let copies = Copies {
         xs,
-        envs: xs.iter().map(|x| env(x)).collect(),
-        highs: xs.iter().map(|x| hp(x)).collect(),
+        envs: crate::parallel::map(xs, crate::parallel::builds(), |x| env(x)),
+        highs: crate::parallel::map(xs, crate::parallel::builds(), |x| hp(x)),
         lags: (0..found.k)
             .map(|j| {
                 let recs = segments(j);
@@ -808,22 +811,21 @@ fn integrity(
             })
             .collect(),
     };
-    (0..found.k)
-        .map(|i| {
-            if !rel[i] {
-                return None;
-            }
-            let mates: Vec<usize> = (group_of[&i].iter().copied())
-                .filter(|&j| j != i && rel[j])
-                .collect();
-            let full: Vec<usize> = (mates.iter().copied())
-                .filter(|&j| found.edge_hz[j].unwrap_or(20000.0) >= 12000.0)
-                .collect();
-            truncated(&spans, i, &mates)
-                .or_else(|| copies.dropouts(i, &mates))
-                .or_else(|| copies.clicks(i, &full))
-        })
-        .collect()
+    let all: Vec<usize> = (0..found.k).collect();
+    crate::parallel::map(&all, crate::parallel::builds(), |&i| {
+        if !rel[i] {
+            return None;
+        }
+        let mates: Vec<usize> = (group_of[&i].iter().copied())
+            .filter(|&j| j != i && rel[j])
+            .collect();
+        let full: Vec<usize> = (mates.iter().copied())
+            .filter(|&j| found.edge_hz[j].unwrap_or(20000.0) >= 12000.0)
+            .collect();
+        truncated(&spans, i, &mates)
+            .or_else(|| copies.dropouts(i, &mates))
+            .or_else(|| copies.clicks(i, &full))
+    })
 }
 
 #[cfg(test)]

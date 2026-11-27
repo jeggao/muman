@@ -421,19 +421,23 @@ impl TruePeak {
                 .extend(frames.chunks_exact(channels).map(|f| f[channel]));
             let mut peak = self.peaks[channel];
             let mut at = held;
+            let mut outs = [0f32; PEAK_RUN];
             while at < self.scratch.len() {
                 let end = (at + PEAK_RUN).min(self.scratch.len());
-                let loudest = self.scratch[at - held..end]
-                    .iter()
-                    .fold(0f32, |m, x| m.max(x.abs()));
-                if f64::from(loudest) * self.bound > f64::from(peak) {
-                    for n in at..end {
-                        let window = &self.scratch[n - held..=n];
-                        for phase in &self.phases {
-                            let mut out = 0f32;
-                            for (tap, c) in phase.iter().enumerate() {
-                                out += window[window.len() - 1 - tap] * c;
+                if f64::from(loudest(&self.scratch[at - held..end])) * self.bound > f64::from(peak)
+                {
+                    // Every frame of the run at once, tap by tap, so each
+                    // output sums its products in the order the crate does.
+                    let outs = &mut outs[..end - at];
+                    for phase in &self.phases {
+                        outs.fill(0.0);
+                        for (tap, c) in phase.iter().enumerate() {
+                            let taken = &self.scratch[at - tap..end - tap];
+                            for (out, x) in outs.iter_mut().zip(taken) {
+                                *out += x * c;
                             }
+                        }
+                        for out in outs.iter() {
                             peak = peak.max(out.abs());
                         }
                     }
@@ -450,6 +454,20 @@ impl TruePeak {
     fn peak(&self, channel: usize) -> f64 {
         f64::from(self.peaks[channel])
     }
+}
+
+/// The loudest magnitude of `samples`, or zero: lane by lane, as no order
+/// changes a maximum.
+fn loudest(samples: &[f32]) -> f32 {
+    let mut lanes = [0f32; 8];
+    let (whole, rest) = samples.as_chunks::<8>();
+    for chunk in whole {
+        for (lane, x) in lanes.iter_mut().zip(chunk) {
+            *lane = lane.max(x.abs());
+        }
+    }
+    let lanes = lanes.into_iter().fold(0f32, f32::max);
+    rest.iter().fold(lanes, |m, x| m.max(x.abs()))
 }
 
 /// The loudness of one stream as it is decoded.
@@ -760,6 +778,19 @@ pub fn parse_peak(text: &str) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::analysis::{Kind, Pass};
+
+    #[test]
+    fn the_loudest_sample_is_found_lane_by_lane_as_in_turn() {
+        for len in [0, 1, 7, 8, 9, 75, 200] {
+            let samples: Vec<f32> = (0..len)
+                .map(|n| {
+                    ((n * 7919 % 1000) as f32 / 500.0 - 1.0) * if n % 3 == 0 { -1.5 } else { 1.0 }
+                })
+                .collect();
+            let in_turn = samples.iter().fold(0f32, |m, x| m.max(x.abs()));
+            assert_eq!(loudest(&samples).to_bits(), in_turn.to_bits(), "{len}");
+        }
+    }
     use crate::testing::{sine, wav};
 
     fn measure(rate: u32, channels: u16, mask: Option<u32>, samples: &[f32]) -> Option<Measure> {

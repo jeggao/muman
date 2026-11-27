@@ -11,10 +11,14 @@
 //! 1.6 GB, and five of one of 6 min 7 s at 2.9 GB. So a song whose
 //! sources play more than [`GATE_MOST_S`] together is not compared at
 //! all: it is picked by its measures alone. The others are compared
-//! [`GATE_SONGS`] at a time, where pairs are compared on every core, and
-//! one whose sources play more than its share of [`GATE_MOST_S`] is
-//! compared alone, so the audio held at once never plays longer than
-//! that: 1.4 GB held, about 2.3 GB at the peak.
+//! [`GATE_SONGS`] at a time, and one whose sources play more than its
+//! share of [`GATE_MOST_S`] is compared alone, so the audio held at once
+//! never plays longer than that: 1.4 GB held, about 2.3 GB at the peak.
+//! Each song's copies are decoded, its segments aligned and each copy
+//! checked on every core, which holds no more at once than one after
+//! another did, the filters running over a copy as it streams; the
+//! allocator keeps some of what the threads free, so the process stands
+//! a few hundred megabytes higher while the gate runs.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
@@ -872,14 +876,13 @@ pub fn gate_copies<R: Runner, W: Write>(
     let (alone, together): (Vec<_>, Vec<_>) =
         (due.into_iter()).partition(|(keys, _)| seconds(keys) > GATE_MOST_S / GATE_SONGS as f64);
     let compare = |(keys, revs): &(Vec<SourceKey>, Vec<String>)| {
-        let xs = keys
-            .iter()
-            .map(|k| {
-                let path = store.locate(k)?.path;
-                let _working = step.working(&progress::label(&path));
-                decode(&path)
-            })
-            .collect::<Option<Vec<_>>>();
+        let xs = parallel::map(keys, keys.len(), |k| {
+            let path = store.locate(k)?.path;
+            let _working = step.working(&progress::label(&path));
+            decode(&path)
+        })
+        .into_iter()
+        .collect::<Option<Vec<_>>>();
         Gated {
             keys: keys.clone(),
             revs: revs.clone(),
