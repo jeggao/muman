@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-27
+
 ### Changed
 
 - **Commands run four to six times faster on a large library**: on one
@@ -3280,7 +3282,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/jeggao/muman/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/jeggao/muman/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/jeggao/muman/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jeggao/muman/compare/v0.10.0...v0.10.1
