@@ -1283,7 +1283,8 @@ fn detail_at(img: &[f64], w: usize, h: usize, short: usize) -> f64 {
 /// so both are averaged down alike. Zero for a picture with no detail.
 fn effective_side(img: &[f64], w: usize, h: usize) -> usize {
     let short = w.min(h);
-    if detail(img, w, h) == 0.0 {
+    let whole = detail(img, w, h);
+    if whole == 0.0 {
         return 0;
     }
     if short < 2 * REFERENCE_SIDE {
@@ -1296,10 +1297,21 @@ fn effective_side(img: &[f64], w: usize, h: usize) -> usize {
         size *= std::f64::consts::SQRT_2;
     }
     sizes.push(short);
+    // A size's half is often a size below it, measured already.
+    let mut measured: Vec<(usize, f64)> = vec![(short, whole)];
+    let mut detail_of = |size: usize| {
+        let size = size.min(short);
+        if let Some(&(_, d)) = measured.iter().find(|(s, _)| *s == size) {
+            return d;
+        }
+        let d = detail_at(img, w, h, size);
+        measured.push((size, d));
+        d
+    };
     let mut effective = REFERENCE_SIDE;
     for size in sizes {
-        let half = detail_at(img, w, h, size / 2);
-        if half <= 0.0 || detail_at(img, w, h, size) / half < OCTAVE_FLOOR {
+        let half = detail_of(size / 2);
+        if half <= 0.0 || detail_of(size) / half < OCTAVE_FLOOR {
             return effective;
         }
         effective = size;

@@ -16,6 +16,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   are resolved on every core, the state is read and written on every
   core, and names, files beside a song and the files a song was made
   from are found without going through the whole library for each song.
+- **New songs are measured and compared faster**: the sample-by-sample
+  comparison of a song's copies decodes them, aligns them and checks
+  them on every core, two and a half times as fast, and measuring a
+  source does less twice and keeps every core busy to the end. On ten
+  new songs of 23 sources the comparison takes 12 s where it took 28;
+  measuring 250 sources takes 144 s where it took 169. What is measured
+  is the same to the bit, so nothing is measured again.
 
 ## [0.11.1] - 2026-11-23
 

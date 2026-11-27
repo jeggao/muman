@@ -1580,21 +1580,33 @@ fn media<R: Runner>(
                 .duration
                 .is_some_and(|d| (d - ends).abs() > integrity::SLACK_S)
     });
+    // What the segments as they stand measure, made once for them.
+    let measured = |segments: &[quality::Segment], a: &probe::Audio| {
+        quality::audio(segments, a.sample_rate, headroom)
+    };
+    let mut quality: Option<Option<AudioQuality>> = None;
     if let (Some(Damage::Cut { ends, .. }), Some(a)) = (
         analysis.integrity().and_then(integrity::Measure::damage),
         &probed.audio,
-    ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
+    ) && quality
+        .get_or_insert_with(|| measured(&segments, a))
+        .is_none()
     {
         segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+        quality = None;
     } else if let (Some(ends), Some(a)) = (misplaced, &probed.audio) {
         segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+        quality = None;
     }
     // Excerpts that all fell in silence are taken again where it sounds.
     if let Some(a) = &probed.audio
-        && quality::audio(&segments, a.sample_rate, headroom).is_none()
+        && quality
+            .get_or_insert_with(|| measured(&segments, a))
+            .is_none()
         && let Some(starts) = sounding_starts(&sounding)
     {
         segments = measure_segments(runner, located, a, &starts, scratch);
+        quality = None;
     }
     facts.unkept = unkept(&located.path);
     if undecoded {
@@ -1604,7 +1616,7 @@ fn media<R: Runner>(
         facts.unkept.push(Unkept::Lyrics);
     }
     facts.audio = probed.audio.map(|a| AudioFacts {
-        quality: quality::audio(&segments, a.sample_rate, headroom),
+        quality: quality.unwrap_or_else(|| measured(&segments, &a)),
         index: a.index,
         codec: a.codec,
         profile: a.profile,

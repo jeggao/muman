@@ -30,7 +30,8 @@
 //! with it, is unrelated: placed by its lag alone, not tracked.
 //!
 //! **Whole songs.** Past 61 s of common span, 7 segments of 8 s spread
-//! evenly over it are aligned each on its own ([`align_segments`]): the
+//! evenly over it are aligned each on its own, on every core
+//! ([`align_segments`]): the
 //! lag of each found around the song's global lag, taken on 2 kHz
 //! decimations of the whole songs, or anywhere in the copy where that
 //! finds nothing, as a different edit moves a passage further. So neither
@@ -38,7 +39,7 @@
 
 use sha1::{Digest as _, Sha1};
 
-use crate::signal::filter::{Band, butter, resample_poly, sosfilt, sosfiltfilt};
+use crate::signal::filter::{Band, Running, butter, resample_poly, sosfilt, sosfiltfilt};
 use crate::signal::{
     Complex64, FS, Frames, bessel_i0, csd, fast_len, interp_linear, irfft, median, mid, real, rfft,
     signed, sinc, welch,
@@ -850,19 +851,16 @@ pub fn gain_match(ys: &[Frames], use_: &[usize]) -> (Vec<f64>, Vec<f64>) {
     let n = ys.iter().map(Vec::len).min().unwrap_or(0);
     let block = (4.0 * FS) as usize;
     let sos = butter(6, Band::Pass(1000.0, 8000.0), FS);
-    let e: Vec<Vec<f64>> = ys
-        .iter()
-        .map(|y| {
-            let m = sosfiltfilt(&sos, &mid(&y[..n]));
-            let nb = (n / block).max(1);
-            (0..nb)
-                .map(|i| {
-                    let s = &m[(i * block).min(m.len())..((i + 1) * block).min(m.len())];
-                    s.iter().map(|v| v * v).sum::<f64>() / real(s.len()) + 1e-30
-                })
-                .collect()
-        })
-        .collect();
+    let e: Vec<Vec<f64>> = crate::parallel::map(ys, crate::parallel::builds(), |y| {
+        let m = sosfiltfilt(&sos, &mid(&y[..n]));
+        let nb = (n / block).max(1);
+        (0..nb)
+            .map(|i| {
+                let s = &m[(i * block).min(m.len())..((i + 1) * block).min(m.len())];
+                s.iter().map(|v| v * v).sum::<f64>() / real(s.len()) + 1e-30
+            })
+            .collect()
+    });
     let use_: Vec<usize> = if use_.is_empty() {
         (0..k).collect()
     } else {
@@ -943,11 +941,16 @@ fn local_lag(
 /// The 12 kHz and 2 kHz decimations of a whole song's mid, each through
 /// an 8th-order Butterworth lowpass then subsampled: every copy through
 /// the same filter, so its phase delay cancels in a lag between copies.
-fn decimate(m: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let m12: Vec<f64> = sosfilt(&butter(8, Band::Low(5000.0), FS), m)
-        .into_iter()
-        .step_by(4)
-        .collect();
+fn decimate(x: &[[f64; 2]]) -> (Vec<f64>, Vec<f64>) {
+    let sos = butter(8, Band::Low(5000.0), FS);
+    let mut low = Running::new(&sos);
+    let mut m12 = Vec::with_capacity(x.len().div_ceil(4));
+    for (n, [l, r]) in x.iter().enumerate() {
+        let y = low.step((l + r) / 2.0);
+        if n % 4 == 0 {
+            m12.push(y);
+        }
+    }
     let m2: Vec<f64> = sosfilt(&butter(8, Band::Low(800.0), FS / 4.0), &m12)
         .into_iter()
         .step_by(6)
@@ -959,22 +962,26 @@ fn decimate(m: &[f64]) -> (Vec<f64>, Vec<f64>) {
 /// copy's 12 kHz decimation, for the search of each segment.
 fn global_lags_long(xs: &[Frames]) -> (usize, Vec<Global>, Vec<Vec<f64>>) {
     let k = xs.len();
-    let dec: Vec<(Vec<f64>, Vec<f64>)> = xs.iter().map(|x| decimate(&mid(x))).collect();
+    let dec: Vec<(Vec<f64>, Vec<f64>)> =
+        crate::parallel::map(xs, crate::parallel::builds(), |x| decimate(x));
     let reach = (60.0 * FS / 24.0) as usize;
     let mut peak = vec![vec![0.0; k]; k];
     let mut lag = vec![vec![0_i64; k]; k];
     let mut pol = vec![vec![1.0; k]; k];
-    for i in 0..k {
-        for j in i + 1..k {
-            let (l, s, _) = phat_lag(&dec[i].1, &dec[j].1, reach);
-            let c = norm_corr(&dec[i].1, &dec[j].1, l).abs();
-            peak[i][j] = c;
-            peak[j][i] = c;
-            lag[i][j] = l;
-            lag[j][i] = -l;
-            pol[i][j] = s;
-            pol[j][i] = s;
-        }
+    let pairs: Vec<(usize, usize)> = (0..k)
+        .flat_map(|i| (i + 1..k).map(move |j| (i, j)))
+        .collect();
+    let found = crate::parallel::map(&pairs, crate::parallel::builds(), |&(i, j)| {
+        let (l, s, _) = phat_lag(&dec[i].1, &dec[j].1, reach);
+        (l, s, norm_corr(&dec[i].1, &dec[j].1, l).abs())
+    });
+    for (&(i, j), (l, s, c)) in pairs.iter().zip(found) {
+        peak[i][j] = c;
+        peak[j][i] = c;
+        lag[i][j] = l;
+        lag[j][i] = -l;
+        pol[i][j] = s;
+        pol[j][i] = s;
     }
     let score: Vec<f64> = peak.iter().map(|r| r.iter().sum()).collect();
     let keys: Vec<String> = xs.iter().map(|x| content_key(x)).collect();
@@ -1060,8 +1067,8 @@ pub fn align_segments(xs: &[Frames], max_span_s: f64, seg_s: f64) -> (Vec<Segmen
                 .then(|| d12[j].iter().map(|v| v * gl[j].pol).collect())
         })
         .collect();
-    let mut out = Vec::new();
-    for &s in &starts {
+    // Each segment is aligned on its own, so on every core, in order.
+    let segments = crate::parallel::map(&starts, crate::parallel::builds(), |&s| {
         let mut lags: Vec<Option<i64>> = vec![None; k];
         let mut ok = true;
         for &j in rel.iter().filter(|&&j| j != anchor) {
@@ -1073,7 +1080,7 @@ pub fn align_segments(xs: &[Frames], max_span_s: f64, seg_s: f64) -> (Vec<Segmen
             lags[j] = Some(lag);
         }
         if !ok && starts.len() > 1 {
-            continue;
+            return None;
         }
         let sub: Vec<Frames> = (0..k)
             .map(|j| {
@@ -1108,8 +1115,9 @@ pub fn align_segments(xs: &[Frames], max_span_s: f64, seg_s: f64) -> (Vec<Segmen
             };
         }
         sg.start = if sg.anchor == anchor { s + sg.start } else { s };
-        out.push(sg);
-    }
+        Some(sg)
+    });
+    let out: Vec<Segment> = segments.into_iter().flatten().collect();
     if out.is_empty() {
         return (vec![align_all(xs, max_span_s)], anchor, span_out);
     }
@@ -1120,6 +1128,22 @@ pub fn align_segments(xs: &[Frames], max_span_s: f64, seg_s: f64) -> (Vec<Segmen
 mod tests {
     use super::super::fixtures::{music, sped};
     use super::*;
+
+    #[test]
+    fn a_song_decimated_as_it_streams_is_its_mid_decimated_whole() {
+        let x = music(3.0, 5);
+        let m12: Vec<f64> = sosfilt(&butter(8, Band::Low(5000.0), FS), &mid(&x))
+            .into_iter()
+            .step_by(4)
+            .collect();
+        let m2: Vec<f64> = sosfilt(&butter(8, Band::Low(800.0), FS / 4.0), &m12)
+            .into_iter()
+            .step_by(6)
+            .collect();
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        let (s12, s2) = decimate(&x);
+        assert_eq!((bits(&s12), bits(&s2)), (bits(&m12), bits(&m2)));
+    }
 
     #[test]
     fn a_later_quieter_inverted_copy_lands_on_the_anchor() {

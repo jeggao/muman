@@ -13,8 +13,8 @@
 #[cfg(test)]
 use muman_core::testing;
 use muman_core::{
-    atomic, fingerprint, hash, lang, portable, relpath, runner, sites, source, store, template,
-    units,
+    atomic, fingerprint, hash, lang, parallel, portable, relpath, runner, sites, source, store,
+    template, units,
 };
 
 pub mod align;

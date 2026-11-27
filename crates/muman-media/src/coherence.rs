@@ -372,19 +372,16 @@ pub fn analyse(xs: &[Frames]) -> Analysis {
             .collect(),
         ..Analysis::default()
     };
-    found.mid = ys
-        .iter()
-        .map(|y| {
-            let mut out = Vec::new();
-            let mut at = 0;
-            for s in &segs {
-                let len = s.ys[0].len();
-                out.extend(stft_mid(&y[at..at + len]));
-                at += len;
-            }
-            out
-        })
-        .collect();
+    found.mid = crate::parallel::map(&ys, crate::parallel::builds(), |y| {
+        let mut out = Vec::new();
+        let mut at = 0;
+        for s in &segs {
+            let len = s.ys[0].len();
+            out.extend(stft_mid(&y[at..at + len]));
+            at += len;
+        }
+        out
+    });
     found.nframes = found.mid[0].len() / bins;
     found.active = active(&found.mid, found.nframes);
     found.fill_spectra();
